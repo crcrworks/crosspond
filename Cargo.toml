@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/crosspond-app",
+    "crates/crosspond-core",
+    "crates/crosspond-macos",
+    "crates/crosspond-model",
+    "crates/crosspond-tools",
+]
+default-members = ["crates/crosspond-app"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.96"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+crosspond-core = { path = "crates/crosspond-core" }
+crosspond-macos = { path = "crates/crosspond-macos" }
+crosspond-model = { path = "crates/crosspond-model" }
+crosspond-tools = { path = "crates/crosspond-tools" }
+
+# GPUI is pinned to the crates.io release whose examples this crate follows.
+# Remaining direct crates are pinned after the first successful lockfile.
+gpui = "=0.2.2"
+global-hotkey = "=0.8.0"
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+thiserror = "=2.0.20"
+uuid = { version = "=1.24.0", features = ["v4"] }
+unicode-segmentation = "=1.13.3"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+reqwest = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
+security-framework = "=3.7.0"
+security-framework-sys = "=2.17.0"
+objc2 = "=0.6.4"
+objc2-foundation = { version = "=0.3.2", default-features = false }
+objc2-app-kit = { version = "=0.3.2", default-features = false }
+core-foundation = "=0.10.0"
+libc = "=0.2.189"

@@ -1,0 +1,17 @@
+[package]
+name = "crosspond-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "crosspond"
+path = "src/main.rs"
+
+[dependencies]
+crosspond-core.workspace = true
+crosspond-macos.workspace = true
+gpui.workspace = true
+unicode-segmentation.workspace = true
