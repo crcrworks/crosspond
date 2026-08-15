@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::policy::ComputerApprovalMode;
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
@@ -15,6 +17,8 @@ pub struct AppConfig {
     pub provider: ProviderKind,
     pub base_url: String,
     pub model: String,
+    #[serde(default)]
+    pub computer_approval: ComputerApprovalMode,
 }
 
 impl Default for AppConfig {
@@ -23,6 +27,7 @@ impl Default for AppConfig {
             provider: ProviderKind::OpenaiCompatible,
             base_url: "https://api.openai.com/v1".into(),
             model: "gpt-4o-mini".into(),
+            computer_approval: ComputerApprovalMode::Manual,
         }
     }
 }
@@ -118,7 +123,17 @@ mod tests {
         assert!(!text.contains("sk-"));
         let loaded = store.load().unwrap();
         assert_eq!(loaded, AppConfig::default());
+        assert_eq!(loaded.computer_approval, ComputerApprovalMode::Manual);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_computer_approval_defaults_to_manual() {
+        let parsed: AppConfig = serde_json::from_str(
+            r#"{"provider":"openai_compatible","base_url":"https://api.openai.com/v1","model":"gpt-4o-mini"}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.computer_approval, ComputerApprovalMode::Manual);
     }
 
     #[test]

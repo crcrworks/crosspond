@@ -29,7 +29,10 @@ Option+Space
         │                      fs tools (workspace auto; external after Allow)
         │                      get_accessibility_snapshot (auto)
         │                      take_screenshot (auto) → tool text + image
-        │                      ui_press / ui_set_value / ui_click ──► ApprovalRequired
+        │                      ui_press / ui_set_value / ui_click
+        │                        Manual → ApprovalRequired
+        │                        Agent + ask_user → ApprovalRequired
+        │                        Auto (and Agent + ask_user false) skip the card
  Allow / Cancel  ──mpsc──►     Approve / Reject that action
  Escape / Stop   ──mpsc──►     Cancel the whole task
  AgentEvent      ◄─mpsc──   ContextCollected / AssistantDelta /
@@ -49,7 +52,7 @@ Computer tools target the **ambient** frontmost pid from when the launcher opene
 
 Node ids are integers for the latest Accessibility snapshot generation. A new snapshot or a successful UI action invalidates old ids.
 
-Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`). The API key is only in Keychain (`com.crosspond.app` / `provider.api_key`). Config and key are loaded fresh on each StartTask and Test Connection.
+Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). The API key is only in Keychain (`com.crosspond.app` / `provider.api_key`). Config and key are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode.
 
 A session reuses one workspace under `~/.crosspond/workspaces/<first-task-id>/`. Finder selections are copied into that workspace’s `input/` on the first turn. Each submit still writes `~/.crosspond/tasks/<task-id>/`. Closing the launcher sends `ResetSession`, which drops follow-up history, ambient context, and the session workspace.
 

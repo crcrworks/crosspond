@@ -1,4 +1,5 @@
 use crosspond_tools::PathScope;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RiskLevel {
@@ -16,13 +17,77 @@ pub enum PolicyDecision {
     RequireApproval,
 }
 
+/// How computer actions (`ui_press`, `ui_set_value`, `ui_click`) are gated.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComputerApprovalMode {
+    /// Run UI actions without asking.
+    Auto,
+    /// The model sets `ask_user` per call.
+    Agent,
+    /// Ask before every UI action.
+    #[default]
+    Manual,
+}
+
+impl ComputerApprovalMode {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Auto => Self::Agent,
+            Self::Agent => Self::Manual,
+            Self::Manual => Self::Auto,
+        }
+    }
+
+    pub fn button_label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Agent => "AI",
+            Self::Manual => "Manual",
+        }
+    }
+}
+
+/// The model's `ask_user` flag on a computer-action tool call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentAsk {
+    Unspecified,
+    Yes,
+    No,
+}
+
+impl AgentAsk {
+    pub fn from_tool_input(input: &serde_json::Value) -> Self {
+        match input.get("ask_user") {
+            Some(serde_json::Value::Bool(true)) => Self::Yes,
+            Some(serde_json::Value::Bool(false)) => Self::No,
+            _ => Self::Unspecified,
+        }
+    }
+}
+
 pub fn evaluate(risk: RiskLevel) -> PolicyDecision {
+    evaluate_with(risk, ComputerApprovalMode::Manual, AgentAsk::Unspecified)
+}
+
+pub fn evaluate_with(
+    risk: RiskLevel,
+    computer: ComputerApprovalMode,
+    ask: AgentAsk,
+) -> PolicyDecision {
     match risk {
         RiskLevel::ReadOnly | RiskLevel::WorkspaceWrite => PolicyDecision::Allow,
-        RiskLevel::ExternalWrite
-        | RiskLevel::ComputerAction
-        | RiskLevel::Shell
-        | RiskLevel::Destructive => PolicyDecision::RequireApproval,
+        RiskLevel::ComputerAction => match computer {
+            ComputerApprovalMode::Auto => PolicyDecision::Allow,
+            ComputerApprovalMode::Manual => PolicyDecision::RequireApproval,
+            ComputerApprovalMode::Agent => match ask {
+                AgentAsk::No => PolicyDecision::Allow,
+                AgentAsk::Yes | AgentAsk::Unspecified => PolicyDecision::RequireApproval,
+            },
+        },
+        RiskLevel::ExternalWrite | RiskLevel::Shell | RiskLevel::Destructive => {
+            PolicyDecision::RequireApproval
+        }
     }
 }
 
@@ -126,6 +191,82 @@ mod tests {
         assert_eq!(
             evaluate(risk_for_tool("ui_click", PathScope::Workspace)),
             PolicyDecision::RequireApproval
+        );
+    }
+
+    #[test]
+    fn auto_computer_actions_skip_approval() {
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::ComputerAction,
+                ComputerApprovalMode::Auto,
+                AgentAsk::Unspecified
+            ),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::ExternalWrite,
+                ComputerApprovalMode::Auto,
+                AgentAsk::No
+            ),
+            PolicyDecision::RequireApproval
+        );
+    }
+
+    #[test]
+    fn agent_computer_actions_follow_ask_user() {
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::ComputerAction,
+                ComputerApprovalMode::Agent,
+                AgentAsk::No
+            ),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::ComputerAction,
+                ComputerApprovalMode::Agent,
+                AgentAsk::Yes
+            ),
+            PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::ComputerAction,
+                ComputerApprovalMode::Agent,
+                AgentAsk::Unspecified
+            ),
+            PolicyDecision::RequireApproval
+        );
+    }
+
+    #[test]
+    fn agent_ask_parses_tool_input() {
+        assert_eq!(
+            AgentAsk::from_tool_input(&serde_json::json!({"ask_user": false})),
+            AgentAsk::No
+        );
+        assert_eq!(
+            AgentAsk::from_tool_input(&serde_json::json!({"node_id": 4})),
+            AgentAsk::Unspecified
+        );
+    }
+
+    #[test]
+    fn computer_approval_mode_cycles() {
+        assert_eq!(
+            ComputerApprovalMode::Auto.cycle(),
+            ComputerApprovalMode::Agent
+        );
+        assert_eq!(
+            ComputerApprovalMode::Agent.cycle(),
+            ComputerApprovalMode::Manual
+        );
+        assert_eq!(
+            ComputerApprovalMode::Manual.cycle(),
+            ComputerApprovalMode::Auto
         );
     }
 }

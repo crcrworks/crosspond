@@ -18,7 +18,7 @@ use crate::config::ConfigStore;
 use crate::context::{ContextCapsule, StagedInput, stage_selected_files};
 use crate::event::AgentEvent;
 use crate::ids::TaskId;
-use crate::policy::{PolicyDecision, evaluate, risk_for_tool};
+use crate::policy::{AgentAsk, ComputerApprovalMode, PolicyDecision, evaluate_with, risk_for_tool};
 use crate::receipt::{Receipt, append_event_log, write_receipt, write_task_meta};
 use crate::secret::{SecretKey, SecretStore};
 use crate::workspace::{FsWorkspaceManager, WorkspaceManager, default_tasks_root};
@@ -30,10 +30,25 @@ pub const MISSING_API_KEY_MESSAGE: &str =
 pub const MAX_AGENT_STEPS: usize = 16;
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn computer_approval_prompt(mode: ComputerApprovalMode) -> &'static str {
+    match mode {
+        ComputerApprovalMode::Auto => {
+            "Computer actions (press, set value, click) run without asking the user."
+        }
+        ComputerApprovalMode::Agent => {
+            "For computer actions, set ask_user true when the action is irreversible, submits a form, sends a message, logs in, purchases, deletes, or you are unsure. Set ask_user false for routine navigation the user clearly requested. Omit ask_user only if you want the user asked."
+        }
+        ComputerApprovalMode::Manual => {
+            "Computer actions (press, set value, click) require the user's approval."
+        }
+    }
+}
+
 fn system_prompt(
     workspace: &Workspace,
     context: &ContextCapsule,
     staged: &[StagedInput],
+    computer_approval: ComputerApprovalMode,
 ) -> String {
     let mut prompt = format!(
         "You are Crosspond, a computer agent running on the user's Mac.\n\n\
@@ -49,9 +64,10 @@ Only when Accessibility has no useful label for the target, call take_screenshot
 Use the stated image width×height. The click tool maps those pixels; do not normalize a non-square image to 1000×1000 and do not use macOS screen coordinates.\n\
 ui_click returns a fresh post-click screenshot. Verify the requested visual change before another click; do not retry against an older image.\n\
 Click coordinates and node ids are only valid for the latest snapshot/screenshot.\n\
-Computer actions (press, set value, click) require the user's approval.\n\n\
+{}\n\n\
 When the task is complete, respond concisely with what was accomplished and relevant outputs.",
-        workspace.root.display()
+        workspace.root.display(),
+        computer_approval_prompt(computer_approval)
     );
     if let Some(block) = context.render_for_model(staged) {
         prompt.push_str("\n\n");
@@ -283,6 +299,7 @@ impl Runtime {
             &workspace,
             &self.session_context,
             &self.staged_inputs,
+            config.computer_approval,
         )));
         messages.extend(self.session.iter().cloned());
         messages.push(Message::user(request.prompt.clone()));
@@ -483,7 +500,17 @@ impl Runtime {
             .unwrap_or(".");
         let scope =
             classify_write_path(&context.workspace.root, path).unwrap_or(PathScope::External);
-        if evaluate(risk_for_tool(&call.name, scope)) != PolicyDecision::RequireApproval {
+        let computer_approval = self
+            .config
+            .load()
+            .map(|config| config.computer_approval)
+            .unwrap_or_default();
+        if evaluate_with(
+            risk_for_tool(&call.name, scope),
+            computer_approval,
+            AgentAsk::from_tool_input(input),
+        ) != PolicyDecision::RequireApproval
+        {
             return ApprovalOutcome::Allowed;
         }
         let approval_id = ApprovalId::new();
@@ -1325,6 +1352,144 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn auto_press_skips_approval() {
+        let pressed = Arc::new(Mutex::new(Vec::new()));
+        let tools = computer_registry(Arc::new(RecordingAx {
+            pressed: Arc::clone(&pressed),
+        }));
+        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(SnapshotThenPressProvider::new()));
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), tools);
+        runtime
+            .config
+            .save(&crate::config::AppConfig {
+                computer_approval: crate::policy::ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "Press Continue",
+            )))
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "auto mode must not prompt"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert_eq!(*pressed.lock().expect("lock"), vec!["4".to_string()]);
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn agent_press_without_ask_user_skips_approval() {
+        let pressed = Arc::new(Mutex::new(Vec::new()));
+        let tools = computer_registry(Arc::new(RecordingAx {
+            pressed: Arc::clone(&pressed),
+        }));
+        let build: ProviderBuilder = Arc::new(|_, _, _| {
+            Arc::new(SnapshotThenPressProvider::with_press_arguments(
+                r#"{"node_id":4,"ask_user":false}"#,
+            ))
+        });
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), tools);
+        runtime
+            .config
+            .save(&crate::config::AppConfig {
+                computer_approval: crate::policy::ComputerApprovalMode::Agent,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "Press Continue",
+            )))
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "ask_user false must not prompt"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert_eq!(*pressed.lock().expect("lock"), vec!["4".to_string()]);
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn agent_press_with_ask_user_requires_approval() {
+        let pressed = Arc::new(Mutex::new(Vec::new()));
+        let tools = computer_registry(Arc::new(RecordingAx {
+            pressed: Arc::clone(&pressed),
+        }));
+        let build: ProviderBuilder = Arc::new(|_, _, _| {
+            Arc::new(SnapshotThenPressProvider::with_press_arguments(
+                r#"{"node_id":4,"ask_user":true}"#,
+            ))
+        });
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), tools);
+        runtime
+            .config
+            .save(&crate::config::AppConfig {
+                computer_approval: crate::policy::ComputerApprovalMode::Agent,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "Press Continue",
+            )))
+            .unwrap();
+
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Approve(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert_eq!(*pressed.lock().expect("lock"), vec!["4".to_string()]);
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn rejected_press_is_not_executed() {
         let pressed = Arc::new(Mutex::new(Vec::new()));
         let tools = computer_registry(Arc::new(RecordingAx {
@@ -1586,12 +1751,21 @@ mod tests {
 
     struct SnapshotThenPressProvider {
         turn: Mutex<u8>,
+        press_arguments: String,
     }
 
     impl SnapshotThenPressProvider {
         fn new() -> Self {
             Self {
                 turn: Mutex::new(0),
+                press_arguments: r#"{"node_id":4}"#.into(),
+            }
+        }
+
+        fn with_press_arguments(arguments: impl Into<String>) -> Self {
+            Self {
+                turn: Mutex::new(0),
+                press_arguments: arguments.into(),
             }
         }
     }
@@ -1606,6 +1780,7 @@ mod tests {
             let mut turn = self.turn.lock().expect("lock");
             *turn += 1;
             let turn = *turn;
+            let press_arguments = self.press_arguments.clone();
             Box::pin(async move {
                 match turn {
                     1 => {
@@ -1619,7 +1794,7 @@ mod tests {
                         let _ = events.send(ModelEvent::ToolCall(ToolCall {
                             id: "call_press".into(),
                             name: "ui_press".into(),
-                            arguments: r#"{"node_id":4}"#.into(),
+                            arguments: press_arguments,
                         }));
                     }
                     _ => {

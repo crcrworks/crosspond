@@ -10,6 +10,8 @@ See the frontmost app and click in the image when Accessibility is not enough.
 
 - `take_screenshot` / `ui_click` — vision fallback when Accessibility has no useful label
 - Prefer `get_accessibility_snapshot` + `ui_press` for named controls; `ui_press` clicks the node through cua-driver
+- UI actions: **Manual** (default) asks Allow; **Auto** runs them; **AI** lets the model set `ask_user`
+- Cycle the mode with the chip next to the prompt
 - Requires [cua-driver](https://cua.ai/cua-driver) on `PATH` (or `CUA_DRIVER_BIN`)
 - Phase 4 Accessibility tools: `get_accessibility_snapshot`, `ui_press`, `ui_set_value`
 

@@ -177,22 +177,21 @@ impl SettingsWindow {
     }
 
     fn persist(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        let mut config = self.config.load().unwrap_or_else(|_| AppConfig::default());
         let base_url = self.base_url.read(cx).text().trim().to_string();
         let model = self.model.read(cx).text().trim().to_string();
         let api_key = self.api_key.read(cx).text().trim().to_string();
         let defaults = AppConfig::default();
-        let config = AppConfig {
-            provider: defaults.provider,
-            base_url: if base_url.is_empty() {
-                defaults.base_url
-            } else {
-                base_url
-            },
-            model: if model.is_empty() {
-                defaults.model
-            } else {
-                model
-            },
+        config.provider = defaults.provider;
+        config.base_url = if base_url.is_empty() {
+            defaults.base_url
+        } else {
+            base_url
+        };
+        config.model = if model.is_empty() {
+            defaults.model
+        } else {
+            model
         };
         self.config.save(&config).map_err(|err| err.to_string())?;
         if !api_key.is_empty() {

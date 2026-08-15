@@ -26,7 +26,10 @@ pub use context::{
 pub use event::AgentEvent;
 pub use hotkey::{GlobalHotkeyService, HotkeyEvent};
 pub use ids::TaskId;
-pub use policy::{PolicyDecision, RiskLevel, evaluate, risk_for_tool};
+pub use policy::{
+    AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate, evaluate_with,
+    risk_for_tool,
+};
 pub use receipt::Receipt;
 pub use runtime::{
     CommandSender, EventPump, MAX_AGENT_STEPS, MISSING_API_KEY_MESSAGE, RuntimeChannels,

@@ -44,7 +44,7 @@ fn main() {
         settings::install_services(
             settings::Services {
                 commands: command_tx.clone(),
-                config,
+                config: Arc::clone(&config),
                 secrets,
             },
             cx,
@@ -78,9 +78,10 @@ fn main() {
         let window = cx
             .open_window(launcher::window_options(cx), {
                 let command_tx = command_tx.clone();
+                let config = Arc::clone(&config);
                 move |window, cx| {
                     cx.new(|cx| {
-                        let view = CommandWindow::new(command_tx, cx);
+                        let view = CommandWindow::new(command_tx, config, cx);
                         let focus = view.input_focus_handle(cx);
                         window.focus(&focus);
                         view

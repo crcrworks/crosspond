@@ -1,8 +1,9 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crosspond_core::{
-    AgentEvent, ApprovalId, CommandSender, CommandWindowState, ContextCapsule, RuntimeCommand,
-    StartTaskRequest, TaskId,
+    AgentEvent, ApprovalId, CommandSender, CommandWindowState, ComputerApprovalMode, ConfigStore,
+    ContextCapsule, RuntimeCommand, StartTaskRequest, TaskId,
 };
 use gpui::{
     AnyElement, App, Context, Entity, FocusHandle, KeyBinding, SharedString, Timer, Window,
@@ -39,6 +40,8 @@ pub struct CommandWindow {
     current_task: Option<TaskId>,
     pending_approval: Option<PendingApproval>,
     commands: CommandSender,
+    config: Arc<dyn ConfigStore>,
+    computer_approval: ComputerApprovalMode,
     tool_starts: Vec<(String, Instant)>,
     activity: LiveActivity,
 }
@@ -50,7 +53,15 @@ struct PendingApproval {
 }
 
 impl CommandWindow {
-    pub fn new(commands: CommandSender, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        commands: CommandSender,
+        config: Arc<dyn ConfigStore>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let computer_approval = config
+            .load()
+            .map(|loaded| loaded.computer_approval)
+            .unwrap_or_default();
         let input = cx.new(|cx| TextInput::new(ASK_PLACEHOLDER, cx));
         Self {
             input,
@@ -62,6 +73,8 @@ impl CommandWindow {
             current_task: None,
             pending_approval: None,
             commands,
+            config,
+            computer_approval,
             tool_starts: Vec::new(),
             activity: LiveActivity::Thinking,
         }
@@ -280,6 +293,20 @@ impl CommandWindow {
         self.cancel_if_running();
     }
 
+    fn on_cycle_computer_approval(
+        &mut self,
+        _: &gpui::ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.computer_approval = self.computer_approval.cycle();
+        if let Ok(mut loaded) = self.config.load() {
+            loaded.computer_approval = self.computer_approval;
+            let _ = self.config.save(&loaded);
+        }
+        cx.notify();
+    }
+
     fn on_allow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(pending) = self.pending_approval.take() {
             self.commands.send(RuntimeCommand::Approve(pending.id));
@@ -391,6 +418,7 @@ impl gpui::Render for CommandWindow {
             self.state,
             CommandWindowState::Running | CommandWindowState::PreparingContext
         );
+        let mode_label = self.computer_approval.button_label();
         let badges = self.ambient.badge_lines();
         let approval = self
             .pending_approval
@@ -429,6 +457,14 @@ impl gpui::Render for CommandWindow {
                             .gap_3()
                             .child(div().size_2().rounded_full().bg(rgb(0x30d158)))
                             .child(div().flex_1().min_w_0().child(self.input.clone()))
+                            .child(ui::button("ui-mode", mode_label, dark, {
+                                let entity = entity.clone();
+                                move |event, window, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.on_cycle_computer_approval(event, window, cx);
+                                    });
+                                }
+                            }))
                             .when(show_stop, |parent| {
                                 parent.child(ui::button("stop", "Stop", dark, {
                                     let entity = entity.clone();

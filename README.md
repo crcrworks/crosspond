@@ -2,7 +2,7 @@
 
 Command bar for your computer agent. macOS only.
 
-Phase 5 is BYOK chat, a task workspace, ambient context (“this”), Accessibility computer use with per-action approval, and window screenshots with approved image-coordinate clicks.
+Phase 5 is BYOK chat, a task workspace, ambient context (“this”), Accessibility computer use with Auto / AI / Manual UI-action approval, and window screenshots with image-coordinate clicks.
 
 ## Run
 

@@ -86,6 +86,13 @@ pub fn computer_and_screenshot_registry(
     registry
 }
 
+fn ask_user_property() -> Value {
+    json!({
+        "type": "boolean",
+        "description": "When UI approval is AI, true asks the user first and false runs immediately. Ignored in Auto and Manual modes. Prefer true when unsure."
+    })
+}
+
 fn parse_node_id(input: &Value) -> Result<String, ToolError> {
     match input.get("node_id") {
         Some(Value::String(value)) if !value.is_empty() => Ok(value.clone()),
@@ -171,13 +178,14 @@ impl Tool for UiPress {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "ui_press".into(),
-            description: "Activate a control from the latest accessibility snapshot by node id. Clicks the labeled control (more reliable than ui_click visual guesses). Prefer this for labeled UI such as Discord channels. Requires user approval.".into(),
+            description: "Activate a control from the latest accessibility snapshot by node id. Clicks the labeled control (more reliable than ui_click visual guesses). Prefer this for labeled UI such as Discord channels. May require user approval.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "node_id": {
                         "description": "Node id from the latest get_accessibility_snapshot (string or number)"
-                    }
+                    },
+                    "ask_user": ask_user_property()
                 },
                 "required": ["node_id"]
             }),
@@ -213,7 +221,7 @@ impl Tool for UiSetValue {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "ui_set_value".into(),
-            description: "Set the value of a text field from the latest accessibility snapshot. Requires user approval.".into(),
+            description: "Set the value of a text field from the latest accessibility snapshot. May require user approval.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -223,7 +231,8 @@ impl Tool for UiSetValue {
                     "value": {
                         "type": "string",
                         "description": "Text to put in the field"
-                    }
+                    },
+                    "ask_user": ask_user_property()
                 },
                 "required": ["node_id", "value"]
             }),
@@ -313,7 +322,7 @@ impl Tool for UiClick {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "ui_click".into(),
-            description: "Click at exact pixel coordinates in the latest take_screenshot image (origin top-left). Use that result's width×height; do not normalize non-square images to 1000×1000. Returns a fresh post-click screenshot for verification. Requires user approval. Call take_screenshot first.".into(),
+            description: "Click at exact pixel coordinates in the latest take_screenshot image (origin top-left). Use that result's width×height; do not normalize non-square images to 1000×1000. Returns a fresh post-click screenshot for verification. May require user approval. Call take_screenshot first.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -326,7 +335,8 @@ impl Tool for UiClick {
                         "type": "number",
                         "minimum": 0,
                         "description": "Vertical pixel in the latest screenshot; must be less than its stated height"
-                    }
+                    },
+                    "ask_user": ask_user_property()
                 },
                 "required": ["x", "y"]
             }),
