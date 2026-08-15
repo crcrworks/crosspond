@@ -26,11 +26,11 @@ pub use context::{
 pub use event::AgentEvent;
 pub use hotkey::{GlobalHotkeyService, HotkeyEvent};
 pub use ids::TaskId;
-pub use policy::{PolicyDecision, RiskLevel, evaluate};
+pub use policy::{PolicyDecision, RiskLevel, evaluate, risk_for_tool};
 pub use receipt::Receipt;
 pub use runtime::{
     CommandSender, EventPump, MAX_AGENT_STEPS, MISSING_API_KEY_MESSAGE, RuntimeChannels,
-    spawn_runtime, spawn_runtime_with,
+    spawn_runtime, spawn_runtime_with, spawn_runtime_with_tools,
 };
 pub use secret::{SecretError, SecretKey, SecretStore, SecretString};
 pub use status::{CommandWindowState, TaskStatus};

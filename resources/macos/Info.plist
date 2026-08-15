@@ -25,7 +25,7 @@
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Crosspond reads Finder’s selected files so you can say “this file”.</string>
 	<key>NSAccessibilityUsageDescription</key>
-	<string>Crosspond reads the frontmost app and selected text so you can say “this”.</string>
+	<string>Crosspond reads the frontmost app and selected text, and can press buttons or fill fields after you approve each action.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>

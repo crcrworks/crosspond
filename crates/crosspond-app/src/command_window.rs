@@ -1,5 +1,5 @@
 use crosspond_core::{
-    AgentEvent, CommandSender, CommandWindowState, ContextCapsule, RuntimeCommand,
+    AgentEvent, ApprovalId, CommandSender, CommandWindowState, ContextCapsule, RuntimeCommand,
     StartTaskRequest, TaskId,
 };
 use gpui::{
@@ -30,7 +30,14 @@ pub struct CommandWindow {
     artifacts: Vec<String>,
     ambient: ContextCapsule,
     current_task: Option<TaskId>,
+    pending_approval: Option<PendingApproval>,
     commands: CommandSender,
+}
+
+struct PendingApproval {
+    id: ApprovalId,
+    title: String,
+    description: String,
 }
 
 impl CommandWindow {
@@ -45,6 +52,7 @@ impl CommandWindow {
             artifacts: Vec::new(),
             ambient: ContextCapsule::default(),
             current_task: None,
+            pending_approval: None,
             commands,
         }
     }
@@ -77,6 +85,7 @@ impl CommandWindow {
                     self.result = Some(summary);
                 }
                 self.state = CommandWindowState::Completed;
+                self.pending_approval = None;
                 self.input.update(cx, |input, cx| {
                     input.reset();
                     input.set_placeholder(FOLLOW_UP_PLACEHOLDER);
@@ -89,6 +98,7 @@ impl CommandWindow {
                 }
                 self.result = Some(message);
                 self.state = CommandWindowState::Failed;
+                self.pending_approval = None;
             }
             AgentEvent::TaskCancelled { task_id } => {
                 if self.current_task != Some(task_id) {
@@ -96,6 +106,7 @@ impl CommandWindow {
                 }
                 self.state = CommandWindowState::Cancelled;
                 self.result = Some("Cancelled".into());
+                self.pending_approval = None;
             }
             AgentEvent::ToolStarted { task_id, tool } => {
                 if self.current_task != Some(task_id) {
@@ -117,7 +128,23 @@ impl CommandWindow {
                     return;
                 }
             }
-            AgentEvent::ConnectionTested { .. } | AgentEvent::ApprovalRequired { .. } => return,
+            AgentEvent::ConnectionTested { .. } => return,
+            AgentEvent::ApprovalRequired {
+                task_id,
+                approval_id,
+                title,
+                description,
+            } => {
+                if self.current_task != Some(task_id) {
+                    return;
+                }
+                self.pending_approval = Some(PendingApproval {
+                    id: approval_id,
+                    title,
+                    description,
+                });
+                self.state = CommandWindowState::WaitingApproval;
+            }
             AgentEvent::ContextCollected { task_id } => {
                 if self.current_task != Some(task_id) {
                     return;
@@ -139,6 +166,7 @@ impl CommandWindow {
         self.artifacts.clear();
         self.ambient = ContextCapsule::default();
         self.current_task = None;
+        self.pending_approval = None;
         self.input.update(cx, |input, cx| {
             input.reset();
             input.set_placeholder(ASK_PLACEHOLDER);
@@ -197,6 +225,7 @@ impl CommandWindow {
         self.result = None;
         self.activity.clear();
         self.artifacts.clear();
+        self.pending_approval = None;
         self.state = CommandWindowState::PreparingContext;
         self.commands
             .send(RuntimeCommand::StartTask(StartTaskRequest {
@@ -225,6 +254,24 @@ impl CommandWindow {
 
     fn on_stop(&mut self, _: &gpui::ClickEvent, _: &mut Window, _: &mut Context<Self>) {
         self.cancel_if_running();
+    }
+
+    fn on_allow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pending) = self.pending_approval.take() {
+            self.commands.send(RuntimeCommand::Approve(pending.id));
+            self.state = CommandWindowState::Running;
+            self.sync_window_size(window);
+            cx.notify();
+        }
+    }
+
+    fn on_reject_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pending) = self.pending_approval.take() {
+            self.commands.send(RuntimeCommand::Reject(pending.id));
+            self.state = CommandWindowState::Running;
+            self.sync_window_size(window);
+            cx.notify();
+        }
     }
 
     fn sync_window_size(&self, window: &mut Window) {
@@ -276,6 +323,10 @@ impl gpui::Render for CommandWindow {
             CommandWindowState::Running | CommandWindowState::PreparingContext
         );
         let badges = self.ambient.badge_lines();
+        let approval = self
+            .pending_approval
+            .as_ref()
+            .map(|pending| (pending.title.clone(), pending.description.clone()));
 
         div()
             .key_context("CommandWindow")
@@ -335,6 +386,40 @@ impl gpui::Render for CommandWindow {
                                 }))
                             })
                     }))
+                    .children(approval.map(|(title, description)| {
+                        let entity = cx.entity();
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(div().text_sm().child("Crosspond wants to:"))
+                            .child(div().text_sm().child(title))
+                            .children(
+                                (!description.is_empty())
+                                    .then(|| div().text_sm().text_color(muted).child(description)),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap_2()
+                                    .child(ui::button("approval-allow", "Allow", dark, {
+                                        let entity = entity.clone();
+                                        move |_, window, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.on_allow(window, cx);
+                                            });
+                                        }
+                                    }))
+                                    .child(ui::button("approval-cancel", "Cancel", dark, {
+                                        move |_, window, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.on_reject_action(window, cx);
+                                            });
+                                        }
+                                    })),
+                            )
+                    }))
                     .children(
                         activity
                             .into_iter()
@@ -366,6 +451,9 @@ fn tool_activity_label(name: &str) -> String {
         "write_file" => "Writing file…".into(),
         "list_directory" => "Listing directory…".into(),
         "create_directory" => "Creating directory…".into(),
+        "get_accessibility_snapshot" => "Looking at the screen…".into(),
+        "ui_press" => "Pressing a control…".into(),
+        "ui_set_value" => "Filling a field…".into(),
         other => format!("Running {other}…"),
     }
 }

@@ -1222,6 +1222,7 @@ version = "0.0.1"
 dependencies = [
  "crosspond-core",
  "crosspond-macos",
+ "crosspond-tools",
  "gpui",
  "unicode-segmentation",
 ]
@@ -1245,6 +1246,7 @@ version = "0.0.1"
 dependencies = [
  "core-foundation 0.10.0",
  "crosspond-core",
+ "crosspond-tools",
  "global-hotkey",
  "libc",
  "objc2",

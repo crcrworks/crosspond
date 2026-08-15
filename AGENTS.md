@@ -6,9 +6,9 @@ Treat `docs/mvp.md` and `docs/architecture.md` as the product and design source 
 
 Implement one phase at a time. Do not start the next phase until the current one builds, formats, lints, and tests.
 
-Current phase: **3 — Ambient context**.
+Current phase: **4 — Accessibility computer use + approvals**.
 
-Out of scope until later phases: Accessibility actions (`ui_press` / AX snapshots), screenshots, approvals UI, history, onboarding polish.
+Out of scope until later phases: screenshots, history, onboarding polish.
 
 ## Crate boundaries
 
@@ -17,14 +17,14 @@ crosspond-app
       ↓
 crosspond-core
  ↙          ↘
-model       tools
-              ↓
-           macos
+model       tools ← macos
 ```
 
 - Only `crosspond-app` may depend on GPUI.
 - `crosspond-core`, `crosspond-model`, and `crosspond-tools` must not depend on GPUI.
 - `crosspond-model` must not depend on `crosspond-core`.
+- `crosspond-tools` must not depend on `crosspond-macos` (that would cycle through core).
+- `crosspond-macos` may depend on `crosspond-tools` and implements `AccessibilityBackend`.
 - UI and core must not import `global-hotkey` or Security framework crates directly.
 - `unsafe` stays in `crosspond-macos` (or platform bindings it wraps) and needs a comment.
 
@@ -42,4 +42,4 @@ GPUI 0.2.2 has no per-window hide. `App::hide()` / `App::activate(true)` hide an
 
 ## Secrets
 
-Never persist API keys in `config.json`, `.env`, SQLite, logs, or task history. Store them in Keychain via `SecretStore`. `SecretString` must not derive `Debug`. Do not log selected text or Finder paths.
+Never persist API keys in `config.json`, `.env`, SQLite, logs, or task history. Store them in Keychain via `SecretStore`. `SecretString` must not derive `Debug`. Do not log selected text, Finder paths, or Accessibility field values (especially passwords).

@@ -37,8 +37,8 @@ fn optional_string(input: &Value, key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn deny_external(scope: PathScope) -> Result<(), ToolError> {
-    if scope == PathScope::External {
+fn deny_external(scope: PathScope, allow_external: bool) -> Result<(), ToolError> {
+    if scope == PathScope::External && !allow_external {
         Err(ToolError::Failed("path is outside the workspace".into()))
     } else {
         Ok(())
@@ -69,7 +69,7 @@ impl Tool for ReadFile {
         let requested = required_string(&input, "path")?;
         let resolved = resolve_path(&context.workspace.root, &requested)
             .map_err(|err| ToolError::Failed(err.to_string()))?;
-        deny_external(resolved.scope)?;
+        deny_external(resolved.scope, false)?;
         let metadata = fs::metadata(&resolved.path).map_err(map_io)?;
         if metadata.is_dir() {
             return Err(ToolError::Failed("path is a directory".into()));
@@ -112,7 +112,7 @@ impl Tool for ListDirectory {
         let requested = optional_string(&input, "path").unwrap_or_else(|| ".".into());
         let resolved = resolve_path(&context.workspace.root, &requested)
             .map_err(|err| ToolError::Failed(err.to_string()))?;
-        deny_external(resolved.scope)?;
+        deny_external(resolved.scope, false)?;
         let metadata = fs::metadata(&resolved.path).map_err(map_io)?;
         if !metadata.is_dir() {
             return Err(ToolError::Failed("path is not a directory".into()));
@@ -174,7 +174,7 @@ impl Tool for WriteFile {
             .ok_or_else(|| ToolError::Failed("content is required".into()))?;
         let resolved = resolve_path(&context.workspace.root, &requested)
             .map_err(|err| ToolError::Failed(err.to_string()))?;
-        deny_external(resolved.scope)?;
+        deny_external(resolved.scope, context.allow_external)?;
         if let Some(parent) = resolved.path.parent() {
             fs::create_dir_all(parent).map_err(map_io)?;
         }
@@ -186,6 +186,17 @@ impl Tool for WriteFile {
             ),
             created_file: Some(resolved.path),
         })
+    }
+
+    fn approval_prompt(&self, _context: &ToolContext, input: &Value) -> (String, String) {
+        let path = input
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("a file");
+        (
+            "Write a file outside the workspace".into(),
+            path.to_string(),
+        )
     }
 }
 
@@ -213,7 +224,7 @@ impl Tool for CreateDirectory {
         let requested = required_string(&input, "path")?;
         let resolved = resolve_path(&context.workspace.root, &requested)
             .map_err(|err| ToolError::Failed(err.to_string()))?;
-        deny_external(resolved.scope)?;
+        deny_external(resolved.scope, context.allow_external)?;
         fs::create_dir_all(&resolved.path).map_err(map_io)?;
         Ok(ToolResult {
             text: format!(
@@ -222,6 +233,17 @@ impl Tool for CreateDirectory {
             ),
             created_file: None,
         })
+    }
+
+    fn approval_prompt(&self, _context: &ToolContext, input: &Value) -> (String, String) {
+        let path = input
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("a directory");
+        (
+            "Create a directory outside the workspace".into(),
+            path.to_string(),
+        )
     }
 }
 
@@ -253,9 +275,7 @@ mod tests {
     }
 
     fn ctx(workspace: &Workspace) -> ToolContext {
-        ToolContext {
-            workspace: workspace.clone(),
-        }
+        ToolContext::new(workspace.clone())
     }
 
     #[test]
@@ -365,6 +385,25 @@ mod tests {
             )
             .unwrap();
         assert!(workspace.output.join("notes").is_dir());
+        let _ = fs::remove_dir_all(&workspace.root);
+    }
+
+    #[test]
+    fn approved_external_write_is_allowed() {
+        let workspace = temp_workspace();
+        let target =
+            std::env::temp_dir().join(format!("crosspond-approved-{}.txt", Uuid::new_v4()));
+        let mut context = ctx(&workspace);
+        context.allow_external = true;
+        filesystem_registry()
+            .execute(
+                "write_file",
+                &context,
+                json!({"path": target.to_string_lossy(), "content": "ok"}),
+            )
+            .unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "ok");
+        let _ = fs::remove_file(&target);
         let _ = fs::remove_dir_all(&workspace.root);
     }
 }

@@ -2,7 +2,7 @@
 
 Command bar for your computer agent. macOS only.
 
-Phase 3 is BYOK chat, a task workspace, and ambient context: selected text and Finder files so you can say “this”.
+Phase 4 is BYOK chat, a task workspace, ambient context (“this”), and Accessibility computer use with per-action approval.
 
 ## Run
 
@@ -22,12 +22,12 @@ Then:
 
 1. Press **⌘,** (or Crosspond → Settings) and set Base URL, model, and API key.
 2. Click **Save**, then **Test Connection**.
-3. Grant Accessibility when macOS asks (needed for selected text). Finder selection may also prompt for Automation.
-4. Select text in another app, or files in Finder.
+3. Grant Accessibility when macOS asks (needed for selected text and UI actions). Finder selection may also prompt for Automation.
+4. Select text in another app, or files in Finder — or leave Safari in front.
 5. Press **Option + Space**. A badge should show the app and “Selected text: N chars” or “N selected files”.
-6. Type **Summarize this** and press Enter.
+6. Try **Summarize this**, or **Press the Continue button** in Safari. UI actions show an **Allow** / **Cancel** card first.
 
-**Escape** or **Stop** cancels. Hiding the window starts a new session.
+**Escape** or **Stop** cancels the whole task. Approval **Cancel** rejects only that action. Hiding the window starts a new session.
 
 If hotkey registration fails, the window opens immediately so the app is still usable.
 

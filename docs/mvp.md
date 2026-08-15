@@ -4,24 +4,21 @@
 
 The user should never have to prepare the AI before asking for work. No projects, agent pickers, skill pickers, or manual workspace setup.
 
-## Phase 3 (current)
+## Phase 4 (current)
 
-Ambient context so “this” works:
+Operate the current Mac app through Accessibility — not pixels.
 
-- Frontmost app name and bundle id
-- Focused window title
-- Selected text
-- Finder selected files (copied into the task `input/` directory)
-- Context badges on the launcher
-- Collect on hotkey *before* Crosspond becomes frontmost
+- `get_accessibility_snapshot` — compact AX tree with temporary node ids (auto)
+- `ui_press(node_id)` / `ui_set_value(node_id, value)` — after **Allow**
+- Approval card on the launcher; Escape still cancels the whole task
+- Approval **Cancel** rejects that action only; the agent loop continues
 
-Demo: select text in Notes or files in Finder → Option + Space → “Summarize this”. The launcher shows a badge such as `Safari` / `Selected text: 428 chars` or `Finder` / `3 selected files`.
+Demo: Safari in front → Option + Space → “Press the Continue button” → snapshot → find the button → Allow → press.
 
-Phase 2 filesystem tools and Phase 1 BYOK chat still apply.
+Phase 3 ambient context, Phase 2 filesystem tools, and Phase 1 BYOK chat still apply.
 
 ## Later phases (do not implement yet)
 
-4. Accessibility computer use + approvals
 5. Screenshot / vision
 6. Polish (receipts UI, history, onboarding)
 7. Release (signing, notarization, license re-audit)

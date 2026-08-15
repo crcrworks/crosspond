@@ -4,8 +4,8 @@ use super::command::ApprovalId;
 
 /// Runtime → UI.
 ///
-/// Phase 3 emits task lifecycle events, `ContextCollected`, `AssistantDelta`,
-/// tool activity, `ArtifactCreated`, and `ConnectionTested`.
+/// Phase 4 emits task lifecycle events, `ContextCollected`, `AssistantDelta`,
+/// tool activity, `ApprovalRequired`, `ArtifactCreated`, and `ConnectionTested`.
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
     TaskStarted {

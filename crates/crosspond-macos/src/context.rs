@@ -52,7 +52,7 @@ fn collect_macos() -> ContextCapsule {
 }
 
 #[cfg(target_os = "macos")]
-fn frontmost_app() -> Option<AppContext> {
+pub(crate) fn frontmost_app() -> Option<AppContext> {
     use objc2_app_kit::NSWorkspace;
 
     let workspace = NSWorkspace::sharedWorkspace();

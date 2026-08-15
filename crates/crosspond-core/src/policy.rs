@@ -28,7 +28,7 @@ pub fn evaluate(risk: RiskLevel) -> PolicyDecision {
 
 pub fn risk_for_tool(name: &str, scope: PathScope) -> RiskLevel {
     match (name, scope) {
-        ("read_file" | "list_directory", _) => RiskLevel::ReadOnly,
+        ("read_file" | "list_directory" | "get_accessibility_snapshot", _) => RiskLevel::ReadOnly,
         ("write_file" | "create_directory", PathScope::Workspace) => RiskLevel::WorkspaceWrite,
         ("write_file" | "create_directory", PathScope::External) => RiskLevel::ExternalWrite,
         ("run_command", _) => RiskLevel::Shell,
@@ -93,6 +93,21 @@ mod tests {
         assert_eq!(
             evaluate(risk_for_tool("ui_press", PathScope::Workspace)),
             PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            evaluate(risk_for_tool("ui_set_value", PathScope::Workspace)),
+            PolicyDecision::RequireApproval
+        );
+    }
+
+    #[test]
+    fn accessibility_snapshot_is_auto() {
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "get_accessibility_snapshot",
+                PathScope::Workspace
+            )),
+            PolicyDecision::Allow
         );
     }
 }

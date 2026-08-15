@@ -39,4 +39,15 @@ impl ToolRegistry {
         };
         tool.execute(context, input)
     }
+
+    pub fn approval_prompt(
+        &self,
+        name: &str,
+        context: &ToolContext,
+        input: &Value,
+    ) -> (String, String) {
+        self.get(name)
+            .map(|tool| tool.approval_prompt(context, input))
+            .unwrap_or_else(|| (format!("Run `{name}`"), String::new()))
+    }
 }
