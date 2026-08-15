@@ -95,6 +95,7 @@ pub struct ModelRequest {
 #[derive(Clone, Debug)]
 pub enum ModelEvent {
     TextDelta(String),
+    ReasoningDelta(String),
     ToolCall(ToolCall),
 }
 

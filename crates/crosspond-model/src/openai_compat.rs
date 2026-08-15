@@ -84,6 +84,7 @@ impl OpenAiCompatibleProvider {
         let mut buffer = String::new();
         let mut got_text = false;
         let mut builders: HashMap<usize, ToolCallBuilder> = HashMap::new();
+        let mut think = ThinkSplitter::default();
         let mut response = response;
         while let Some(chunk) = response
             .chunk()
@@ -92,10 +93,14 @@ impl OpenAiCompatibleProvider {
         {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
             let done = drain_sse(&mut buffer, |data| {
+                if let Some(delta) = reasoning_delta_from_chunk(data)?
+                    && events.send(ModelEvent::ReasoningDelta(delta)).is_err()
+                {
+                    return Err(ModelError::Network("event listener closed".into()));
+                }
                 if let Some(delta) = content_delta_from_chunk(data)? {
-                    got_text = true;
-                    if events.send(ModelEvent::TextDelta(delta)).is_err() {
-                        return Err(ModelError::Network("event listener closed".into()));
+                    for piece in think.push(&delta) {
+                        emit_split_piece(&events, piece, &mut got_text)?;
                     }
                 }
                 for (index, delta) in tool_call_deltas_from_chunk(data)? {
@@ -115,6 +120,9 @@ impl OpenAiCompatibleProvider {
             if done {
                 break;
             }
+        }
+        for piece in think.flush() {
+            emit_split_piece(&events, piece, &mut got_text)?;
         }
         let mut calls: Vec<_> = builders.into_iter().collect();
         calls.sort_by_key(|(index, _)| *index);
@@ -360,6 +368,135 @@ fn split_sse_frame(buffer: &mut String) -> Option<String> {
     Some(frame)
 }
 
+fn emit_split_piece(
+    events: &UnboundedSender<ModelEvent>,
+    piece: SplitPiece,
+    got_text: &mut bool,
+) -> Result<(), ModelError> {
+    match piece {
+        SplitPiece::Text(text) => {
+            *got_text = true;
+            events
+                .send(ModelEvent::TextDelta(text))
+                .map_err(|_| ModelError::Network("event listener closed".into()))
+        }
+        SplitPiece::Think(text) => events
+            .send(ModelEvent::ReasoningDelta(text))
+            .map_err(|_| ModelError::Network("event listener closed".into())),
+    }
+}
+
+#[derive(Default)]
+struct ThinkSplitter {
+    in_think: bool,
+    pending: String,
+}
+
+enum SplitPiece {
+    Text(String),
+    Think(String),
+}
+
+impl ThinkSplitter {
+    fn push(&mut self, chunk: &str) -> Vec<SplitPiece> {
+        if chunk.is_empty() {
+            return Vec::new();
+        }
+        self.pending.push_str(chunk);
+        let mut out = Vec::new();
+        loop {
+            if self.in_think {
+                if let Some(idx) = self.pending.find("</think>") {
+                    let body = self.pending[..idx].to_string();
+                    if !body.is_empty() {
+                        out.push(SplitPiece::Think(body));
+                    }
+                    self.pending.replace_range(..idx + "</think>".len(), "");
+                    self.in_think = false;
+                } else {
+                    drain_incomplete(&mut self.pending, "</think>", SplitPiece::Think, &mut out);
+                    break;
+                }
+            } else if let Some(idx) = self.pending.find("<think>") {
+                let body = self.pending[..idx].to_string();
+                if !body.is_empty() {
+                    out.push(SplitPiece::Text(body));
+                }
+                self.pending.replace_range(..idx + "<think>".len(), "");
+                self.in_think = true;
+            } else {
+                drain_incomplete(&mut self.pending, "<think>", SplitPiece::Text, &mut out);
+                break;
+            }
+        }
+        out
+    }
+
+    fn flush(&mut self) -> Vec<SplitPiece> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+        let rest = std::mem::take(&mut self.pending);
+        if self.in_think {
+            vec![SplitPiece::Think(rest)]
+        } else {
+            vec![SplitPiece::Text(rest)]
+        }
+    }
+}
+
+fn drain_incomplete(
+    pending: &mut String,
+    tag: &str,
+    wrap: fn(String) -> SplitPiece,
+    out: &mut Vec<SplitPiece>,
+) {
+    let keep = partial_tag_suffix(pending, tag);
+    let cut = pending.len().saturating_sub(keep);
+    if cut == 0 {
+        return;
+    }
+    let body = pending[..cut].to_string();
+    pending.replace_range(..cut, "");
+    if !body.is_empty() {
+        out.push(wrap(body));
+    }
+}
+
+fn partial_tag_suffix(pending: &str, tag: &str) -> usize {
+    let max = tag.len().saturating_sub(1).min(pending.len());
+    for n in (1..=max).rev() {
+        let start = pending.len() - n;
+        if pending.is_char_boundary(start) && tag.starts_with(&pending[start..]) {
+            return n;
+        }
+    }
+    0
+}
+
+fn reasoning_delta_from_chunk(data: &str) -> Result<Option<String>, ModelError> {
+    let value: serde_json::Value =
+        serde_json::from_str(data).map_err(|err| ModelError::Provider(err.to_string()))?;
+    let Some(delta) = value.pointer("/choices/0/delta") else {
+        return Ok(None);
+    };
+    for key in [
+        "reasoning_content",
+        "reasoning",
+        "thinking",
+        "reasoning_text",
+    ] {
+        if let Some(text) = delta
+            .get(key)
+            .and_then(|value| value.as_str())
+            .filter(|text| !text.is_empty())
+        {
+            return Ok(Some(text.to_string()));
+        }
+    }
+    Ok(None)
+}
+
 fn content_delta_from_chunk(data: &str) -> Result<Option<String>, ModelError> {
     let value: serde_json::Value =
         serde_json::from_str(data).map_err(|err| ModelError::Provider(err.to_string()))?;
@@ -484,6 +621,47 @@ mod tests {
         assert!(done);
         assert_eq!(pieces, ["Hel", "lo"]);
         assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn parses_reasoning_content_delta() {
+        let data = r#"{"choices":[{"delta":{"reasoning_content":"plan"}}]}"#;
+        assert_eq!(
+            reasoning_delta_from_chunk(data).unwrap().as_deref(),
+            Some("plan")
+        );
+        let data = r#"{"choices":[{"delta":{"content":"hi"}}]}"#;
+        assert!(reasoning_delta_from_chunk(data).unwrap().is_none());
+    }
+
+    #[test]
+    fn splits_think_tags_across_chunks() {
+        let mut splitter = ThinkSplitter::default();
+        let mut text = String::new();
+        let mut think = String::new();
+        for chunk in ["Hello <th", "ink>secret", " plan</th", "ink> world"] {
+            for piece in splitter.push(chunk) {
+                match piece {
+                    SplitPiece::Text(piece) => text.push_str(&piece),
+                    SplitPiece::Think(piece) => think.push_str(&piece),
+                }
+            }
+        }
+        for piece in splitter.flush() {
+            match piece {
+                SplitPiece::Text(piece) => text.push_str(&piece),
+                SplitPiece::Think(piece) => think.push_str(&piece),
+            }
+        }
+        assert_eq!(text, "Hello  world");
+        assert_eq!(think, "secret plan");
+    }
+
+    #[test]
+    fn short_text_is_emitted_before_stream_end() {
+        let mut splitter = ThinkSplitter::default();
+        let pieces = splitter.push("Hi");
+        assert!(matches!(&pieces[..], [SplitPiece::Text(text)] if text == "Hi"));
     }
 
     #[test]

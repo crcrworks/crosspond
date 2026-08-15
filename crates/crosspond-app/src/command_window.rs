@@ -7,6 +7,7 @@ use gpui::{
 };
 
 use crate::text_input::TextInput;
+use crate::transcript::{Transcript, TranscriptBlock, tool_activity_label, tool_done_label};
 use crate::ui;
 
 actions!(command_window, [Submit, HideLauncher]);
@@ -25,8 +26,7 @@ pub struct CommandWindow {
     input: Entity<TextInput>,
     state: CommandWindowState,
     prompt: String,
-    result: Option<String>,
-    activity: Vec<String>,
+    transcript: Transcript,
     artifacts: Vec<String>,
     ambient: ContextCapsule,
     current_task: Option<TaskId>,
@@ -47,8 +47,7 @@ impl CommandWindow {
             input,
             state: CommandWindowState::Idle,
             prompt: String::new(),
-            result: None,
-            activity: Vec::new(),
+            transcript: Transcript::new(),
             artifacts: Vec::new(),
             ambient: ContextCapsule::default(),
             current_task: None,
@@ -74,15 +73,22 @@ impl CommandWindow {
                 if self.current_task != Some(task_id) {
                     return;
                 }
-                self.result.get_or_insert_with(String::new).push_str(&text);
+                self.transcript.push_text(&text);
+                self.state = CommandWindowState::Running;
+            }
+            AgentEvent::ReasoningDelta { task_id, text } => {
+                if self.current_task != Some(task_id) {
+                    return;
+                }
+                self.transcript.push_reasoning(&text);
                 self.state = CommandWindowState::Running;
             }
             AgentEvent::TaskCompleted { task_id, summary } => {
                 if self.current_task != Some(task_id) {
                     return;
                 }
-                if self.result.as_deref().unwrap_or("").is_empty() {
-                    self.result = Some(summary);
+                if !self.transcript.has_assistant_text() && !summary.trim().is_empty() {
+                    self.transcript.push_text(&summary);
                 }
                 self.state = CommandWindowState::Completed;
                 self.pending_approval = None;
@@ -96,7 +102,7 @@ impl CommandWindow {
                 if self.current_task != Some(task_id) {
                     return;
                 }
-                self.result = Some(message);
+                self.transcript.push_notice(&message);
                 self.state = CommandWindowState::Failed;
                 self.pending_approval = None;
             }
@@ -105,14 +111,13 @@ impl CommandWindow {
                     return;
                 }
                 self.state = CommandWindowState::Cancelled;
-                self.result = Some("Cancelled".into());
                 self.pending_approval = None;
             }
             AgentEvent::ToolStarted { task_id, tool } => {
                 if self.current_task != Some(task_id) {
                     return;
                 }
-                self.activity.push(tool_activity_label(&tool));
+                self.transcript.start_tool(&tool);
             }
             AgentEvent::ArtifactCreated {
                 task_id,
@@ -123,10 +128,11 @@ impl CommandWindow {
                 }
                 self.artifacts.push(display_name);
             }
-            AgentEvent::ToolFinished { task_id, .. } => {
+            AgentEvent::ToolFinished { task_id, tool } => {
                 if self.current_task != Some(task_id) {
                     return;
                 }
+                self.transcript.finish_tool(&tool);
             }
             AgentEvent::ConnectionTested { .. } => return,
             AgentEvent::ApprovalRequired {
@@ -161,8 +167,7 @@ impl CommandWindow {
         self.commands.send(RuntimeCommand::ResetSession);
         self.state = CommandWindowState::Idle;
         self.prompt.clear();
-        self.result = None;
-        self.activity.clear();
+        self.transcript.clear();
         self.artifacts.clear();
         self.ambient = ContextCapsule::default();
         self.current_task = None;
@@ -222,8 +227,7 @@ impl CommandWindow {
         let task_id = TaskId::new();
         self.current_task = Some(task_id);
         self.prompt = prompt.clone();
-        self.result = None;
-        self.activity.clear();
+        self.transcript.clear();
         self.artifacts.clear();
         self.pending_approval = None;
         self.state = CommandWindowState::PreparingContext;
@@ -275,13 +279,24 @@ impl CommandWindow {
     }
 
     fn sync_window_size(&self, window: &mut Window) {
-        let height = match self.state {
+        let current = window.viewport_size();
+        let min_width = crate::launcher::WINDOW_WIDTH;
+        let min_height = match self.state {
             CommandWindowState::Idle => {
                 crate::launcher::idle_height(self.ambient.badge_lines().len())
             }
             _ => crate::launcher::RESULT_HEIGHT,
         };
-        window.resize(size(crate::launcher::WINDOW_WIDTH, height));
+        if self.state == CommandWindowState::Idle {
+            window.resize(size(min_width, min_height));
+            return;
+        }
+        if current.width < min_width || current.height < min_height {
+            window.resize(size(
+                current.width.max(min_width),
+                current.height.max(min_height),
+            ));
+        }
     }
 
     fn status_line(&self) -> Option<String> {
@@ -295,8 +310,9 @@ impl CommandWindow {
         }
     }
 
-    fn result_text(&self) -> Option<&str> {
-        self.result.as_deref().filter(|text| !text.is_empty())
+    fn toggle_block(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.transcript.toggle(index);
+        cx.notify();
     }
 }
 
@@ -310,9 +326,14 @@ impl gpui::Render for CommandWindow {
         let status = self.status_line();
         let prompt_label = (!self.prompt.is_empty() && self.state != CommandWindowState::Idle)
             .then(|| self.prompt.clone());
-        let result = self.result_text().map(str::to_string);
-        let activity = self.activity.clone();
         let artifacts = self.artifacts.clone();
+        let blocks: Vec<(usize, TranscriptBlock)> = self
+            .transcript
+            .blocks()
+            .iter()
+            .cloned()
+            .enumerate()
+            .collect();
         let result_color = if self.state == CommandWindowState::Failed {
             rgb(0xff453a)
         } else {
@@ -327,6 +348,7 @@ impl gpui::Render for CommandWindow {
             .pending_approval
             .as_ref()
             .map(|pending| (pending.title.clone(), pending.description.clone()));
+        let entity = cx.entity();
 
         div()
             .key_context("CommandWindow")
@@ -352,6 +374,7 @@ impl gpui::Render for CommandWindow {
                     .gap_2()
                     .child(
                         div()
+                            .flex_none()
                             .flex()
                             .flex_row()
                             .items_center()
@@ -362,13 +385,16 @@ impl gpui::Render for CommandWindow {
                     .children(
                         badges
                             .into_iter()
-                            .map(|line| div().text_xs().text_color(muted).child(line)),
+                            .map(|line| div().flex_none().text_xs().text_color(muted).child(line)),
                     )
                     .children(
-                        prompt_label.map(|prompt| div().text_sm().text_color(muted).child(prompt)),
+                        prompt_label.map(|prompt| {
+                            div().flex_none().text_sm().text_color(muted).child(prompt)
+                        }),
                     )
                     .children(status.map(|line| {
                         div()
+                            .flex_none()
                             .flex()
                             .flex_row()
                             .items_center()
@@ -386,74 +412,211 @@ impl gpui::Render for CommandWindow {
                                 }))
                             })
                     }))
-                    .children(approval.map(|(title, description)| {
-                        let entity = cx.entity();
+                    .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(div().text_sm().child("Crosspond wants to:"))
-                            .child(div().text_sm().child(title))
-                            .children(
-                                (!description.is_empty())
-                                    .then(|| div().text_sm().text_color(muted).child(description)),
-                            )
+                            .id("transcript")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
                             .child(
                                 div()
                                     .flex()
-                                    .flex_row()
-                                    .gap_2()
-                                    .child(ui::button("approval-allow", "Allow", dark, {
-                                        let entity = entity.clone();
-                                        move |_, window, cx| {
-                                            entity.update(cx, |this, cx| {
-                                                this.on_allow(window, cx);
-                                            });
+                                    .flex_col()
+                                    .flex_none()
+                                    .w_full()
+                                    .justify_start()
+                                    .gap_1()
+                                    .children(blocks.into_iter().filter_map(|(index, block)| {
+                                        if matches!(
+                                            &block,
+                                            TranscriptBlock::Text { text }
+                                                if text.trim().is_empty()
+                                        ) {
+                                            return None;
                                         }
+                                        Some(render_transcript_block(
+                                            index,
+                                            block,
+                                            muted,
+                                            result_color,
+                                            entity.clone(),
+                                        ))
                                     }))
-                                    .child(ui::button("approval-cancel", "Cancel", dark, {
-                                        move |_, window, cx| {
-                                            entity.update(cx, |this, cx| {
-                                                this.on_reject_action(window, cx);
-                                            });
-                                        }
+                                    .children(artifacts.into_iter().map(|name| {
+                                        div()
+                                            .flex_none()
+                                            .text_sm()
+                                            .text_color(muted)
+                                            .child(format!("Created {name}"))
+                                    }))
+                                    .children(approval.map(|(title, description)| {
+                                        render_approval_card(
+                                            title,
+                                            description,
+                                            muted,
+                                            dark,
+                                            entity.clone(),
+                                        )
                                     })),
-                            )
-                    }))
-                    .children(
-                        activity
-                            .into_iter()
-                            .map(|line| div().text_sm().text_color(muted).child(line)),
-                    )
-                    .children(artifacts.into_iter().map(|name| {
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .child(format!("Created {name}"))
-                    }))
-                    .children(result.map(|line| {
-                        div()
-                            .id("result")
-                            .flex_1()
-                            .overflow_y_scroll()
-                            .whitespace_normal()
-                            .text_sm()
-                            .text_color(result_color)
-                            .child(line)
-                    })),
+                            ),
+                    ),
             )
     }
 }
 
-fn tool_activity_label(name: &str) -> String {
-    match name {
-        "read_file" => "Reading file…".into(),
-        "write_file" => "Writing file…".into(),
-        "list_directory" => "Listing directory…".into(),
-        "create_directory" => "Creating directory…".into(),
-        "get_accessibility_snapshot" => "Looking at the screen…".into(),
-        "ui_press" => "Pressing a control…".into(),
-        "ui_set_value" => "Filling a field…".into(),
-        other => format!("Running {other}…"),
+fn render_transcript_block(
+    index: usize,
+    block: TranscriptBlock,
+    muted: gpui::Rgba,
+    result_color: gpui::Rgba,
+    entity: Entity<CommandWindow>,
+) -> impl IntoElement {
+    match block {
+        TranscriptBlock::Thinking { text, expanded } => {
+            let label = if text.is_empty() {
+                "Thinking…".to_string()
+            } else {
+                "Thought".to_string()
+            };
+            collapsible_block(
+                ("think", index),
+                index,
+                expanded,
+                label,
+                muted,
+                expanded.then_some(text),
+                entity,
+            )
+            .into_any_element()
+        }
+        TranscriptBlock::Tools { items, expanded } => {
+            let header = TranscriptBlock::Tools {
+                items: items.clone(),
+                expanded,
+            }
+            .collapsed_label();
+            let details = expanded.then(|| {
+                items
+                    .iter()
+                    .map(|item| {
+                        if item.running {
+                            tool_activity_label(&item.name)
+                        } else {
+                            tool_done_label(&item.name)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            collapsible_block(
+                ("tools", index),
+                index,
+                expanded,
+                header,
+                muted,
+                details,
+                entity,
+            )
+            .into_any_element()
+        }
+        TranscriptBlock::Text { text } => div()
+            .flex_none()
+            .whitespace_normal()
+            .text_sm()
+            .text_color(result_color)
+            .child(text)
+            .into_any_element(),
     }
+}
+
+fn render_approval_card(
+    title: String,
+    description: String,
+    muted: gpui::Rgba,
+    dark: bool,
+    entity: Entity<CommandWindow>,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .flex_none()
+        .gap_2()
+        .pt_2()
+        .child(div().text_sm().child("Crosspond wants to:"))
+        .child(div().text_sm().child(title))
+        .children(
+            (!description.is_empty()).then(|| div().text_sm().text_color(muted).child(description)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .child(ui::button("approval-allow", "Allow", dark, {
+                    let entity = entity.clone();
+                    move |_, window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.on_allow(window, cx);
+                        });
+                    }
+                }))
+                .child(ui::button("approval-cancel", "Cancel", dark, {
+                    move |_, window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.on_reject_action(window, cx);
+                        });
+                    }
+                })),
+        )
+}
+
+fn collapsible_block(
+    id: (&'static str, usize),
+    index: usize,
+    expanded: bool,
+    header: String,
+    muted: gpui::Rgba,
+    details: Option<String>,
+    entity: Entity<CommandWindow>,
+) -> impl IntoElement {
+    let caret = if expanded { "▾" } else { "▸" };
+    div()
+        .flex()
+        .flex_col()
+        .flex_none()
+        .gap_1()
+        .child(
+            div()
+                .id(id)
+                .flex()
+                .flex_none()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .cursor_pointer()
+                .hover(|this| this.opacity(0.8))
+                .on_click(move |_, _, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.toggle_block(index, cx);
+                    });
+                })
+                .child(div().flex_none().text_sm().text_color(muted).child(caret))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_sm()
+                        .text_color(muted)
+                        .whitespace_nowrap()
+                        .child(header),
+                ),
+        )
+        .children(details.filter(|body| !body.trim().is_empty()).map(|body| {
+            div()
+                .flex_none()
+                .pl_4()
+                .whitespace_normal()
+                .text_sm()
+                .text_color(muted)
+                .child(body)
+        }))
 }

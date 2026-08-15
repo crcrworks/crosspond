@@ -576,6 +576,11 @@ impl Runtime {
                                     return StepOutcome::Cancelled { reset: false };
                                 }
                             }
+                            ModelEvent::ReasoningDelta(text) => {
+                                if self.events.send(AgentEvent::ReasoningDelta { task_id, text }).is_err() {
+                                    return StepOutcome::Cancelled { reset: false };
+                                }
+                            }
                             ModelEvent::ToolCall(call) => tool_calls.push(call),
                         }
                     }
@@ -598,6 +603,11 @@ impl Runtime {
                         Some(ModelEvent::TextDelta(text)) => {
                             assembled.push_str(&text);
                             if self.events.send(AgentEvent::AssistantDelta { task_id, text }).is_err() {
+                                return StepOutcome::Cancelled { reset: false };
+                            }
+                        }
+                        Some(ModelEvent::ReasoningDelta(text)) => {
+                            if self.events.send(AgentEvent::ReasoningDelta { task_id, text }).is_err() {
                                 return StepOutcome::Cancelled { reset: false };
                             }
                         }

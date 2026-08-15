@@ -3,15 +3,15 @@ use std::time::Duration;
 
 use crosspond_core::{AgentEvent, ContextCollector, EventPump, GlobalHotkeyService, HotkeyEvent};
 use gpui::{
-    App, Bounds, Global, Pixels, Timer, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, point, px, size,
+    App, Bounds, Global, Pixels, Timer, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, point, px, size,
 };
 
 use crate::command_window::CommandWindow;
 
 pub const WINDOW_WIDTH: Pixels = px(640.0);
 pub const IDLE_HEIGHT: Pixels = px(72.0);
-pub const RESULT_HEIGHT: Pixels = px(320.0);
+pub const RESULT_HEIGHT: Pixels = px(560.0);
 const BADGE_LINE_HEIGHT: Pixels = px(20.0);
 
 const POLL_INTERVAL: Duration = Duration::from_millis(32);
@@ -48,16 +48,23 @@ pub fn mark_hidden(cx: &mut App) {
 pub fn window_options(cx: &App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(launcher_bounds(cx))),
-        titlebar: None,
+        // GPUI 0.2.2 only sets NSResizableWindowMask when a titlebar is present.
+        // Keep it transparent and move traffic lights off-screen so the launcher
+        // still looks like a command bar.
+        titlebar: Some(TitlebarOptions {
+            title: None,
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(-100.0), px(-100.0))),
+        }),
         focus: false,
         show: false,
         kind: WindowKind::PopUp,
         is_movable: true,
-        is_resizable: false,
+        is_resizable: true,
         is_minimizable: false,
         window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some("com.crosspond.app".into()),
-        window_min_size: Some(size(px(320.0), IDLE_HEIGHT)),
+        window_min_size: Some(size(px(400.0), IDLE_HEIGHT)),
         ..Default::default()
     }
 }

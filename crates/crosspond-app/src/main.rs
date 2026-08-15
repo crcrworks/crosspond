@@ -5,6 +5,7 @@ mod command_window;
 mod launcher;
 mod settings;
 mod text_input;
+mod transcript;
 mod ui;
 
 use std::sync::Arc;
