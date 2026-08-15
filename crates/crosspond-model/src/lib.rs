@@ -9,8 +9,8 @@ mod provider;
 pub use error::ModelError;
 pub use openai_compat::{OpenAiCompatibleProvider, chat_completions_url, parse_sse_frames};
 pub use provider::{
-    EchoProvider, Message, ModelEvent, ModelProvider, ModelRequest, Role, ToolCall, ToolDefinition,
-    default_provider_builder,
+    EchoProvider, ImagePart, Message, ModelEvent, ModelProvider, ModelRequest, Role, ToolCall,
+    ToolDefinition, default_provider_builder, keep_latest_images,
 };
 
 pub type ProviderBuilder =

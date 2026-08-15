@@ -85,6 +85,7 @@ impl Tool for ReadFile {
         Ok(ToolResult {
             text: truncate_output(text),
             created_file: None,
+            image: None,
         })
     }
 }
@@ -138,6 +139,7 @@ impl Tool for ListDirectory {
                 names.join("\n")
             },
             created_file: None,
+            image: None,
         })
     }
 }
@@ -185,6 +187,7 @@ impl Tool for WriteFile {
                 display_relative(&context.workspace.root, &resolved.path)
             ),
             created_file: Some(resolved.path),
+            image: None,
         })
     }
 
@@ -232,6 +235,7 @@ impl Tool for CreateDirectory {
                 display_relative(&context.workspace.root, &resolved.path)
             ),
             created_file: None,
+            image: None,
         })
     }
 

@@ -1,6 +1,6 @@
 /// Caps so an Accessibility dump cannot blow the model context window.
-pub const MAX_AX_DEPTH: usize = 8;
-pub const MAX_AX_NODES: usize = 80;
+pub const MAX_AX_DEPTH: usize = 12;
+pub const MAX_AX_NODES: usize = 300;
 pub const MAX_AX_TEXT_CHARS: usize = 120;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

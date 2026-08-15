@@ -28,11 +28,13 @@ pub fn evaluate(risk: RiskLevel) -> PolicyDecision {
 
 pub fn risk_for_tool(name: &str, scope: PathScope) -> RiskLevel {
     match (name, scope) {
-        ("read_file" | "list_directory" | "get_accessibility_snapshot", _) => RiskLevel::ReadOnly,
+        ("read_file" | "list_directory" | "get_accessibility_snapshot" | "take_screenshot", _) => {
+            RiskLevel::ReadOnly
+        }
         ("write_file" | "create_directory", PathScope::Workspace) => RiskLevel::WorkspaceWrite,
         ("write_file" | "create_directory", PathScope::External) => RiskLevel::ExternalWrite,
         ("run_command", _) => RiskLevel::Shell,
-        ("ui_press" | "ui_set_value", _) => RiskLevel::ComputerAction,
+        ("ui_press" | "ui_set_value" | "ui_click", _) => RiskLevel::ComputerAction,
         _ => RiskLevel::Destructive,
     }
 }
@@ -108,6 +110,22 @@ mod tests {
                 PathScope::Workspace
             )),
             PolicyDecision::Allow
+        );
+    }
+
+    #[test]
+    fn take_screenshot_is_auto() {
+        assert_eq!(
+            evaluate(risk_for_tool("take_screenshot", PathScope::Workspace)),
+            PolicyDecision::Allow
+        );
+    }
+
+    #[test]
+    fn ui_click_requires_approval() {
+        assert_eq!(
+            evaluate(risk_for_tool("ui_click", PathScope::Workspace)),
+            PolicyDecision::RequireApproval
         );
     }
 }

@@ -30,10 +30,27 @@ pub struct ToolDefinition {
     pub parameters: Value,
 }
 
+/// Image part for vision models. `Debug` redacts bytes.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ImagePart {
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for ImagePart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImagePart")
+            .field("media_type", &self.media_type)
+            .field("bytes_len", &self.bytes.len())
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Message {
     pub role: Role,
     pub content: String,
+    pub images: Vec<ImagePart>,
     pub tool_calls: Vec<ToolCall>,
     pub tool_call_id: Option<String>,
 }
@@ -43,6 +60,7 @@ impl Message {
         Self {
             role: Role::System,
             content: content.into(),
+            images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: None,
         }
@@ -52,6 +70,7 @@ impl Message {
         Self {
             role: Role::User,
             content: content.into(),
+            images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: None,
         }
@@ -61,6 +80,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: content.into(),
+            images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: None,
         }
@@ -70,6 +90,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: content.into(),
+            images: Vec::new(),
             tool_calls,
             tool_call_id: None,
         }
@@ -79,8 +100,46 @@ impl Message {
         Self {
             role: Role::Tool,
             content: content.into(),
+            images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: Some(tool_call_id.into()),
+        }
+    }
+
+    pub fn tool_with_images(
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+        images: Vec<ImagePart>,
+    ) -> Self {
+        Self {
+            role: Role::Tool,
+            content: content.into(),
+            images,
+            tool_calls: Vec::new(),
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
+}
+
+/// Keep only the newest screenshot image in the conversation.
+/// Older messages keep their text; images are cleared and a short note is appended.
+pub fn keep_latest_images(messages: &mut [Message]) {
+    let latest = messages
+        .iter()
+        .rposition(|message| !message.images.is_empty());
+    let Some(latest) = latest else {
+        return;
+    };
+    for (index, message) in messages.iter_mut().enumerate() {
+        if index == latest || message.images.is_empty() {
+            continue;
+        }
+        message.images.clear();
+        if !message.content.contains("screenshot omitted") {
+            if !message.content.is_empty() {
+                message.content.push('\n');
+            }
+            message.content.push_str("[earlier screenshot omitted]");
         }
     }
 }
@@ -148,5 +207,38 @@ impl ModelProvider for EchoProvider {
 
     fn test_connection(&self) -> Pin<Box<dyn Future<Output = Result<(), ModelError>> + Send>> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keep_latest_images_drops_older() {
+        let mut messages = vec![
+            Message::tool_with_images(
+                "1",
+                "first shot",
+                vec![ImagePart {
+                    media_type: "image/jpeg".into(),
+                    bytes: vec![1],
+                }],
+            ),
+            Message::assistant("ok"),
+            Message::tool_with_images(
+                "2",
+                "second shot",
+                vec![ImagePart {
+                    media_type: "image/jpeg".into(),
+                    bytes: vec![2, 2],
+                }],
+            ),
+        ];
+        keep_latest_images(&mut messages);
+        assert!(messages[0].images.is_empty());
+        assert!(messages[0].content.contains("screenshot omitted"));
+        assert_eq!(messages[2].images.len(), 1);
+        assert_eq!(messages[2].images[0].bytes, vec![2, 2]);
     }
 }

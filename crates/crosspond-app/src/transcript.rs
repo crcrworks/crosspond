@@ -241,8 +241,10 @@ pub fn tool_activity_label(name: &str) -> String {
         "list_directory" => "Listing directory…".into(),
         "create_directory" => "Creating directory…".into(),
         "get_accessibility_snapshot" => "Looking at the screen…".into(),
+        "take_screenshot" => "Taking a screenshot…".into(),
         "ui_press" => "Pressing a control…".into(),
         "ui_set_value" => "Filling a field…".into(),
+        "ui_click" => "Clicking…".into(),
         other => format!("Running {other}…"),
     }
 }
@@ -254,8 +256,10 @@ pub fn tool_done_label(name: &str) -> String {
         "list_directory" => "Listed a directory".into(),
         "create_directory" => "Created a directory".into(),
         "get_accessibility_snapshot" => "Looked at the screen".into(),
+        "take_screenshot" => "Took a screenshot".into(),
         "ui_press" => "Pressed a control".into(),
         "ui_set_value" => "Filled a field".into(),
+        "ui_click" => "Clicked".into(),
         other => format!("Ran {other}"),
     }
 }
@@ -265,8 +269,8 @@ pub fn tool_icon_path(name: &str) -> &'static str {
         "read_file" => "icons/file.svg",
         "write_file" => "icons/pencil.svg",
         "list_directory" | "create_directory" => "icons/folder.svg",
-        "get_accessibility_snapshot" => "icons/monitor.svg",
-        "ui_press" => "icons/pointer.svg",
+        "get_accessibility_snapshot" | "take_screenshot" => "icons/monitor.svg",
+        "ui_press" | "ui_click" => "icons/pointer.svg",
         "ui_set_value" => "icons/text.svg",
         _ => "icons/wrench.svg",
     }
@@ -434,6 +438,8 @@ mod tests {
             tool_icon_path("get_accessibility_snapshot"),
             "icons/monitor.svg"
         );
+        assert_eq!(tool_icon_path("take_screenshot"), "icons/monitor.svg");
+        assert_eq!(tool_icon_path("ui_click"), "icons/pointer.svg");
         assert_eq!(tool_icon_path("ui_press"), "icons/pointer.svg");
         assert_eq!(tool_icon_path("unknown_tool"), "icons/wrench.svg");
     }

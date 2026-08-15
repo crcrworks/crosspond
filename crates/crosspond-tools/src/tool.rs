@@ -33,10 +33,33 @@ impl ToolContext {
     }
 }
 
+/// Image attached to a tool result for vision models.
+///
+/// `Debug` redacts pixel bytes.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ToolImage {
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl std::fmt::Debug for ToolImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolImage")
+            .field("media_type", &self.media_type)
+            .field("bytes_len", &self.bytes.len())
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ToolResult {
     pub text: String,
     pub created_file: Option<std::path::PathBuf>,
+    pub image: Option<ToolImage>,
 }
 
 #[derive(Debug, Error)]

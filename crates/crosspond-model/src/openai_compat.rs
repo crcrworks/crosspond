@@ -59,7 +59,7 @@ impl OpenAiCompatibleProvider {
             } else {
                 request.model
             },
-            messages: request.messages.iter().map(WireMessage::from).collect(),
+            messages: wire_messages(&request.messages),
             stream: true,
             max_tokens: None,
             tools: request.tools.iter().map(WireTool::from).collect(),
@@ -159,7 +159,7 @@ impl OpenAiCompatibleProvider {
             model: self.model.clone(),
             messages: vec![WireMessage {
                 role: "user",
-                content: "ping".into(),
+                content: WireContent::Text("ping".into()),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
             }],
@@ -244,12 +244,32 @@ struct WireFunction {
 #[derive(Serialize)]
 struct WireMessage {
     role: &'static str,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    content: String,
+    content: WireContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tool_calls: Vec<WireToolCall>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum WireContent {
+    Text(String),
+    Parts(Vec<WireContentPart>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum WireContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: WireImageUrl },
+}
+
+#[derive(Serialize)]
+struct WireImageUrl {
+    url: String,
 }
 
 #[derive(Serialize)]
@@ -274,9 +294,16 @@ impl From<&Message> for WireMessage {
             Role::Assistant => "assistant",
             Role::Tool => "tool",
         };
+        // OpenAI-compatible APIs reject multimodal content on `tool` roles.
+        // Vision parts are attached via `wire_messages` as a follow-up `user` turn.
+        let content = if message.images.is_empty() || message.role == Role::Tool {
+            WireContent::Text(message.content.clone())
+        } else {
+            content_with_images(&message.content, &message.images)
+        };
         Self {
             role,
-            content: message.content.clone(),
+            content,
             tool_call_id: message.tool_call_id.clone(),
             tool_calls: message
                 .tool_calls
@@ -292,6 +319,54 @@ impl From<&Message> for WireMessage {
                 .collect(),
         }
     }
+}
+
+fn content_with_images(text: &str, images: &[crate::provider::ImagePart]) -> WireContent {
+    let mut parts = Vec::new();
+    if !text.is_empty() {
+        parts.push(WireContentPart::Text {
+            text: text.to_string(),
+        });
+    }
+    for image in images {
+        let encoded =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image.bytes);
+        parts.push(WireContentPart::ImageUrl {
+            image_url: WireImageUrl {
+                url: format!("data:{};base64,{encoded}", image.media_type),
+            },
+        });
+    }
+    WireContent::Parts(parts)
+}
+
+/// Build the wire `messages` array.
+///
+/// Tool results stay plain text (required by OpenAI-compatible providers).
+/// Screenshot bytes from a tool turn are appended as a final `user` message
+/// after every tool response, so the tool-call group stays valid.
+fn wire_messages(messages: &[Message]) -> Vec<WireMessage> {
+    let mut out: Vec<WireMessage> = messages.iter().map(WireMessage::from).collect();
+    let Some(source) = messages
+        .iter()
+        .rev()
+        .find(|message| !message.images.is_empty())
+    else {
+        return out;
+    };
+    if source.role != Role::Tool {
+        return out;
+    }
+    out.push(WireMessage {
+        role: "user",
+        content: content_with_images(
+            "Screenshot image from the tool result above. ui_click uses exact pixels in this image (origin top-left); preserve its aspect ratio and do not normalize each axis to 1000.",
+            &source.images,
+        ),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    });
+    out
 }
 
 #[derive(Default)]
@@ -570,6 +645,42 @@ mod tests {
 
     use super::*;
     use crate::provider::Message;
+
+    #[test]
+    fn tool_images_become_follow_up_user_message() {
+        use crate::provider::ImagePart;
+        let messages = vec![
+            Message::assistant_tool_calls(
+                "",
+                vec![crate::provider::ToolCall {
+                    id: "call_1".into(),
+                    name: "take_screenshot".into(),
+                    arguments: "{}".into(),
+                }],
+            ),
+            Message::tool_with_images(
+                "call_1",
+                "Screenshot of Safari (100×50).",
+                vec![ImagePart {
+                    media_type: "image/jpeg".into(),
+                    bytes: b"\xff\xd8\xff".to_vec(),
+                }],
+            ),
+        ];
+        let wire = wire_messages(&messages);
+        assert_eq!(wire.len(), 3);
+        let tool = serde_json::to_value(&wire[1]).unwrap();
+        assert_eq!(tool["role"], "tool");
+        assert_eq!(tool["tool_call_id"], "call_1");
+        assert_eq!(tool["content"], "Screenshot of Safari (100×50).");
+        let vision = serde_json::to_value(&wire[2]).unwrap();
+        assert_eq!(vision["role"], "user");
+        let parts = vision["content"].as_array().expect("content array");
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        let url = parts[1]["image_url"]["url"].as_str().unwrap();
+        assert!(url.starts_with("data:image/jpeg;base64,"));
+    }
 
     #[test]
     fn builds_chat_completions_url() {

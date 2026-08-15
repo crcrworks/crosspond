@@ -23,7 +23,8 @@ pub struct WindowContext {
 
 /// Snapshot of the user's Mac at the moment Crosspond opened.
 ///
-/// Clipboard and screenshots are never included.
+/// Clipboard is never included. Screenshots are collected only via the
+/// `take_screenshot` tool, not as ambient context.
 /// `Debug` redacts selected text.
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct ContextCapsule {
