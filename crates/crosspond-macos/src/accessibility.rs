@@ -173,6 +173,7 @@ fn take_snapshot(
     pid: i32,
     app_name: &str,
 ) -> Result<String, ToolError> {
+    crate::ax::enable_background_ax(pid);
     let root = crate::ax::snapshot_root(pid).ok_or_else(|| {
         ToolError::Failed("could not read the Accessibility tree of the frontmost app".into())
     })?;
@@ -220,7 +221,8 @@ impl Walker {
             return None;
         }
         let role = crate::ax::ax_string(&element, "AXRole").unwrap_or_else(|| "AXUnknown".into());
-        if skip_ax_role(&role) {
+        let subrole = crate::ax::ax_string(&element, "AXSubrole").unwrap_or_default();
+        if skip_ax_role(&role) || crate::ax::is_chrome_subrole(&subrole) {
             return None;
         }
         self.count += 1;
@@ -327,7 +329,17 @@ fn stale_node() -> ToolError {
 pub(crate) fn skip_ax_role(role: &str) -> bool {
     matches!(
         role,
-        "AXMenuBar" | "AXMenu" | "AXMenuBarItem" | "AXMenuItem" | "AXScrollBar" | "AXDockItem"
+        "AXMenuBar"
+            | "AXMenu"
+            | "AXMenuBarItem"
+            | "AXMenuItem"
+            | "AXScrollBar"
+            | "AXDockItem"
+            | "AXCloseButton"
+            | "AXMinimizeButton"
+            | "AXZoomButton"
+            | "AXFullScreenButton"
+            | "AXGrowArea"
     )
 }
 
@@ -340,7 +352,10 @@ mod tests {
         assert!(skip_ax_role("AXMenuBar"));
         assert!(skip_ax_role("AXMenuItem"));
         assert!(skip_ax_role("AXScrollBar"));
+        assert!(skip_ax_role("AXCloseButton"));
+        assert!(skip_ax_role("AXMinimizeButton"));
         assert!(!skip_ax_role("AXButton"));
         assert!(!skip_ax_role("AXTextField"));
+        assert!(!skip_ax_role("AXWindow"));
     }
 }

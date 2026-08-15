@@ -40,7 +40,7 @@ Option+Space
 
 Commands and events are defined in `crosspond-core`. The UI never runs model HTTP or tools on the GPUI thread. The runtime never imports GPUI. Context collection runs on the main thread and must happen before `App::activate`, otherwise Crosspond is the frontmost app.
 
-Computer tools target the **ambient** frontmost pid from when the launcher opened, not whichever app is frontmost after the hotkey.
+Computer tools target the **ambient** frontmost pid from when the launcher opened, not whichever app is frontmost after the hotkey. Presses and set-value run through Accessibility **without activating** the target (Codex-style background AX), so Crosspond stays frontmost and Chromium `AXPress`-at-origin does not hit traffic lights after a focus steal. Window chrome (close / minimize / zoom) is never pressed; text fields are focused instead of pressed.
 
 Node ids are integers for the latest snapshot generation. A new snapshot or a successful UI action invalidates old ids.
 
