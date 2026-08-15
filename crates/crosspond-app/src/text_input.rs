@@ -203,23 +203,26 @@ impl TextInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
+        let range = clamp_byte_range(&self.content, self.selected_range.clone());
+        if range.start < range.end
+            && let Some(text) = self.content.get(range)
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
         }
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
+        let range = clamp_byte_range(&self.content, self.selected_range.clone());
+        if range.start < range.end
+            && let Some(text) = self.content.get(range)
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
             self.replace_text_in_range(None, "", window, cx);
         }
     }
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let offset = clamp_to_boundary(&self.content, offset);
         self.selected_range = offset..offset;
         cx.notify();
     }
@@ -320,9 +323,9 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let range = self.range_from_utf16(&range_utf16);
+        let range = clamp_byte_range(&self.content, self.range_from_utf16(&range_utf16));
         actual_range.replace(self.range_to_utf16(&range));
-        Some(self.content[range].to_string())
+        self.content.get(range).map(ToString::to_string)
     }
 
     fn selected_text_range(
@@ -331,8 +334,9 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        let range = clamp_byte_range(&self.content, self.selected_range.clone());
         Some(UTF16Selection {
-            range: self.range_to_utf16(&self.selected_range),
+            range: self.range_to_utf16(&range),
             reversed: self.selection_reversed,
         })
     }
@@ -363,11 +367,9 @@ impl EntityInputHandler for TextInput {
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .or(self.marked_range.clone())
             .unwrap_or_else(|| self.selected_range.clone());
-
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
-        self.selected_range = range.start + new_text.len()..range.start + new_text.len();
+        let range = replace_bytes(&mut self.content, range, new_text);
+        let caret = range.start + new_text.len();
+        self.selected_range = caret..caret;
         self.marked_range.take();
         cx.notify();
     }
@@ -385,20 +387,26 @@ impl EntityInputHandler for TextInput {
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .or(self.marked_range.clone())
             .unwrap_or_else(|| self.selected_range.clone());
-
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
+        let range = replace_bytes(&mut self.content, range, new_text);
         if new_text.is_empty() {
             self.marked_range = None;
         } else {
             self.marked_range = Some(range.start..range.start + new_text.len());
         }
-        self.selected_range = new_selected_range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
-            .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        // IME selectedRange is relative to the marked text, not the document.
+        self.selected_range = match new_selected_range_utf16 {
+            Some(sel) => {
+                let relative = clamp_byte_range(
+                    new_text,
+                    utf16_to_utf8(new_text, sel.start)..utf16_to_utf8(new_text, sel.end),
+                );
+                range.start + relative.start..range.start + relative.end
+            }
+            None => {
+                let caret = range.start + new_text.len();
+                caret..caret
+            }
+        };
         cx.notify();
     }
 
@@ -410,7 +418,7 @@ impl EntityInputHandler for TextInput {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let last_layout = self.last_layout.as_ref()?;
-        let range = self.range_from_utf16(&range_utf16);
+        let range = clamp_byte_range(&self.content, self.range_from_utf16(&range_utf16));
         Some(Bounds::from_corners(
             point(
                 bounds.left() + last_layout.x_for_index(range.start),
@@ -498,7 +506,8 @@ impl Element for TextElement {
             WindowAppearance::Dark | WindowAppearance::VibrantDark
         );
 
-        let (display_text, text_color) = if content.is_empty() {
+        let content_empty = content.is_empty();
+        let (display_text, text_color) = if content_empty {
             let placeholder = if dark {
                 hsla(0., 0., 1., 0.35)
             } else {
@@ -517,29 +526,36 @@ impl Element for TextElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = if let Some(marked_range) = input.marked_range.as_ref() {
-            vec![
-                TextRun {
-                    len: marked_range.start,
-                    ..run.clone()
-                },
-                TextRun {
-                    len: marked_range.end - marked_range.start,
-                    underline: Some(UnderlineStyle {
-                        color: Some(run.color),
-                        thickness: px(1.0),
-                        wavy: false,
-                    }),
-                    ..run.clone()
-                },
-                TextRun {
-                    len: display_text.len() - marked_range.end,
-                    ..run
-                },
-            ]
-            .into_iter()
-            .filter(|run| run.len > 0)
-            .collect()
+        let runs = if content_empty {
+            vec![run]
+        } else if let Some(marked_range) = input.marked_range.as_ref() {
+            let marked = clamp_byte_range(display_text.as_ref(), marked_range.clone());
+            if marked.end > display_text.len() || marked.start >= marked.end {
+                vec![run]
+            } else {
+                vec![
+                    TextRun {
+                        len: marked.start,
+                        ..run.clone()
+                    },
+                    TextRun {
+                        len: marked.end - marked.start,
+                        underline: Some(UnderlineStyle {
+                            color: Some(run.color),
+                            thickness: px(1.0),
+                            wavy: false,
+                        }),
+                        ..run.clone()
+                    },
+                    TextRun {
+                        len: display_text.len() - marked.end,
+                        ..run
+                    },
+                ]
+                .into_iter()
+                .filter(|run| run.len > 0)
+                .collect()
+            }
         } else {
             vec![run]
         };
@@ -596,17 +612,25 @@ impl Element for TextElement {
         cx: &mut App,
     ) {
         let focus_handle = self.input.read(cx).focus_handle.clone();
-        window.handle_input(
-            &focus_handle,
-            ElementInputHandler::new(bounds, self.input.clone()),
-            cx,
-        );
+        let ime_ready = self.input.read(cx).last_layout.is_some();
+        if ime_ready {
+            window.handle_input(
+                &focus_handle,
+                ElementInputHandler::new(bounds, self.input.clone()),
+                cx,
+            );
+        } else {
+            // GPUI 0.2.2 registers the IME handler at the end of draw, before
+            // swapping in this frame's dispatch tree. Japanese IME then calls
+            // doCommandBySelector, which dispatches a key against an empty tree
+            // and aborts (`panic_cannot_unwind`). Wait one frame so the tree exists.
+            window.request_animation_frame();
+        }
         if let Some(selection) = prepaint.selection.take() {
             window.paint_quad(selection);
         }
         let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), window, cx)
-            .unwrap();
+        let _ = line.paint(bounds.origin, window.line_height(), window, cx);
 
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
@@ -655,5 +679,70 @@ impl Render for TextInput {
 impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+fn clamp_to_boundary(text: &str, mut offset: usize) -> usize {
+    if offset >= text.len() {
+        return text.len();
+    }
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+fn clamp_byte_range(text: &str, range: Range<usize>) -> Range<usize> {
+    let start = clamp_to_boundary(text, range.start);
+    let end = clamp_to_boundary(text, range.end);
+    start.min(end)..start.max(end)
+}
+
+fn utf16_to_utf8(text: &str, utf16_offset: usize) -> usize {
+    let mut utf8 = 0;
+    let mut utf16 = 0;
+    for ch in text.chars() {
+        if utf16 >= utf16_offset {
+            break;
+        }
+        utf16 += ch.len_utf16();
+        utf8 += ch.len_utf8();
+    }
+    utf8
+}
+
+fn replace_bytes(content: &mut SharedString, range: Range<usize>, new_text: &str) -> Range<usize> {
+    let range = clamp_byte_range(content, range);
+    let mut next =
+        String::with_capacity(content.len() - (range.end - range.start) + new_text.len());
+    next.push_str(&content[..range.start]);
+    next.push_str(new_text);
+    next.push_str(&content[range.end..]);
+    *content = next.into();
+    range
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clamp_byte_range, utf16_to_utf8};
+    use std::ops::Range;
+
+    #[test]
+    fn clamps_mid_character_offsets() {
+        let text = "あい";
+        assert_eq!(clamp_byte_range(text, 1..4), 0..3);
+        assert_eq!(clamp_byte_range(text, 0..100), 0..text.len());
+        assert_eq!(
+            clamp_byte_range(text, Range { start: 8, end: 2 }),
+            0..text.len()
+        );
+    }
+
+    #[test]
+    fn utf16_offsets_are_relative_to_marked_text() {
+        let marked = "あ";
+        assert_eq!(utf16_to_utf8(marked, 0), 0);
+        assert_eq!(utf16_to_utf8(marked, 1), 3);
+        assert_eq!(utf16_to_utf8("hiあ", 2), 2);
     }
 }
