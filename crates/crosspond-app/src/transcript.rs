@@ -210,6 +210,28 @@ pub fn tool_done_label(name: &str) -> String {
     }
 }
 
+pub fn tool_icon_path(name: &str) -> &'static str {
+    match name {
+        "read_file" => "icons/file.svg",
+        "write_file" => "icons/pencil.svg",
+        "list_directory" | "create_directory" => "icons/folder.svg",
+        "get_accessibility_snapshot" => "icons/monitor.svg",
+        "ui_press" => "icons/pointer.svg",
+        "ui_set_value" => "icons/text.svg",
+        _ => "icons/wrench.svg",
+    }
+}
+
+pub fn tools_header_icon(items: &[ToolLine]) -> &'static str {
+    if let Some(current) = items.iter().rev().find(|item| item.running) {
+        return tool_icon_path(&current.name);
+    }
+    match items.len() {
+        1 => tool_icon_path(&items[0].name),
+        _ => "icons/wrench.svg",
+    }
+}
+
 fn collapsed_tools_label(items: &[ToolLine]) -> String {
     if let Some(current) = items.iter().rev().find(|item| item.running) {
         return tool_activity_label(&current.name);
@@ -337,5 +359,43 @@ mod tests {
             transcript.blocks()[1],
             TranscriptBlock::Tools { .. }
         ));
+    }
+
+    #[test]
+    fn tool_icon_matches_known_tools() {
+        assert_eq!(tool_icon_path("read_file"), "icons/file.svg");
+        assert_eq!(
+            tool_icon_path("get_accessibility_snapshot"),
+            "icons/monitor.svg"
+        );
+        assert_eq!(tool_icon_path("ui_press"), "icons/pointer.svg");
+        assert_eq!(tool_icon_path("unknown_tool"), "icons/wrench.svg");
+    }
+
+    #[test]
+    fn header_icon_follows_the_latest_running_tool() {
+        let mut transcript = Transcript::new();
+        transcript.start_tool("get_accessibility_snapshot");
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Tools { items, .. } => {
+                assert_eq!(tools_header_icon(items), "icons/monitor.svg");
+            }
+            other => panic!("{other:?}"),
+        }
+        transcript.finish_tool("get_accessibility_snapshot");
+        transcript.start_tool("ui_press");
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Tools { items, .. } => {
+                assert_eq!(tools_header_icon(items), "icons/pointer.svg");
+            }
+            other => panic!("{other:?}"),
+        }
+        transcript.finish_tool("ui_press");
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Tools { items, .. } => {
+                assert_eq!(tools_header_icon(items), "icons/wrench.svg");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

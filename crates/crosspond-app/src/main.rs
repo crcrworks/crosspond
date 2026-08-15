@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 mod actions;
+mod assets;
 mod command_window;
 mod launcher;
 mod settings;
@@ -30,7 +31,7 @@ fn main() {
     let command_tx = channels.commands;
     let event_rx = channels.events;
 
-    let application = Application::new();
+    let application = Application::new().with_assets(assets::Assets);
     application.on_reopen(|cx| {
         launcher::show(cx);
     });

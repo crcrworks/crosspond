@@ -1,4 +1,6 @@
-use gpui::{App, ClickEvent, SharedString, Styled, Window, WindowAppearance, div, prelude::*, rgb};
+use gpui::{
+    App, ClickEvent, SharedString, Styled, Window, WindowAppearance, div, prelude::*, px, rgb, svg,
+};
 
 pub fn is_dark(window: &Window) -> bool {
     matches!(
@@ -31,4 +33,13 @@ pub fn button(
         .cursor_pointer()
         .child(label.into())
         .on_click(on_click)
+}
+
+pub fn svg_icon(path: &'static str, color: gpui::Rgba) -> impl IntoElement {
+    svg()
+        .path(path)
+        .size(px(14.0))
+        .flex_none()
+        .overflow_hidden()
+        .text_color(color)
 }

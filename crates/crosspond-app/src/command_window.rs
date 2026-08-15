@@ -7,7 +7,10 @@ use gpui::{
 };
 
 use crate::text_input::TextInput;
-use crate::transcript::{Transcript, TranscriptBlock, tool_activity_label, tool_done_label};
+use crate::transcript::{
+    Transcript, TranscriptBlock, tool_activity_label, tool_done_label, tool_icon_path,
+    tools_header_icon,
+};
 use crate::ui;
 
 actions!(command_window, [Submit, HideLauncher]);
@@ -478,13 +481,18 @@ fn render_transcript_block(
             } else {
                 "Thought".to_string()
             };
+            let details = if expanded {
+                vec![(None, text)]
+            } else {
+                Vec::new()
+            };
             collapsible_block(
                 ("think", index),
-                index,
-                expanded,
+                if expanded { "▾" } else { "▸" },
+                None,
                 label,
                 muted,
-                expanded.then_some(text),
+                details,
                 entity,
             )
             .into_any_element()
@@ -495,23 +503,26 @@ fn render_transcript_block(
                 expanded,
             }
             .collapsed_label();
-            let details = expanded.then(|| {
+            let icon = tools_header_icon(&items);
+            let details = if expanded {
                 items
                     .iter()
                     .map(|item| {
-                        if item.running {
+                        let label = if item.running {
                             tool_activity_label(&item.name)
                         } else {
                             tool_done_label(&item.name)
-                        }
+                        };
+                        (Some(tool_icon_path(&item.name)), label)
                     })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            });
+                    .collect()
+            } else {
+                Vec::new()
+            };
             collapsible_block(
                 ("tools", index),
-                index,
-                expanded,
+                if expanded { "▾" } else { "▸" },
+                Some(icon),
                 header,
                 muted,
                 details,
@@ -572,14 +583,14 @@ fn render_approval_card(
 
 fn collapsible_block(
     id: (&'static str, usize),
-    index: usize,
-    expanded: bool,
+    caret: &'static str,
+    icon: Option<&'static str>,
     header: String,
     muted: gpui::Rgba,
-    details: Option<String>,
+    details: Vec<(Option<&'static str>, String)>,
     entity: Entity<CommandWindow>,
 ) -> impl IntoElement {
-    let caret = if expanded { "▾" } else { "▸" };
+    let index = id.1;
     div()
         .flex()
         .flex_col()
@@ -601,6 +612,7 @@ fn collapsible_block(
                     });
                 })
                 .child(div().flex_none().text_sm().text_color(muted).child(caret))
+                .children(icon.map(|path| ui::svg_icon(path, muted)))
                 .child(
                     div()
                         .flex_none()
@@ -610,13 +622,27 @@ fn collapsible_block(
                         .child(header),
                 ),
         )
-        .children(details.filter(|body| !body.trim().is_empty()).map(|body| {
-            div()
-                .flex_none()
-                .pl_4()
-                .whitespace_normal()
-                .text_sm()
-                .text_color(muted)
-                .child(body)
-        }))
+        .children(
+            details
+                .into_iter()
+                .filter(|(_, body)| !body.trim().is_empty())
+                .map(|(row_icon, body)| {
+                    div()
+                        .flex()
+                        .flex_none()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .pl_4()
+                        .children(row_icon.map(|path| ui::svg_icon(path, muted)))
+                        .child(
+                            div()
+                                .flex_none()
+                                .whitespace_normal()
+                                .text_sm()
+                                .text_color(muted)
+                                .child(body),
+                        )
+                }),
+        )
 }
