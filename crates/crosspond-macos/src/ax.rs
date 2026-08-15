@@ -193,7 +193,7 @@ pub(crate) fn ax_press(element: &CFType) -> Result<(), String> {
     if is_text_role(&role) {
         return ax_focus(element);
     }
-    if origin_hits_traffic_lights(element) {
+    if origin_hits_traffic_lights(element) && !is_tab_control(&role, &subrole) {
         return Err(
             "won't press this control; it sits on the window's close/minimize buttons".into(),
         );
@@ -296,6 +296,10 @@ pub(crate) fn is_chrome_subrole(subrole: &str) -> bool {
     )
 }
 
+fn is_tab_control(role: &str, subrole: &str) -> bool {
+    role == "AXTab" || subrole == "AXTab" || subrole == "AXTabButton"
+}
+
 /// Chromium often maps AXPress to a click at the element's origin. For a
 /// window-sized node that origin is the traffic lights.
 pub(crate) fn origin_in_traffic_lights(window: (f64, f64), element: (f64, f64)) -> bool {
@@ -353,7 +357,7 @@ fn wrap_create(raw: AxUiElementRef) -> Option<CFType> {
 
 #[cfg(test)]
 mod tests {
-    use super::origin_in_traffic_lights;
+    use super::{is_tab_control, origin_in_traffic_lights};
 
     #[test]
     fn window_origin_is_traffic_lights() {
@@ -361,5 +365,12 @@ mod tests {
         assert!(origin_in_traffic_lights((100.0, 80.0), (120.0, 90.0)));
         assert!(!origin_in_traffic_lights((100.0, 80.0), (220.0, 80.0)));
         assert!(!origin_in_traffic_lights((100.0, 80.0), (100.0, 160.0)));
+    }
+
+    #[test]
+    fn helium_first_tab_origin_is_inside_the_traffic_light_band() {
+        assert!(origin_in_traffic_lights((0.0, 0.0), (76.0, 0.0)));
+        assert!(is_tab_control("AXRadioButton", "AXTabButton"));
+        assert!(!is_tab_control("AXButton", "AXCloseButton"));
     }
 }
