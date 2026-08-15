@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 mod actions;
+mod activity_label;
 mod assets;
 mod command_window;
 mod launcher;

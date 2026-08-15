@@ -1,11 +1,15 @@
+use std::time::{Duration, Instant};
+
 use crosspond_core::{
     AgentEvent, ApprovalId, CommandSender, CommandWindowState, ContextCapsule, RuntimeCommand,
     StartTaskRequest, TaskId,
 };
 use gpui::{
-    App, Context, Entity, FocusHandle, KeyBinding, Window, actions, div, prelude::*, rgb, size,
+    AnyElement, App, Context, Entity, FocusHandle, KeyBinding, SharedString, Timer, Window,
+    actions, div, prelude::*, rgb, size,
 };
 
+use crate::activity_label::activity_label;
 use crate::text_input::TextInput;
 use crate::transcript::{
     Transcript, TranscriptBlock, tool_activity_label, tool_done_label, tool_icon_path,
@@ -35,6 +39,7 @@ pub struct CommandWindow {
     current_task: Option<TaskId>,
     pending_approval: Option<PendingApproval>,
     commands: CommandSender,
+    tool_starts: Vec<(String, Instant)>,
 }
 
 struct PendingApproval {
@@ -56,6 +61,7 @@ impl CommandWindow {
             current_task: None,
             pending_approval: None,
             commands,
+            tool_starts: Vec::new(),
         }
     }
 
@@ -120,6 +126,7 @@ impl CommandWindow {
                 if self.current_task != Some(task_id) {
                     return;
                 }
+                self.tool_starts.push((tool.clone(), Instant::now()));
                 self.transcript.start_tool(&tool);
             }
             AgentEvent::ArtifactCreated {
@@ -135,7 +142,7 @@ impl CommandWindow {
                 if self.current_task != Some(task_id) {
                     return;
                 }
-                self.transcript.finish_tool(&tool);
+                self.finish_tool_after_minimum_display(tool, cx);
             }
             AgentEvent::ConnectionTested { .. } => return,
             AgentEvent::ApprovalRequired {
@@ -175,6 +182,7 @@ impl CommandWindow {
         self.ambient = ContextCapsule::default();
         self.current_task = None;
         self.pending_approval = None;
+        self.tool_starts.clear();
         self.input.update(cx, |input, cx| {
             input.reset();
             input.set_placeholder(ASK_PLACEHOLDER);
@@ -313,6 +321,49 @@ impl CommandWindow {
         }
     }
 
+    fn status_is_running(&self) -> bool {
+        matches!(
+            self.state,
+            CommandWindowState::PreparingContext
+                | CommandWindowState::Running
+                | CommandWindowState::WaitingApproval
+        )
+    }
+
+    fn take_tool_start(&mut self, name: &str) -> Option<Instant> {
+        if let Some(index) = self.tool_starts.iter().rposition(|(tool, _)| tool == name) {
+            Some(self.tool_starts.remove(index).1)
+        } else {
+            self.tool_starts.pop().map(|(_, started)| started)
+        }
+    }
+
+    fn finish_tool_after_minimum_display(&mut self, tool: String, cx: &mut Context<Self>) {
+        let elapsed = self
+            .take_tool_start(&tool)
+            .map(|started| started.elapsed())
+            .unwrap_or(Duration::MAX);
+        const MIN_RUNNING: Duration = Duration::from_millis(800);
+        if elapsed >= MIN_RUNNING {
+            self.transcript.finish_tool(&tool);
+            return;
+        }
+        let wait = MIN_RUNNING - elapsed;
+        let task_id = self.current_task;
+        cx.spawn(async move |this, cx| {
+            Timer::after(wait).await;
+            this.update(cx, |this, cx| {
+                if this.current_task != task_id {
+                    return;
+                }
+                this.transcript.finish_tool(&tool);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn toggle_block(&mut self, index: usize, cx: &mut Context<Self>) {
         self.transcript.toggle(index);
         cx.notify();
@@ -327,6 +378,7 @@ impl gpui::Render for CommandWindow {
         let text = if dark { rgb(0xf5f5f7) } else { rgb(0x1d1d1f) };
         let muted = if dark { rgb(0x8e8e93) } else { rgb(0x6e6e73) };
         let status = self.status_line();
+        let status_running = self.status_is_running();
         let prompt_label = (!self.prompt.is_empty() && self.state != CommandWindowState::Idle)
             .then(|| self.prompt.clone());
         let artifacts = self.artifacts.clone();
@@ -403,7 +455,20 @@ impl gpui::Render for CommandWindow {
                             .items_center()
                             .justify_between()
                             .gap_2()
-                            .child(div().text_sm().text_color(muted).child(line))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_sm()
+                                    .text_color(muted)
+                                    .child(activity_label(
+                                        "status-line",
+                                        line,
+                                        status_running,
+                                        muted,
+                                    )),
+                            )
                             .when(show_stop, |parent| {
                                 parent.child(ui::button("stop", "Stop", dark, {
                                     let entity = cx.entity();
@@ -476,13 +541,22 @@ fn render_transcript_block(
 ) -> impl IntoElement {
     match block {
         TranscriptBlock::Thinking { text, expanded } => {
-            let label = if text.is_empty() {
+            let thinking = text.is_empty();
+            let label = if thinking {
                 "Thinking…".to_string()
             } else {
                 "Thought".to_string()
             };
-            let details = if expanded {
-                vec![(None, text)]
+            let details = if expanded && !text.trim().is_empty() {
+                vec![
+                    div()
+                        .pl_4()
+                        .whitespace_normal()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(text)
+                        .into_any_element(),
+                ]
             } else {
                 Vec::new()
             };
@@ -490,7 +564,7 @@ fn render_transcript_block(
                 ("think", index),
                 if expanded { "▾" } else { "▸" },
                 None,
-                label,
+                activity_label(("think-header", index), label, thinking, muted),
                 muted,
                 details,
                 entity,
@@ -504,16 +578,25 @@ fn render_transcript_block(
             }
             .collapsed_label();
             let icon = tools_header_icon(&items);
+            let running = items.iter().any(|item| item.running);
             let details = if expanded {
                 items
                     .iter()
-                    .map(|item| {
+                    .enumerate()
+                    .map(|(row, item)| {
                         let label = if item.running {
                             tool_activity_label(&item.name)
                         } else {
                             tool_done_label(&item.name)
                         };
-                        (Some(tool_icon_path(&item.name)), label)
+                        tool_detail_row(
+                            index,
+                            row,
+                            tool_icon_path(&item.name),
+                            label,
+                            item.running,
+                            muted,
+                        )
                     })
                     .collect()
             } else {
@@ -523,7 +606,7 @@ fn render_transcript_block(
                 ("tools", index),
                 if expanded { "▾" } else { "▸" },
                 Some(icon),
-                header,
+                activity_label(("tool-header", index), header, running, muted),
                 muted,
                 details,
                 entity,
@@ -585,9 +668,9 @@ fn collapsible_block(
     id: (&'static str, usize),
     caret: &'static str,
     icon: Option<&'static str>,
-    header: String,
+    header: impl IntoElement,
     muted: gpui::Rgba,
-    details: Vec<(Option<&'static str>, String)>,
+    details: Vec<AnyElement>,
     entity: Entity<CommandWindow>,
 ) -> impl IntoElement {
     let index = id.1;
@@ -604,6 +687,7 @@ fn collapsible_block(
                 .flex_row()
                 .items_center()
                 .gap_1()
+                .w_full()
                 .cursor_pointer()
                 .hover(|this| this.opacity(0.8))
                 .on_click(move |_, _, cx| {
@@ -615,34 +699,48 @@ fn collapsible_block(
                 .children(icon.map(|path| ui::svg_icon(path, muted)))
                 .child(
                     div()
-                        .flex_none()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
                         .text_sm()
                         .text_color(muted)
                         .whitespace_nowrap()
                         .child(header),
                 ),
         )
-        .children(
-            details
-                .into_iter()
-                .filter(|(_, body)| !body.trim().is_empty())
-                .map(|(row_icon, body)| {
-                    div()
-                        .flex()
-                        .flex_none()
-                        .flex_row()
-                        .items_center()
-                        .gap_1()
-                        .pl_4()
-                        .children(row_icon.map(|path| ui::svg_icon(path, muted)))
-                        .child(
-                            div()
-                                .flex_none()
-                                .whitespace_normal()
-                                .text_sm()
-                                .text_color(muted)
-                                .child(body),
-                        )
-                }),
+        .children(details)
+}
+
+fn tool_detail_row(
+    block: usize,
+    row: usize,
+    icon: &'static str,
+    label: String,
+    running: bool,
+    muted: gpui::Rgba,
+) -> AnyElement {
+    div()
+        .flex()
+        .flex_none()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .pl_4()
+        .w_full()
+        .child(ui::svg_icon(icon, muted))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .text_sm()
+                .text_color(muted)
+                .child(activity_label(
+                    (SharedString::from(format!("tool-row-{block}")), row),
+                    label,
+                    running,
+                    muted,
+                )),
         )
+        .into_any_element()
 }
