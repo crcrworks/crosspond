@@ -1275,6 +1275,7 @@ dependencies = [
 name = "crosspond-tools"
 version = "0.0.1"
 dependencies = [
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -4411,6 +4412,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",

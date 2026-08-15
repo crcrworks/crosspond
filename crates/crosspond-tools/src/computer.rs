@@ -83,6 +83,7 @@ pub fn computer_and_screenshot_registry(
 ) -> ToolRegistry {
     let mut registry = computer_registry(ax);
     register_screenshot_tools(&mut registry, screenshot);
+    crate::web::register_web_tools(&mut registry);
     registry
 }
 

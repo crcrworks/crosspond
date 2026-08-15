@@ -4,25 +4,22 @@
 
 The user should never have to prepare the AI before asking for work. No projects, agent pickers, skill pickers, or manual workspace setup.
 
-## Phase 5 (current)
+## Phase 6 (current)
 
-See the frontmost app and click in the image when Accessibility is not enough.
+Look things up on the public web without driving a browser.
 
-- `take_screenshot` / `ui_click` — vision fallback when Accessibility has no useful label
-- Prefer `get_accessibility_snapshot` + `ui_press` for named controls; `ui_press` clicks the node through cua-driver
-- UI actions: **Manual** (default) asks Allow; **Auto** runs them; **AI** lets the model set `ask_user`
-- Cycle the mode with the chip next to the prompt
-- Requires [cua-driver](https://cua.ai/cua-driver) on `PATH` (or `CUA_DRIVER_BIN`)
-- Phase 4 Accessibility tools: `get_accessibility_snapshot`, `ui_press`, `ui_set_value`
+- `web_search` — Exa Search API (title / URL / snippet); key in Keychain via Settings
+- `fetch_url` — read a public http(s) page as text (SSRF-blocked); no approval card
+- Prefer these for research; Accessibility / screenshot click remain for UI work
 
-Demo: Helium in front → Option + Space → “Press Login on this page” → screenshot → Allow → click.
+Demo: Option + Space → “What shipped in Rust 1.96?” → web_search → short answer with links.
 
-Phase 4 Accessibility, Phase 3 ambient context, Phase 2 filesystem tools, and Phase 1 BYOK chat still apply.
+Phase 5 screenshot/click, Phase 4 Accessibility, Phase 3 ambient context, Phase 2 filesystem tools, and Phase 1 BYOK chat still apply.
 
 ## Later phases (do not implement yet)
 
-6. Polish (receipts UI, history, onboarding)
-7. Release (signing, notarization, license re-audit)
+7. Polish (receipts UI, history, onboarding)
+8. Release (signing, notarization, license re-audit)
 
 ## Non-goals for MVP
 

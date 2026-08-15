@@ -94,7 +94,7 @@ fn window_options(cx: &App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
-            size(px(480.), px(560.)),
+            size(px(480.), px(640.)),
             cx,
         ))),
         titlebar: Some(TitlebarOptions {
@@ -104,7 +104,7 @@ fn window_options(cx: &App) -> WindowOptions {
         kind: WindowKind::Normal,
         is_resizable: true,
         app_id: Some("com.crosspond.app".into()),
-        window_min_size: Some(size(px(400.), px(420.))),
+        window_min_size: Some(size(px(400.), px(480.))),
         ..Default::default()
     }
 }
@@ -113,7 +113,9 @@ pub struct SettingsWindow {
     base_url: Entity<TextInput>,
     model: Entity<TextInput>,
     api_key: Entity<TextInput>,
+    exa_api_key: Entity<TextInput>,
     key_already_stored: bool,
+    exa_key_already_stored: bool,
     test_status: Option<(bool, String)>,
     save_status: Option<String>,
     commands: CommandSender,
@@ -131,6 +133,11 @@ impl SettingsWindow {
         let loaded = config.load().unwrap_or_default();
         let key_already_stored = secrets
             .get(&SecretKey::PROVIDER_API_KEY)
+            .ok()
+            .flatten()
+            .is_some_and(|key| !key.is_empty());
+        let exa_key_already_stored = secrets
+            .get(&SecretKey::EXA_API_KEY)
             .ok()
             .flatten()
             .is_some_and(|key| !key.is_empty());
@@ -153,12 +160,22 @@ impl SettingsWindow {
             };
             TextInput::new(placeholder, cx)
         });
+        let exa_api_key = cx.new(|cx| {
+            let placeholder = if exa_key_already_stored {
+                "••••••••  stored in Keychain"
+            } else {
+                "Optional — for web_search"
+            };
+            TextInput::new(placeholder, cx)
+        });
 
         Self {
             base_url,
             model,
             api_key,
+            exa_api_key,
             key_already_stored,
+            exa_key_already_stored,
             test_status: None,
             save_status: None,
             commands,
@@ -181,6 +198,7 @@ impl SettingsWindow {
         let base_url = self.base_url.read(cx).text().trim().to_string();
         let model = self.model.read(cx).text().trim().to_string();
         let api_key = self.api_key.read(cx).text().trim().to_string();
+        let exa_api_key = self.exa_api_key.read(cx).text().trim().to_string();
         let defaults = AppConfig::default();
         config.provider = defaults.provider;
         config.base_url = if base_url.is_empty() {
@@ -200,6 +218,17 @@ impl SettingsWindow {
                 .map_err(|err| err.to_string())?;
             self.key_already_stored = true;
             self.api_key.update(cx, |input, cx| {
+                input.reset();
+                input.set_placeholder("••••••••  stored in Keychain");
+                cx.notify();
+            });
+        }
+        if !exa_api_key.is_empty() {
+            self.secrets
+                .set(&SecretKey::EXA_API_KEY, &SecretString::new(exa_api_key))
+                .map_err(|err| err.to_string())?;
+            self.exa_key_already_stored = true;
+            self.exa_api_key.update(cx, |input, cx| {
                 input.reset();
                 input.set_placeholder("••••••••  stored in Keychain");
                 cx.notify();
@@ -296,6 +325,16 @@ impl gpui::Render for SettingsWindow {
                         muted,
                         self.api_key.clone(),
                         border,
+                    ))
+                    .child(section_label("Search", muted))
+                    .child(labeled_field(
+                        "Exa API Key",
+                        muted,
+                        self.exa_api_key.clone(),
+                        border,
+                    ))
+                    .child(div().text_sm().text_color(muted).whitespace_normal().child(
+                        "Required for web_search. Free credits at https://dashboard.exa.ai/api-keys",
                     ))
                     .child(
                         div()

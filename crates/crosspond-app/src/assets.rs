@@ -13,6 +13,7 @@ impl AssetSource for Assets {
             "icons/monitor.svg" => include_bytes!("../assets/icons/monitor.svg").as_slice(),
             "icons/pointer.svg" => include_bytes!("../assets/icons/pointer.svg").as_slice(),
             "icons/text.svg" => include_bytes!("../assets/icons/text.svg").as_slice(),
+            "icons/search.svg" => include_bytes!("../assets/icons/search.svg").as_slice(),
             "icons/wrench.svg" => include_bytes!("../assets/icons/wrench.svg").as_slice(),
             _ => return Ok(None),
         })))
@@ -27,6 +28,7 @@ impl AssetSource for Assets {
                 "monitor.svg".into(),
                 "pointer.svg".into(),
                 "text.svg".into(),
+                "search.svg".into(),
                 "wrench.svg".into(),
             ])
         } else {

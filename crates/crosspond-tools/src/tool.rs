@@ -13,13 +13,15 @@ pub struct ToolDefinition {
     pub parameters: Value,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ToolContext {
     pub workspace: Workspace,
     pub frontmost_name: Option<String>,
     pub frontmost_pid: Option<i32>,
     /// Set only for a single tool call after the user approved an external write.
     pub allow_external: bool,
+    /// Search provider API key (Exa for now). `Debug` redacts the value.
+    pub search_api_key: Option<String>,
 }
 
 impl ToolContext {
@@ -29,7 +31,23 @@ impl ToolContext {
             frontmost_name: None,
             frontmost_pid: None,
             allow_external: false,
+            search_api_key: None,
         }
+    }
+}
+
+impl std::fmt::Debug for ToolContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolContext")
+            .field("workspace", &self.workspace)
+            .field("frontmost_name", &self.frontmost_name)
+            .field("frontmost_pid", &self.frontmost_pid)
+            .field("allow_external", &self.allow_external)
+            .field(
+                "search_api_key",
+                &self.search_api_key.as_ref().map(|_| "***"),
+            )
+            .finish()
     }
 }
 

@@ -12,6 +12,11 @@ impl SecretKey {
         service: "com.crosspond.app",
         account: "provider.api_key",
     };
+
+    pub const EXA_API_KEY: Self = Self {
+        service: "com.crosspond.app",
+        account: "exa.api_key",
+    };
 }
 
 /// Secret bytes that must never be logged or persisted in config.

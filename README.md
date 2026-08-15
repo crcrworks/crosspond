@@ -2,7 +2,7 @@
 
 Command bar for your computer agent. macOS only.
 
-Phase 5 is BYOK chat, a task workspace, ambient context (“this”), Accessibility computer use with Auto / AI / Manual UI-action approval, and window screenshots with image-coordinate clicks.
+Phase 6 adds `web_search` (Exa) and `fetch_url` on top of Phase 5: BYOK chat, a task workspace, ambient context (“this”), Accessibility computer use with Auto / AI / Manual UI-action approval, and window screenshots with image-coordinate clicks.
 
 ## Run
 
@@ -22,12 +22,12 @@ cargo run -p crosspond-app
 
 Then:
 
-1. Press **⌘,** (or Crosspond → Settings) and set Base URL, model, and API key.
+1. Press **⌘,** (or Crosspond → Settings) and set Base URL, model, and API key. Optionally add an Exa API key for `web_search`.
 2. Click **Save**, then **Test Connection**.
 3. Grant Accessibility when macOS asks (needed for selected text and UI actions). Grant Screen Recording for screenshots and clicks. Finder selection may also prompt for Automation.
 4. Select text in another app, or files in Finder — or leave Safari / Helium in front.
 5. Press **Option + Space**. A badge should show the app and “Selected text: N chars” or “N selected files”.
-6. Try **Summarize this**, **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions show an **Allow** / **Cancel** card first.
+6. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions show an **Allow** / **Cancel** card first.
 
 **Escape** or **Stop** cancels the whole task. Approval **Cancel** rejects only that action. Hiding the window starts a new session.
 

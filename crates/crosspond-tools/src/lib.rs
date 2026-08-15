@@ -1,4 +1,4 @@
-//! Filesystem and computer tools. Must not depend on GPUI, `crosspond-core`,
+//! Filesystem, computer, and web tools. Must not depend on GPUI, `crosspond-core`,
 //! or `crosspond-macos` (macos implements `AccessibilityBackend` instead).
 
 #![deny(unsafe_code)]
@@ -8,7 +8,9 @@ mod computer;
 mod fs_tools;
 mod path;
 mod registry;
+mod ssrf;
 mod tool;
+mod web;
 mod workspace;
 
 pub use ax_outline::{
@@ -22,9 +24,11 @@ pub use computer::{
 pub use fs_tools::filesystem_registry;
 pub use path::{PathError, PathScope, ResolvedPath, classify_write_path, resolve_path};
 pub use registry::ToolRegistry;
+pub use ssrf::{is_blocked_ip, validate_fetch_url};
 pub use tool::{
     MAX_TOOL_OUTPUT_BYTES, Tool, ToolContext, ToolDefinition, ToolError, ToolImage, ToolResult,
 };
+pub use web::{format_exa_results, register_web_tools, strip_html, web_tools_registry};
 pub use workspace::{Workspace, WorkspaceError};
 
 pub const MAX_LIST_ENTRIES: usize = 200;

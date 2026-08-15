@@ -7,7 +7,7 @@
 | `crosspond-app` | GPUI UI, process entry | core, macos, tools, GPUI |
 | `crosspond-core` | runtime commands/events, agent loop, policy, receipts, context types | model, tools, tokio, uuid |
 | `crosspond-model` | LLM provider abstraction | reqwest, serde |
-| `crosspond-tools` | filesystem tools, computer-tool defs, `AccessibilityBackend`, `ScreenshotBackend` | serde; not macos |
+| `crosspond-tools` | filesystem tools, computer-tool defs, web search/fetch, `AccessibilityBackend`, `ScreenshotBackend` | serde, reqwest; not macos |
 | `crosspond-macos` | hotkeys, Keychain, ambient context, cua-driver computer use | core, tools, platform crates, not GPUI |
 
 `crosspond-model` must not depend on `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend` and `ScreenshotBackend` from tools.
@@ -29,6 +29,7 @@ Option+Space
         │                      fs tools (workspace auto; external after Allow)
         │                      get_accessibility_snapshot (auto)
         │                      take_screenshot (auto) → tool text + image
+        │                      web_search / fetch_url (auto; Exa key for search)
         │                      ui_press / ui_set_value / ui_click
         │                        Manual → ApprovalRequired
         │                        Agent + ask_user → ApprovalRequired
@@ -52,7 +53,7 @@ Computer tools target the **ambient** frontmost pid from when the launcher opene
 
 Node ids are integers for the latest Accessibility snapshot generation. A new snapshot or a successful UI action invalidates old ids.
 
-Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). The API key is only in Keychain (`com.crosspond.app` / `provider.api_key`). Config and key are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode.
+Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode.
 
 A session reuses one workspace under `~/.crosspond/workspaces/<first-task-id>/`. Finder selections are copied into that workspace’s `input/` on the first turn. Each submit still writes `~/.crosspond/tasks/<task-id>/`. Closing the launcher sends `ResetSession`, which drops follow-up history, ambient context, and the session workspace.
 

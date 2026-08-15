@@ -93,9 +93,15 @@ pub fn evaluate_with(
 
 pub fn risk_for_tool(name: &str, scope: PathScope) -> RiskLevel {
     match (name, scope) {
-        ("read_file" | "list_directory" | "get_accessibility_snapshot" | "take_screenshot", _) => {
-            RiskLevel::ReadOnly
-        }
+        (
+            "read_file"
+            | "list_directory"
+            | "get_accessibility_snapshot"
+            | "take_screenshot"
+            | "web_search"
+            | "fetch_url",
+            _,
+        ) => RiskLevel::ReadOnly,
         ("write_file" | "create_directory", PathScope::Workspace) => RiskLevel::WorkspaceWrite,
         ("write_file" | "create_directory", PathScope::External) => RiskLevel::ExternalWrite,
         ("run_command", _) => RiskLevel::Shell,
@@ -182,6 +188,18 @@ mod tests {
     fn take_screenshot_is_auto() {
         assert_eq!(
             evaluate(risk_for_tool("take_screenshot", PathScope::Workspace)),
+            PolicyDecision::Allow
+        );
+    }
+
+    #[test]
+    fn web_search_and_fetch_are_auto() {
+        assert_eq!(
+            evaluate(risk_for_tool("web_search", PathScope::Workspace)),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate(risk_for_tool("fetch_url", PathScope::Workspace)),
             PolicyDecision::Allow
         );
     }

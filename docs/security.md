@@ -12,7 +12,10 @@ API keys go to macOS Keychain via `SecretStore`. They must not appear in:
 - `events.jsonl` / `receipt.json`
 - `Debug` output (`SecretString` must not derive `Debug`)
 
-The Keychain item uses service `com.crosspond.app` and account `provider.api_key`.
+The Keychain items use service `com.crosspond.app`:
+
+- `provider.api_key` — OpenAI-compatible provider key
+- `exa.api_key` — Exa API key for `web_search`
 
 Provider HTTP errors shown in the UI are short status-based messages. Raw provider JSON is not dumped to the user or to logs.
 
@@ -26,7 +29,7 @@ Do not log Accessibility field values. Password fields (`AXSecureTextField`) are
 
 | Risk | Default |
 | --- | --- |
-| Read-only (including `get_accessibility_snapshot`, `take_screenshot`) | auto |
+| Read-only (including `get_accessibility_snapshot`, `take_screenshot`, `web_search`, `fetch_url`) | auto |
 | Workspace write | auto |
 | External write | approval |
 | Computer action (`ui_press`, `ui_set_value`, `ui_click`) | `computer_approval`: Manual always asks; Auto never asks; Agent asks unless the model sets `ask_user: false` |
@@ -42,6 +45,8 @@ Filesystem tools refuse paths outside the workspace unless that one call was app
 AX node ids are valid only for the latest snapshot. Stale ids error instead of acting on the wrong control. Click coordinates are valid only for the latest screenshot.
 
 Approval copy for `ui_click` may include coordinates and the app name; it must not include the screenshot image.
+
+`fetch_url` only allows `http`/`https` and rejects localhost, private, link-local, and cloud-metadata addresses (including after redirects). Page bodies and URL query strings must not appear in receipts, `events.jsonl`, or logs.
 
 ## Untrusted content
 

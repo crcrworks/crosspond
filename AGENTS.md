@@ -6,7 +6,7 @@ Treat `docs/mvp.md` and `docs/architecture.md` as the product and design source 
 
 Implement one phase at a time. Do not start the next phase until the current one builds, formats, lints, and tests.
 
-Current phase: **5 — Screenshot / vision + approved click**.
+Current phase: **6 — Web search + fetch_url**.
 
 Out of scope until later phases: history, onboarding polish, drag / scroll / synthetic keyboard.
 

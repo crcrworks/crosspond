@@ -245,6 +245,8 @@ pub fn tool_activity_label(name: &str) -> String {
         "ui_press" => "Pressing a control…".into(),
         "ui_set_value" => "Filling a field…".into(),
         "ui_click" => "Clicking…".into(),
+        "web_search" => "Searching the web…".into(),
+        "fetch_url" => "Fetching a page…".into(),
         other => format!("Running {other}…"),
     }
 }
@@ -260,6 +262,8 @@ pub fn tool_done_label(name: &str) -> String {
         "ui_press" => "Pressed a control".into(),
         "ui_set_value" => "Filled a field".into(),
         "ui_click" => "Clicked".into(),
+        "web_search" => "Searched the web".into(),
+        "fetch_url" => "Fetched a page".into(),
         other => format!("Ran {other}"),
     }
 }
@@ -272,6 +276,7 @@ pub fn tool_icon_path(name: &str) -> &'static str {
         "get_accessibility_snapshot" | "take_screenshot" => "icons/monitor.svg",
         "ui_press" | "ui_click" => "icons/pointer.svg",
         "ui_set_value" => "icons/text.svg",
+        "web_search" | "fetch_url" => "icons/search.svg",
         _ => "icons/wrench.svg",
     }
 }
@@ -441,6 +446,8 @@ mod tests {
         assert_eq!(tool_icon_path("take_screenshot"), "icons/monitor.svg");
         assert_eq!(tool_icon_path("ui_click"), "icons/pointer.svg");
         assert_eq!(tool_icon_path("ui_press"), "icons/pointer.svg");
+        assert_eq!(tool_icon_path("web_search"), "icons/search.svg");
+        assert_eq!(tool_icon_path("fetch_url"), "icons/search.svg");
         assert_eq!(tool_icon_path("unknown_tool"), "icons/wrench.svg");
     }
 
