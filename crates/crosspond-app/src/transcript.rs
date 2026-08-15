@@ -240,11 +240,20 @@ pub fn tool_activity_label(name: &str) -> String {
         "write_file" => "Writing file…".into(),
         "list_directory" => "Listing directory…".into(),
         "create_directory" => "Creating directory…".into(),
+        "list_apps" => "Listing apps…".into(),
+        "open_app" => "Opening an app…".into(),
+        "focus_app" => "Focusing an app…".into(),
         "get_accessibility_snapshot" => "Looking at the screen…".into(),
         "take_screenshot" => "Taking a screenshot…".into(),
         "ui_press" => "Pressing a control…".into(),
         "ui_set_value" => "Filling a field…".into(),
         "ui_click" => "Clicking…".into(),
+        "ui_type" => "Typing…".into(),
+        "ui_hotkey" => "Sending a shortcut…".into(),
+        "ui_scroll" => "Scrolling…".into(),
+        "calendar_events" => "Reading the calendar…".into(),
+        "run_command" => "Running a command…".into(),
+        "open_url" => "Opening a URL…".into(),
         "web_search" => "Searching the web…".into(),
         "fetch_url" => "Fetching a page…".into(),
         other => format!("Running {other}…"),
@@ -257,11 +266,20 @@ pub fn tool_done_label(name: &str) -> String {
         "write_file" => "Wrote a file".into(),
         "list_directory" => "Listed a directory".into(),
         "create_directory" => "Created a directory".into(),
+        "list_apps" => "Listed apps".into(),
+        "open_app" => "Opened an app".into(),
+        "focus_app" => "Focused an app".into(),
         "get_accessibility_snapshot" => "Looked at the screen".into(),
         "take_screenshot" => "Took a screenshot".into(),
         "ui_press" => "Pressed a control".into(),
         "ui_set_value" => "Filled a field".into(),
         "ui_click" => "Clicked".into(),
+        "ui_type" => "Typed".into(),
+        "ui_hotkey" => "Sent a shortcut".into(),
+        "ui_scroll" => "Scrolled".into(),
+        "calendar_events" => "Read the calendar".into(),
+        "run_command" => "Ran a command".into(),
+        "open_url" => "Opened a URL".into(),
         "web_search" => "Searched the web".into(),
         "fetch_url" => "Fetched a page".into(),
         other => format!("Ran {other}"),
@@ -273,9 +291,12 @@ pub fn tool_icon_path(name: &str) -> &'static str {
         "read_file" => "icons/file.svg",
         "write_file" => "icons/pencil.svg",
         "list_directory" | "create_directory" => "icons/folder.svg",
+        "list_apps" | "open_app" | "focus_app" => "icons/monitor.svg",
         "get_accessibility_snapshot" | "take_screenshot" => "icons/monitor.svg",
-        "ui_press" | "ui_click" => "icons/pointer.svg",
+        "ui_press" | "ui_click" | "ui_type" | "ui_hotkey" | "ui_scroll" => "icons/pointer.svg",
         "ui_set_value" => "icons/text.svg",
+        "calendar_events" => "icons/file.svg",
+        "run_command" | "open_url" => "icons/wrench.svg",
         "web_search" | "fetch_url" => "icons/search.svg",
         _ => "icons/wrench.svg",
     }
@@ -448,6 +469,10 @@ mod tests {
         assert_eq!(tool_icon_path("ui_press"), "icons/pointer.svg");
         assert_eq!(tool_icon_path("web_search"), "icons/search.svg");
         assert_eq!(tool_icon_path("fetch_url"), "icons/search.svg");
+        assert_eq!(tool_icon_path("list_apps"), "icons/monitor.svg");
+        assert_eq!(tool_icon_path("calendar_events"), "icons/file.svg");
+        assert_eq!(tool_icon_path("ui_type"), "icons/pointer.svg");
+        assert_eq!(tool_icon_path("run_command"), "icons/wrench.svg");
         assert_eq!(tool_icon_path("unknown_tool"), "icons/wrench.svg");
     }
 

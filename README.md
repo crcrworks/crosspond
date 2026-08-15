@@ -2,7 +2,7 @@
 
 Command bar for your computer agent. macOS only.
 
-Phase 6 adds `web_search` (Exa) and `fetch_url` on top of Phase 5: BYOK chat, a task workspace, ambient context (“this”), Accessibility computer use with Auto / AI / Manual UI-action approval, and window screenshots with image-coordinate clicks.
+Phase 11 completes the Whole-Mac agent stack on top of Phase 6: retarget any app (`list_apps` / `open_app`), keyboard and scroll, approved `run_command` / `open_url`, EventKit `calendar_events`, and approved external file reads — plus earlier BYOK chat, workspace tools, ambient context, Accessibility, and screenshot/click.
 
 ## Run
 
@@ -24,10 +24,10 @@ Then:
 
 1. Press **⌘,** (or Crosspond → Settings) and set Base URL, model, and API key. Optionally add an Exa API key for `web_search`.
 2. Click **Save**, then **Test Connection**.
-3. Grant Accessibility when macOS asks (needed for selected text and UI actions). Grant Screen Recording for screenshots and clicks. Finder selection may also prompt for Automation.
+3. Grant Accessibility when macOS asks (needed for selected text and UI actions). Grant Screen Recording for screenshots and clicks. Grant Calendars for `calendar_events`. Finder selection may also prompt for Automation.
 4. Select text in another app, or files in Finder — or leave Safari / Helium in front.
 5. Press **Option + Space**. A badge should show the app and “Selected text: N chars” or “N selected files”.
-6. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions show an **Allow** / **Cancel** card first.
+6. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions show an **Allow** / **Cancel** card first (unless Auto).
 
 **Escape** or **Stop** cancels the whole task. Approval **Cancel** rejects only that action. Hiding the window starts a new session.
 

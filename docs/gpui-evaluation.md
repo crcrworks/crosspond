@@ -4,7 +4,7 @@ This is the license and feasibility gate required before later phases. It is not
 
 ## Decision for Phase 0
 
-**Continue internally on crates.io `gpui = "=0.2.2"`.** Do not distribute a closed-source build to other users until Phase 7 re-audits this file.
+**Continue internally on crates.io `gpui = "=0.2.2"`.** Do not distribute a closed-source build to other users until Phase 13 re-audits this file.
 
 UI-only crates stay isolated so a SwiftUI/AppKit replacement remains possible if GPUI becomes blocked.
 
@@ -61,7 +61,7 @@ Items that need attention:
 | `cbindgen 0.28.0` | MPL-2.0 | GPUI build-dependency; not linked into the app |
 | `block 0.1.6` | MIT | Future-incompat warning from `objc`; not our code |
 
-MPL-2.0 is file-level copyleft. Shipping a binary that includes `option-ext` typically means offering that crate's source (not the whole Crosspond tree). Phase 7 must record how that offer is made.
+MPL-2.0 is file-level copyleft. Shipping a binary that includes `option-ext` typically means offering that crate's source (not the whole Crosspond tree). Phase 13 must record how that offer is made.
 
 Dual-licensed crates that *mention* GPL (`self_cell` Apache-2.0 OR GPL-2.0-only, `r-efi` MIT OR Apache-2.0 OR LGPL) are **not** in the default `crosspond-app` runtime graph. If they appear later, prefer the permissive side.
 
@@ -75,5 +75,5 @@ Dual-licensed crates that *mention* GPL (`self_cell` Apache-2.0 OR GPL-2.0-only,
 
 1. Keep GPUI pinned to `=0.2.2` until a deliberate upgrade.
 2. Keep `crosspond-core` / `model` / `tools` / `macos` free of GPUI.
-3. Re-run this audit in Phase 7, and immediately if the GPUI pin changes.
+3. Re-run this audit in Phase 13, and immediately if the GPUI pin changes.
 4. Do not treat Apache-2.0 on the `gpui` crate as a complete answer for a commercial binary until `option-ext` (MPL) and any future GPL edges are reviewed.

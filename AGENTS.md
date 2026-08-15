@@ -6,9 +6,9 @@ Treat `docs/mvp.md` and `docs/architecture.md` as the product and design source 
 
 Implement one phase at a time. Do not start the next phase until the current one builds, formats, lints, and tests.
 
-Current phase: **6 — Web search + fetch_url**.
+Current phase: **11 — External file read (Whole-Mac agent complete through EventKit + shell)**.
 
-Out of scope until later phases: history, onboarding polish, drag / scroll / synthetic keyboard.
+Out of scope until later phases: history, onboarding polish, drag, `kill_app`, exposing cua-driver’s full catalog.
 
 ## Crate boundaries
 
@@ -24,7 +24,7 @@ model       tools ← macos
 - `crosspond-core`, `crosspond-model`, and `crosspond-tools` must not depend on GPUI.
 - `crosspond-model` must not depend on `crosspond-core`.
 - `crosspond-tools` must not depend on `crosspond-macos` (that would cycle through core).
-- `crosspond-macos` may depend on `crosspond-tools` and implements `AccessibilityBackend` and `ScreenshotBackend` via a host-spawned cua-driver MCP child.
+- `crosspond-macos` may depend on `crosspond-tools` and implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` (cua-driver + EventKit).
 - UI and core must not import `global-hotkey` or Security framework crates directly.
 - `unsafe` stays in `crosspond-macos` (or platform bindings it wraps) and needs a comment.
 
@@ -42,4 +42,4 @@ GPUI 0.2.2 has no per-window hide. `App::hide()` / `App::activate(true)` hide an
 
 ## Secrets
 
-Never persist API keys in `config.json`, `.env`, SQLite, logs, or task history. Store them in Keychain via `SecretStore`. `SecretString` must not derive `Debug`. Do not log selected text, Finder paths, Accessibility field values (especially passwords), or screenshot bytes.
+Never persist API keys in `config.json`, `.env`, SQLite, logs, or task history. Store them in Keychain via `SecretStore`. `SecretString` must not derive `Debug`. Do not log selected text, Finder paths, Accessibility field values (especially passwords), screenshot bytes, or calendar event notes/bodies.

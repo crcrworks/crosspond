@@ -279,97 +279,97 @@ impl gpui::Render for SettingsWindow {
             .bg(bg)
             .text_color(text)
             .child(
-                div()
-                    .id("settings")
-                    .flex()
-                    .flex_col()
-                    .size_full()
-                    .overflow_y_scroll()
-                    .px_6()
-                    .py_4()
-                    .gap_4()
-                    .child(section_label("General", muted))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(field_label("Launch Crosspond", muted))
-                            .child(div().child("Option + Space")),
-                    )
-                    .child(section_label("AI", muted))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(field_label("Provider", muted))
-                            .child(div().child("OpenAI Compatible")),
-                    )
-                    .child(labeled_field(
-                        "Base URL",
-                        muted,
-                        self.base_url.clone(),
-                        border,
-                    ))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .whitespace_normal()
-                            .child("Must include /v1, e.g. http://127.0.0.1:1234/v1"),
-                    )
-                    .child(labeled_field("Model", muted, self.model.clone(), border))
-                    .child(labeled_field(
-                        "API Key",
-                        muted,
-                        self.api_key.clone(),
-                        border,
-                    ))
-                    .child(section_label("Search", muted))
-                    .child(labeled_field(
-                        "Exa API Key",
-                        muted,
-                        self.exa_api_key.clone(),
-                        border,
-                    ))
-                    .child(div().text_sm().text_color(muted).whitespace_normal().child(
-                        "Required for web_search. Free credits at https://dashboard.exa.ai/api-keys",
-                    ))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap_2()
-                            .child(ui::button("save", "Save", dark, {
-                                let entity = cx.entity();
-                                move |event, window, cx| {
-                                    entity.update(cx, |this, cx| this.on_save(event, window, cx));
-                                }
-                            }))
-                            .child(ui::button("test", "Test Connection", dark, {
-                                let entity = cx.entity();
-                                move |event, window, cx| {
-                                    entity.update(cx, |this, cx| this.on_test(event, window, cx));
-                                }
-                            })),
-                    )
-                    .children(self.save_status.clone().map(|line| {
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .whitespace_normal()
-                            .child(line)
-                    }))
-                    .children(self.test_status.clone().map(|(ok, message)| {
-                        let color = if ok { rgb(0x30d158) } else { rgb(0xff453a) };
-                        div()
-                            .text_sm()
-                            .text_color(color)
-                            .whitespace_normal()
-                            .child(message)
-                    })),
-            )
+            div()
+                .id("settings")
+                .flex()
+                .flex_col()
+                .size_full()
+                .overflow_y_scroll()
+                .px_6()
+                .py_4()
+                .gap_4()
+                .child(section_label("General", muted))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(field_label("Launch Crosspond", muted))
+                        .child(div().child("Option + Space")),
+                )
+                .child(section_label("AI", muted))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(field_label("Provider", muted))
+                        .child(div().child("OpenAI Compatible")),
+                )
+                .child(labeled_field(
+                    "Base URL",
+                    muted,
+                    self.base_url.clone(),
+                    border,
+                ))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(muted)
+                        .whitespace_normal()
+                        .child("Must include /v1, e.g. http://127.0.0.1:1234/v1"),
+                )
+                .child(labeled_field("Model", muted, self.model.clone(), border))
+                .child(labeled_field(
+                    "API Key",
+                    muted,
+                    self.api_key.clone(),
+                    border,
+                ))
+                .child(section_label("Search", muted))
+                .child(labeled_field(
+                    "Exa API Key",
+                    muted,
+                    self.exa_api_key.clone(),
+                    border,
+                ))
+                .child(div().text_sm().text_color(muted).whitespace_normal().child(
+                    "Required for web_search. Free credits at https://dashboard.exa.ai/api-keys",
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(ui::button("save", "Save", dark, {
+                            let entity = cx.entity();
+                            move |event, window, cx| {
+                                entity.update(cx, |this, cx| this.on_save(event, window, cx));
+                            }
+                        }))
+                        .child(ui::button("test", "Test Connection", dark, {
+                            let entity = cx.entity();
+                            move |event, window, cx| {
+                                entity.update(cx, |this, cx| this.on_test(event, window, cx));
+                            }
+                        })),
+                )
+                .children(self.save_status.clone().map(|line| {
+                    div()
+                        .text_sm()
+                        .text_color(muted)
+                        .whitespace_normal()
+                        .child(line)
+                }))
+                .children(self.test_status.clone().map(|(ok, message)| {
+                    let color = if ok { rgb(0x30d158) } else { rgb(0xff453a) };
+                    div()
+                        .text_sm()
+                        .text_color(color)
+                        .whitespace_normal()
+                        .child(message)
+                })),
+        )
     }
 }
 

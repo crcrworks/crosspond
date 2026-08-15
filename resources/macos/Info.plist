@@ -28,6 +28,10 @@
 	<string>Crosspond reads the frontmost app and selected text, and can press buttons or fill fields after you approve each action.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Crosspond takes a screenshot of the app you were using so it can see the screen and click after you approve.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Crosspond reads your calendar events when you ask about your schedule.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Crosspond reads your calendar events when you ask about your schedule.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>

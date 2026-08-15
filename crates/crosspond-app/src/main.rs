@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crosspond_core::{ConfigStore, FileConfigStore, SecretStore, spawn_runtime_with_tools};
 use crosspond_macos::{
-    MacOsContextCollector, MacOsGlobalHotkey, MacOsKeychainSecretStore, macos_computer_backends,
+    MacOsContextCollector, MacOsGlobalHotkey, MacOsKeychainSecretStore, macos_agent_backends,
 };
 use crosspond_tools::computer_and_screenshot_registry;
 use gpui::{App, Application, Menu, MenuItem, SystemMenuType, prelude::*};
@@ -24,13 +24,16 @@ use command_window::CommandWindow;
 fn main() {
     let config: Arc<dyn ConfigStore> = Arc::new(FileConfigStore::in_home());
     let secrets: Arc<dyn SecretStore> = Arc::new(MacOsKeychainSecretStore);
-    let (accessibility, screenshot) = macos_computer_backends();
+    let (accessibility, screenshot, apps, input, calendar) = macos_agent_backends();
     let (channels, _runtime) = spawn_runtime_with_tools(
         Arc::clone(&config),
         Arc::clone(&secrets),
         Arc::new(computer_and_screenshot_registry(
             Arc::new(accessibility),
             Arc::new(screenshot),
+            Arc::new(apps),
+            Arc::new(input),
+            Arc::new(calendar),
         )),
     );
     let command_tx = channels.commands;

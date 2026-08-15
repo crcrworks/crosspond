@@ -91,17 +91,35 @@ pub fn evaluate_with(
     }
 }
 
-pub fn risk_for_tool(name: &str, scope: PathScope) -> RiskLevel {
+pub fn risk_for_tool(name: &str, scope: PathScope, input: &serde_json::Value) -> RiskLevel {
+    match name {
+        "open_url" => {
+            let url = input
+                .get("url")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .trim();
+            if url.starts_with("http://") || url.starts_with("https://") {
+                RiskLevel::ReadOnly
+            } else {
+                RiskLevel::Shell
+            }
+        }
+        "list_apps" | "calendar_events" => RiskLevel::ReadOnly,
+        "open_app" | "focus_app" | "ui_type" | "ui_hotkey" | "ui_scroll" => {
+            RiskLevel::ComputerAction
+        }
+        _ => risk_for_tool_scope(name, scope),
+    }
+}
+
+fn risk_for_tool_scope(name: &str, scope: PathScope) -> RiskLevel {
     match (name, scope) {
-        (
-            "read_file"
-            | "list_directory"
-            | "get_accessibility_snapshot"
-            | "take_screenshot"
-            | "web_search"
-            | "fetch_url",
-            _,
-        ) => RiskLevel::ReadOnly,
+        ("get_accessibility_snapshot" | "take_screenshot" | "web_search" | "fetch_url", _) => {
+            RiskLevel::ReadOnly
+        }
+        ("read_file" | "list_directory", PathScope::Workspace) => RiskLevel::ReadOnly,
+        ("read_file" | "list_directory", PathScope::External) => RiskLevel::ExternalWrite,
         ("write_file" | "create_directory", PathScope::Workspace) => RiskLevel::WorkspaceWrite,
         ("write_file" | "create_directory", PathScope::External) => RiskLevel::ExternalWrite,
         ("run_command", _) => RiskLevel::Shell,
@@ -117,12 +135,21 @@ mod tests {
     use crate::workspace::FsWorkspaceManager;
     use crate::workspace::WorkspaceManager;
     use crosspond_tools::classify_write_path;
+    use serde_json::json;
     use std::fs;
+
+    fn empty_input() -> serde_json::Value {
+        json!({})
+    }
 
     #[test]
     fn read_workspace_is_auto() {
         assert_eq!(
-            evaluate(risk_for_tool("read_file", PathScope::Workspace)),
+            evaluate(risk_for_tool(
+                "read_file",
+                PathScope::Workspace,
+                &empty_input()
+            )),
             PolicyDecision::Allow
         );
     }
@@ -130,7 +157,11 @@ mod tests {
     #[test]
     fn write_workspace_is_auto() {
         assert_eq!(
-            evaluate(risk_for_tool("write_file", PathScope::Workspace)),
+            evaluate(risk_for_tool(
+                "write_file",
+                PathScope::Workspace,
+                &empty_input()
+            )),
             PolicyDecision::Allow
         );
     }
@@ -147,7 +178,7 @@ mod tests {
         let scope = classify_write_path(&workspace.root, &desktop).unwrap();
         assert_eq!(scope, PathScope::External);
         assert_eq!(
-            evaluate(risk_for_tool("write_file", scope)),
+            evaluate(risk_for_tool("write_file", scope, &empty_input())),
             PolicyDecision::RequireApproval
         );
         let _ = fs::remove_dir_all(root);
@@ -156,7 +187,11 @@ mod tests {
     #[test]
     fn shell_requires_approval() {
         assert_eq!(
-            evaluate(risk_for_tool("run_command", PathScope::Workspace)),
+            evaluate(risk_for_tool(
+                "run_command",
+                PathScope::Workspace,
+                &empty_input()
+            )),
             PolicyDecision::RequireApproval
         );
     }
@@ -164,11 +199,19 @@ mod tests {
     #[test]
     fn computer_action_requires_approval() {
         assert_eq!(
-            evaluate(risk_for_tool("ui_press", PathScope::Workspace)),
+            evaluate(risk_for_tool(
+                "ui_press",
+                PathScope::Workspace,
+                &empty_input()
+            )),
             PolicyDecision::RequireApproval
         );
         assert_eq!(
-            evaluate(risk_for_tool("ui_set_value", PathScope::Workspace)),
+            evaluate(risk_for_tool(
+                "ui_set_value",
+                PathScope::Workspace,
+                &empty_input()
+            )),
             PolicyDecision::RequireApproval
         );
     }
@@ -178,7 +221,8 @@ mod tests {
         assert_eq!(
             evaluate(risk_for_tool(
                 "get_accessibility_snapshot",
-                PathScope::Workspace
+                PathScope::Workspace,
+                &empty_input(),
             )),
             PolicyDecision::Allow
         );
@@ -187,7 +231,11 @@ mod tests {
     #[test]
     fn take_screenshot_is_auto() {
         assert_eq!(
-            evaluate(risk_for_tool("take_screenshot", PathScope::Workspace)),
+            evaluate(risk_for_tool(
+                "take_screenshot",
+                PathScope::Workspace,
+                &empty_input()
+            )),
             PolicyDecision::Allow
         );
     }
@@ -195,19 +243,83 @@ mod tests {
     #[test]
     fn web_search_and_fetch_are_auto() {
         assert_eq!(
-            evaluate(risk_for_tool("web_search", PathScope::Workspace)),
+            evaluate(risk_for_tool(
+                "web_search",
+                PathScope::Workspace,
+                &empty_input()
+            )),
             PolicyDecision::Allow
         );
         assert_eq!(
-            evaluate(risk_for_tool("fetch_url", PathScope::Workspace)),
+            evaluate(risk_for_tool(
+                "fetch_url",
+                PathScope::Workspace,
+                &empty_input()
+            )),
             PolicyDecision::Allow
+        );
+    }
+
+    #[test]
+    fn list_apps_and_calendar_are_auto() {
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "list_apps",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "calendar_events",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::Allow
+        );
+    }
+
+    #[test]
+    fn open_app_is_computer_action() {
+        assert_eq!(
+            risk_for_tool("open_app", PathScope::Workspace, &empty_input()),
+            RiskLevel::ComputerAction
+        );
+        assert_eq!(
+            risk_for_tool("ui_hotkey", PathScope::Workspace, &empty_input()),
+            RiskLevel::ComputerAction
+        );
+    }
+
+    #[test]
+    fn open_url_http_is_auto_other_schemes_need_approval() {
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "open_url",
+                PathScope::Workspace,
+                &json!({"url": "https://example.com"})
+            )),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "open_url",
+                PathScope::Workspace,
+                &json!({"url": "mailto:a@b.com"})
+            )),
+            PolicyDecision::RequireApproval
         );
     }
 
     #[test]
     fn ui_click_requires_approval() {
         assert_eq!(
-            evaluate(risk_for_tool("ui_click", PathScope::Workspace)),
+            evaluate(risk_for_tool(
+                "ui_click",
+                PathScope::Workspace,
+                &empty_input()
+            )),
             PolicyDecision::RequireApproval
         );
     }

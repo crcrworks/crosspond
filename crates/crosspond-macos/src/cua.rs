@@ -224,6 +224,187 @@ impl CuaHost {
             .is_some_and(|node| node.secure)
     }
 
+    pub(crate) fn list_apps(&self) -> Result<String, ToolError> {
+        let result = self.call("list_apps", json!({}))?;
+        tool_error(&result)?;
+        Ok(format_app_list(&result))
+    }
+
+    pub(crate) fn open_app(
+        &self,
+        name: Option<&str>,
+        bundle_id: Option<&str>,
+    ) -> Result<String, ToolError> {
+        let mut arguments = json!({});
+        if let Some(bundle_id) = bundle_id.filter(|value| !value.is_empty()) {
+            arguments["bundle_id"] = json!(bundle_id);
+        } else if let Some(name) = name.filter(|value| !value.is_empty()) {
+            arguments["name"] = json!(name);
+        } else {
+            return Err(ToolError::Failed(
+                "open_app requires name or bundle_id".into(),
+            ));
+        }
+        let result = self.call("launch_app", arguments)?;
+        tool_error(&result)?;
+        let structured = structured_content(&result);
+        let pid = json_i32(structured, "pid").unwrap_or(0);
+        let app_name = json_string(structured, "name").unwrap_or_else(|| "app".into());
+        let bundle = json_string(structured, "bundle_id").unwrap_or_default();
+        if pid > 0 && pid != std::process::id() as i32 {
+            Ok(format!(
+                "Opened {app_name} ({bundle}, pid {pid}). Pass app=\"{app_name}\" (or the bundle id) on the next snapshot/screenshot."
+            ))
+        } else {
+            Ok(format!("Opened {app_name} ({bundle})."))
+        }
+    }
+
+    pub(crate) fn focus_app(
+        &self,
+        name: Option<&str>,
+        bundle_id: Option<&str>,
+    ) -> Result<String, ToolError> {
+        let query = bundle_id
+            .filter(|value| !value.is_empty())
+            .or(name.filter(|value| !value.is_empty()))
+            .ok_or_else(|| ToolError::Failed("focus_app requires name or bundle_id".into()))?;
+        let (pid, app_name) = self.resolve_running_app(query)?;
+        let result = self.call("bring_to_front", json!({ "pid": pid }))?;
+        tool_error(&result)?;
+        Ok(format!("Brought {app_name} (pid {pid}) to the front."))
+    }
+
+    pub(crate) fn resolve_running_app(&self, app: &str) -> Result<(i32, String), ToolError> {
+        let app = app.trim();
+        if app.is_empty() {
+            return Err(ToolError::Failed("app is required".into()));
+        }
+        let result = self.call("list_apps", json!({}))?;
+        tool_error(&result)?;
+        let apps = structured_content(&result)
+            .get("apps")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let needle = app.to_ascii_lowercase();
+        let mut exact: Option<(i32, String)> = None;
+        let mut fuzzy: Option<(i32, String)> = None;
+        for entry in apps {
+            let running = entry
+                .get("running")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !running {
+                continue;
+            }
+            let pid = json_i32(&entry, "pid").unwrap_or(0);
+            if pid <= 0 || pid == std::process::id() as i32 {
+                continue;
+            }
+            let name = json_string(&entry, "name").unwrap_or_default();
+            let bundle = json_string(&entry, "bundle_id").unwrap_or_default();
+            if bundle.eq_ignore_ascii_case(CROSSPOND_BUNDLE_ID) {
+                continue;
+            }
+            let name_l = name.to_ascii_lowercase();
+            let bundle_l = bundle.to_ascii_lowercase();
+            if name_l == needle || bundle_l == needle {
+                exact = Some((pid, name));
+                break;
+            }
+            if fuzzy.is_none()
+                && (name_l.contains(&needle)
+                    || bundle_l.contains(&needle)
+                    || needle.contains(&name_l))
+            {
+                fuzzy = Some((pid, name));
+            }
+        }
+        exact.or(fuzzy).ok_or_else(|| {
+            ToolError::Failed(format!(
+                "no running app matching \"{app}\". Call list_apps or open_app first."
+            ))
+        })
+    }
+
+    pub(crate) fn type_text(&self, text: &str, node_id: Option<&str>) -> Result<String, ToolError> {
+        let live = self.live_state()?;
+        let mut arguments = json!({
+            "pid": live.pid,
+            "window_id": live.window_id,
+            "text": text,
+            "delivery_mode": "background"
+        });
+        if let Some(node_id) = node_id {
+            let id = parse_node_id(node_id)?;
+            let node = live.nodes.get(&id).cloned().ok_or_else(stale_node)?;
+            arguments["element_index"] = json!(id);
+            if let Some(token) = &node.token {
+                arguments["element_token"] = json!(token);
+            }
+        }
+        let result = self.call("type_text", arguments)?;
+        tool_error(&result)?;
+        Ok(format!("Typed into {}.", live.app_name))
+    }
+
+    pub(crate) fn hotkey(&self, keys: &[String]) -> Result<String, ToolError> {
+        if keys.len() < 2 {
+            return Err(ToolError::Failed(
+                "hotkey requires at least one modifier and one key".into(),
+            ));
+        }
+        let live = self.live_state()?;
+        let arguments = json!({
+            "pid": live.pid,
+            "window_id": live.window_id,
+            "keys": keys,
+            "delivery_mode": "background"
+        });
+        let result = self.call("hotkey", arguments)?;
+        tool_error(&result)?;
+        Ok(format!(
+            "Sent hotkey {} in {}.",
+            keys.join("+"),
+            live.app_name
+        ))
+    }
+
+    pub(crate) fn scroll(
+        &self,
+        direction: &str,
+        amount: u32,
+        by: &str,
+        node_id: Option<&str>,
+        x: Option<u32>,
+        y: Option<u32>,
+    ) -> Result<String, ToolError> {
+        let live = self.live_state()?;
+        let mut arguments = json!({
+            "pid": live.pid,
+            "window_id": live.window_id,
+            "direction": direction,
+            "amount": amount,
+            "by": by,
+            "delivery_mode": "background"
+        });
+        if let Some(node_id) = node_id {
+            let id = parse_node_id(node_id)?;
+            let node = live.nodes.get(&id).cloned().ok_or_else(stale_node)?;
+            arguments["element_index"] = json!(id);
+            if let Some(token) = &node.token {
+                arguments["element_token"] = json!(token);
+            }
+        } else if let (Some(x), Some(y)) = (x, y) {
+            arguments["x"] = json!(x);
+            arguments["y"] = json!(y);
+        }
+        let result = self.call("scroll", arguments)?;
+        tool_error(&result)?;
+        Ok(format!("Scrolled {direction} in {}.", live.app_name))
+    }
+
     fn click_element(
         &self,
         live: &LiveState,
@@ -955,7 +1136,49 @@ fn resolve_target(pid: Option<i32>, app_name: Option<&str>) -> Result<(i32, Stri
 }
 
 fn no_target() -> ToolError {
-    ToolError::Failed("no target app. Open another app, then press Option+Space.".into())
+    ToolError::Failed(
+        "no target app. Call open_app or pass app= on the tool, or open another app and press Option+Space.".into(),
+    )
+}
+
+fn format_app_list(result: &Value) -> String {
+    let apps = structured_content(result)
+        .get("apps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let name = json_string(entry, "name")?;
+            let bundle = json_string(entry, "bundle_id").unwrap_or_default();
+            if bundle.eq_ignore_ascii_case(CROSSPOND_BUNDLE_ID) {
+                return None;
+            }
+            let running = entry
+                .get("running")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let pid = json_i32(entry, "pid").unwrap_or(0);
+            let active = entry
+                .get("active")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let mut line = format!("{name} ({bundle})");
+            if running && pid > 0 {
+                line.push_str(&format!(" — running pid {pid}"));
+                if active {
+                    line.push_str(", frontmost");
+                }
+            } else {
+                line.push_str(" — not running");
+            }
+            Some(line)
+        })
+        .collect::<Vec<_>>();
+    if apps.is_empty() {
+        "(no apps)".into()
+    } else {
+        apps.join("\n")
+    }
 }
 
 fn not_trusted() -> ToolError {

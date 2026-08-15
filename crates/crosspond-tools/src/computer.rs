@@ -21,6 +21,29 @@ pub trait AccessibilityBackend: Send + Sync {
     }
 }
 
+/// Running and installed Mac apps. Implemented in `crosspond-macos`.
+pub trait AppBackend: Send + Sync {
+    fn list_apps(&self) -> Result<String, ToolError>;
+    fn open_app(&self, name: Option<&str>, bundle_id: Option<&str>) -> Result<String, ToolError>;
+    fn focus_app(&self, name: Option<&str>, bundle_id: Option<&str>) -> Result<String, ToolError>;
+    fn resolve_running_app(&self, app: &str) -> Result<(i32, String), ToolError>;
+}
+
+/// Keyboard and scroll input. Implemented in `crosspond-macos`.
+pub trait InputBackend: Send + Sync {
+    fn type_text(&self, text: &str, node_id: Option<&str>) -> Result<String, ToolError>;
+    fn hotkey(&self, keys: &[String]) -> Result<String, ToolError>;
+    fn scroll(
+        &self,
+        direction: &str,
+        amount: u32,
+        by: &str,
+        node_id: Option<&str>,
+        x: Option<u32>,
+        y: Option<u32>,
+    ) -> Result<String, ToolError>;
+}
+
 /// Window screenshot and image-coordinate click. Implemented in `crosspond-macos`.
 pub trait ScreenshotBackend: Send + Sync {
     fn capture(&self, pid: Option<i32>, app_name: Option<&str>) -> Result<Screenshot, ToolError>;
@@ -54,9 +77,11 @@ impl std::fmt::Debug for Screenshot {
 pub fn register_computer_tools(
     registry: &mut ToolRegistry,
     backend: Arc<dyn AccessibilityBackend>,
+    apps: Arc<dyn AppBackend>,
 ) {
     registry.register(Arc::new(GetAccessibilitySnapshot {
         backend: Arc::clone(&backend),
+        apps: Arc::clone(&apps),
     }));
     registry.register(Arc::new(UiPress {
         backend: Arc::clone(&backend),
@@ -64,26 +89,61 @@ pub fn register_computer_tools(
     registry.register(Arc::new(UiSetValue { backend }));
 }
 
-pub fn register_screenshot_tools(registry: &mut ToolRegistry, backend: Arc<dyn ScreenshotBackend>) {
+pub fn register_screenshot_tools(
+    registry: &mut ToolRegistry,
+    backend: Arc<dyn ScreenshotBackend>,
+    apps: Arc<dyn AppBackend>,
+) {
     registry.register(Arc::new(TakeScreenshot {
         backend: Arc::clone(&backend),
+        apps: Arc::clone(&apps),
     }));
     registry.register(Arc::new(UiClick { backend }));
 }
 
-pub fn computer_registry(backend: Arc<dyn AccessibilityBackend>) -> ToolRegistry {
+pub fn register_app_tools(registry: &mut ToolRegistry, apps: Arc<dyn AppBackend>) {
+    registry.register(Arc::new(ListApps {
+        backend: Arc::clone(&apps),
+    }));
+    registry.register(Arc::new(OpenApp {
+        backend: Arc::clone(&apps),
+    }));
+    registry.register(Arc::new(FocusApp { backend: apps }));
+}
+
+pub fn register_input_tools(registry: &mut ToolRegistry, input: Arc<dyn InputBackend>) {
+    registry.register(Arc::new(UiType {
+        backend: Arc::clone(&input),
+    }));
+    registry.register(Arc::new(UiHotkey {
+        backend: Arc::clone(&input),
+    }));
+    registry.register(Arc::new(UiScroll { backend: input }));
+}
+
+pub fn computer_registry(
+    backend: Arc<dyn AccessibilityBackend>,
+    apps: Arc<dyn AppBackend>,
+) -> ToolRegistry {
     let mut registry = crate::filesystem_registry();
-    register_computer_tools(&mut registry, backend);
+    register_computer_tools(&mut registry, backend, apps);
     registry
 }
 
 pub fn computer_and_screenshot_registry(
     ax: Arc<dyn AccessibilityBackend>,
     screenshot: Arc<dyn ScreenshotBackend>,
+    apps: Arc<dyn AppBackend>,
+    input: Arc<dyn InputBackend>,
+    calendar: Arc<dyn crate::calendar::CalendarBackend>,
 ) -> ToolRegistry {
-    let mut registry = computer_registry(ax);
-    register_screenshot_tools(&mut registry, screenshot);
+    let mut registry = computer_registry(Arc::clone(&ax), Arc::clone(&apps));
+    register_screenshot_tools(&mut registry, screenshot, Arc::clone(&apps));
+    register_app_tools(&mut registry, apps);
+    register_input_tools(&mut registry, input);
+    crate::calendar::register_calendar_tools(&mut registry, calendar);
     crate::web::register_web_tools(&mut registry);
+    crate::shell::register_shell_tools(&mut registry);
     registry
 }
 
@@ -92,6 +152,44 @@ fn ask_user_property() -> Value {
         "type": "boolean",
         "description": "When UI approval is AI, true asks the user first and false runs immediately. Ignored in Auto and Manual modes. Prefer true when unsure."
     })
+}
+
+fn app_property() -> Value {
+    json!({
+        "type": "string",
+        "description": "Optional running app name or bundle id to target instead of the ambient frontmost app"
+    })
+}
+
+fn optional_app(input: &Value) -> Option<String> {
+    input
+        .get("app")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn optional_string(input: &Value, key: &str) -> Option<String> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn resolve_target(
+    context: &ToolContext,
+    input: &Value,
+    apps: &dyn AppBackend,
+) -> Result<(Option<i32>, Option<String>), ToolError> {
+    if let Some(app) = optional_app(input) {
+        let (pid, name) = apps.resolve_running_app(&app)?;
+        Ok((Some(pid), Some(name)))
+    } else {
+        Ok((context.frontmost_pid, context.frontmost_name.clone()))
+    }
 }
 
 fn parse_node_id(input: &Value) -> Result<String, ToolError> {
@@ -109,7 +207,6 @@ fn parse_u32(input: &Value, key: &str) -> Result<u32, ToolError> {
                 return u32::try_from(n)
                     .map_err(|_| ToolError::Failed(format!("{key} is out of range")));
             }
-            // Models often emit `70.0`; serde stores that as f64 and as_u64() fails.
             if let Some(n) = value.as_f64()
                 && n.is_finite()
                 && n >= 0.0
@@ -136,6 +233,45 @@ fn parse_u32(input: &Value, key: &str) -> Result<u32, ToolError> {
     }
 }
 
+fn optional_u32(input: &Value, key: &str) -> Option<u32> {
+    input.get(key).and_then(|value| {
+        if let Some(n) = value.as_u64() {
+            u32::try_from(n).ok()
+        } else if let Some(n) = value.as_f64()
+            && n.is_finite()
+            && n >= 0.0
+            && n <= f64::from(u32::MAX)
+        {
+            Some(n.round() as u32)
+        } else if let Value::String(s) = value {
+            s.parse::<u32>().ok().or_else(|| {
+                s.parse::<f64>()
+                    .ok()
+                    .filter(|n| n.is_finite() && *n >= 0.0 && *n <= f64::from(u32::MAX))
+                    .map(|n| n.round() as u32)
+            })
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_app_identifiers(input: &Value) -> Result<(Option<String>, Option<String>), ToolError> {
+    let name = optional_string(input, "name");
+    let bundle_id = optional_string(input, "bundle_id");
+    if name.is_none() && bundle_id.is_none() {
+        return Err(ToolError::Failed("name or bundle_id is required".into()));
+    }
+    Ok((name, bundle_id))
+}
+
+fn app_display_name(name: Option<&str>, bundle_id: Option<&str>) -> String {
+    name.filter(|s| !s.is_empty())
+        .or(bundle_id.filter(|s| !s.is_empty()))
+        .unwrap_or("app")
+        .to_string()
+}
+
 fn app_clause(context: &ToolContext) -> String {
     match context.frontmost_name.as_deref() {
         Some(name) if !name.is_empty() => format!("in {name}"),
@@ -143,26 +279,78 @@ fn app_clause(context: &ToolContext) -> String {
     }
 }
 
+fn parse_scroll_direction(input: &Value) -> Result<String, ToolError> {
+    let direction = input
+        .get("direction")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
+    match direction {
+        "up" | "down" | "left" | "right" => Ok(direction.to_string()),
+        "" => Err(ToolError::Failed("direction is required".into())),
+        _ => Err(ToolError::Failed(
+            "direction must be up, down, left, or right".into(),
+        )),
+    }
+}
+
+fn parse_scroll_by(input: &Value) -> String {
+    match input
+        .get("by")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some("page") => "page".into(),
+        _ => "line".into(),
+    }
+}
+
+fn parse_hotkey_keys(input: &Value) -> Result<Vec<String>, ToolError> {
+    let keys = input
+        .get("keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ToolError::Failed("keys is required".into()))?;
+    if keys.len() < 2 {
+        return Err(ToolError::Failed(
+            "keys must contain at least two entries".into(),
+        ));
+    }
+    let mut parsed = Vec::with_capacity(keys.len());
+    for key in keys {
+        let value = key
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::Failed("each key must be a non-empty string".into()))?;
+        parsed.push(value.to_string());
+    }
+    Ok(parsed)
+}
+
 struct GetAccessibilitySnapshot {
     backend: Arc<dyn AccessibilityBackend>,
+    apps: Arc<dyn AppBackend>,
 }
 
 impl Tool for GetAccessibilitySnapshot {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "get_accessibility_snapshot".into(),
-            description: "Read a compact Accessibility tree of the app the user was in when they opened Crosspond. Prefer this before screenshots when the target has a visible name (buttons, channels, tabs). Node ids are only valid until the next snapshot or UI action.".into(),
+            description: "Read a compact Accessibility tree of the app the user was in when they opened Crosspond, or an optional running app. Prefer this before screenshots when the target has a visible name (buttons, channels, tabs). Node ids are only valid until the next snapshot or UI action.".into(),
             parameters: json!({
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "app": app_property()
+                }
             }),
         }
     }
 
-    fn execute(&self, context: &ToolContext, _input: Value) -> Result<ToolResult, ToolError> {
-        let text = self
-            .backend
-            .snapshot(context.frontmost_pid, context.frontmost_name.as_deref())?;
+    fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let (pid, name) = resolve_target(context, &input, self.apps.as_ref())?;
+        let text = self.backend.snapshot(pid, name.as_deref())?;
         Ok(ToolResult {
             text: truncate_output(text),
             created_file: None,
@@ -276,24 +464,26 @@ impl Tool for UiSetValue {
 
 struct TakeScreenshot {
     backend: Arc<dyn ScreenshotBackend>,
+    apps: Arc<dyn AppBackend>,
 }
 
 impl Tool for TakeScreenshot {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "take_screenshot".into(),
-            description: "Capture a screenshot of the window of the app the user was in when they opened Crosspond. Use only when Accessibility has no useful label for the target (canvas, unlabeled icons, some web pages). ui_click uses exact pixel coordinates in this image (origin top-left).".into(),
+            description: "Capture a screenshot of the window of the app the user was in when they opened Crosspond, or an optional running app. Use only when Accessibility has no useful label for the target (canvas, unlabeled icons, some web pages). ui_click uses exact pixel coordinates in this image (origin top-left).".into(),
             parameters: json!({
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "app": app_property()
+                }
             }),
         }
     }
 
-    fn execute(&self, context: &ToolContext, _input: Value) -> Result<ToolResult, ToolError> {
-        let shot = self
-            .backend
-            .capture(context.frontmost_pid, context.frontmost_name.as_deref())?;
+    fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let (pid, name) = resolve_target(context, &input, self.apps.as_ref())?;
+        let shot = self.backend.capture(pid, name.as_deref())?;
         let text = format!(
             "Screenshot of {} ({}×{}). Call ui_click with the target's integer pixel x,y in this exact image: top-left=(0,0), bottom-right=({},{}). Do not normalize each axis to 1000 and do not use macOS screen coordinates.",
             shot.app_name,
@@ -393,13 +583,377 @@ impl Tool for UiClick {
     }
 }
 
+struct ListApps {
+    backend: Arc<dyn AppBackend>,
+}
+
+impl Tool for ListApps {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "list_apps".into(),
+            description:
+                "List running and installed Mac apps with name, bundle id, and running pid.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }
+    }
+
+    fn execute(&self, _context: &ToolContext, _input: Value) -> Result<ToolResult, ToolError> {
+        let text = self.backend.list_apps()?;
+        Ok(ToolResult {
+            text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
+struct OpenApp {
+    backend: Arc<dyn AppBackend>,
+}
+
+impl Tool for OpenApp {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "open_app".into(),
+            description: "Open a Mac app by display name or bundle id. May require user approval."
+                .into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "App display name"
+                    },
+                    "bundle_id": {
+                        "type": "string",
+                        "description": "App bundle identifier"
+                    },
+                    "ask_user": ask_user_property()
+                }
+            }),
+        }
+    }
+
+    fn approval_prompt(&self, _context: &ToolContext, input: &Value) -> (String, String) {
+        let (name, bundle_id) = parse_app_identifiers(input).unwrap_or((None, None));
+        let display = app_display_name(name.as_deref(), bundle_id.as_deref());
+        (format!("Open {display}"), display)
+    }
+
+    fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let (name, bundle_id) = parse_app_identifiers(&input)?;
+        let text = self
+            .backend
+            .open_app(name.as_deref(), bundle_id.as_deref())?;
+        Ok(ToolResult {
+            text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
+struct FocusApp {
+    backend: Arc<dyn AppBackend>,
+}
+
+impl Tool for FocusApp {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "focus_app".into(),
+            description: "Bring a running Mac app to the front by display name or bundle id. May require user approval.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "App display name"
+                    },
+                    "bundle_id": {
+                        "type": "string",
+                        "description": "App bundle identifier"
+                    },
+                    "ask_user": ask_user_property()
+                }
+            }),
+        }
+    }
+
+    fn approval_prompt(&self, _context: &ToolContext, input: &Value) -> (String, String) {
+        let (name, bundle_id) = parse_app_identifiers(input).unwrap_or((None, None));
+        let display = app_display_name(name.as_deref(), bundle_id.as_deref());
+        (format!("Focus {display}"), display)
+    }
+
+    fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let (name, bundle_id) = parse_app_identifiers(&input)?;
+        let text = self
+            .backend
+            .focus_app(name.as_deref(), bundle_id.as_deref())?;
+        Ok(ToolResult {
+            text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
+struct UiType {
+    backend: Arc<dyn InputBackend>,
+}
+
+impl Tool for UiType {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "ui_type".into(),
+            description: "Type text into the focused field or a node from the latest accessibility snapshot. May require user approval.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Text to type"
+                    },
+                    "node_id": {
+                        "description": "Optional node id from the latest get_accessibility_snapshot"
+                    },
+                    "ask_user": ask_user_property()
+                },
+                "required": ["text"]
+            }),
+        }
+    }
+
+    fn approval_prompt(&self, context: &ToolContext, input: &Value) -> (String, String) {
+        let text = input
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let title = format!("Type \"{}\"", truncate_ax_text(text));
+        (title, app_clause(context))
+    }
+
+    fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let text = input
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::Failed("text is required".into()))?;
+        let node_id = match input.get("node_id") {
+            Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+            Some(Value::Number(value)) => Some(value.to_string()),
+            _ => None,
+        };
+        let text = self.backend.type_text(text, node_id.as_deref())?;
+        Ok(ToolResult {
+            text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
+struct UiHotkey {
+    backend: Arc<dyn InputBackend>,
+}
+
+impl Tool for UiHotkey {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "ui_hotkey".into(),
+            description: "Send a keyboard shortcut such as [\"cmd\", \"c\"]. Prefer ask_user true for send, purchase, or delete shortcuts. May require user approval.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "keys": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 2,
+                        "description": "Keys to press together, e.g. [\"cmd\", \"c\"]"
+                    },
+                    "ask_user": ask_user_property()
+                },
+                "required": ["keys"]
+            }),
+        }
+    }
+
+    fn approval_prompt(&self, context: &ToolContext, input: &Value) -> (String, String) {
+        let keys = parse_hotkey_keys(input).unwrap_or_default();
+        let joined = keys.join("+");
+        (format!("Press {joined}"), app_clause(context))
+    }
+
+    fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let keys = parse_hotkey_keys(&input)?;
+        let text = self.backend.hotkey(&keys)?;
+        Ok(ToolResult {
+            text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
+struct UiScroll {
+    backend: Arc<dyn InputBackend>,
+}
+
+impl Tool for UiScroll {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "ui_scroll".into(),
+            description: "Scroll up, down, left, or right in the focused view or at optional coordinates from the latest snapshot. May require user approval.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["up", "down", "left", "right"],
+                        "description": "Scroll direction"
+                    },
+                    "amount": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Scroll amount (default 3)"
+                    },
+                    "by": {
+                        "type": "string",
+                        "enum": ["line", "page"],
+                        "description": "Scroll unit (default line)"
+                    },
+                    "node_id": {
+                        "description": "Optional node id from the latest get_accessibility_snapshot"
+                    },
+                    "x": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "Optional horizontal pixel for scroll target"
+                    },
+                    "y": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "Optional vertical pixel for scroll target"
+                    },
+                    "ask_user": ask_user_property()
+                },
+                "required": ["direction"]
+            }),
+        }
+    }
+
+    fn approval_prompt(&self, context: &ToolContext, input: &Value) -> (String, String) {
+        let direction = input
+            .get("direction")
+            .and_then(Value::as_str)
+            .unwrap_or("scroll");
+        (format!("Scroll {direction}"), app_clause(context))
+    }
+
+    fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let direction = parse_scroll_direction(&input)?;
+        let amount = optional_u32(&input, "amount").unwrap_or(3);
+        let by = parse_scroll_by(&input);
+        let node_id = match input.get("node_id") {
+            Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+            Some(Value::Number(value)) => Some(value.to_string()),
+            _ => None,
+        };
+        let x = optional_u32(&input, "x");
+        let y = optional_u32(&input, "y");
+        let text = self
+            .backend
+            .scroll(&direction, amount, &by, node_id.as_deref(), x, y)?;
+        Ok(ToolResult {
+            text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calendar::MockCalendar;
     use crate::workspace::Workspace;
     use serde_json::json;
     use std::sync::Mutex;
     use uuid::Uuid;
+
+    struct MockApps;
+
+    impl AppBackend for MockApps {
+        fn list_apps(&self) -> Result<String, ToolError> {
+            Ok("Safari (com.apple.Safari) — running pid 1".into())
+        }
+
+        fn open_app(
+            &self,
+            name: Option<&str>,
+            bundle_id: Option<&str>,
+        ) -> Result<String, ToolError> {
+            Ok(format!("Opened {}", name.or(bundle_id).unwrap_or("app")))
+        }
+
+        fn focus_app(
+            &self,
+            name: Option<&str>,
+            bundle_id: Option<&str>,
+        ) -> Result<String, ToolError> {
+            Ok(format!("Focused {}", name.or(bundle_id).unwrap_or("app")))
+        }
+
+        fn resolve_running_app(&self, app: &str) -> Result<(i32, String), ToolError> {
+            if app.eq_ignore_ascii_case("Safari") || app == "com.apple.Safari" {
+                Ok((42, "Safari".into()))
+            } else {
+                Err(ToolError::Failed(format!(
+                    "no running app matching \"{app}\""
+                )))
+            }
+        }
+    }
+
+    struct MockInput {
+        typed: Mutex<Vec<(String, Option<String>)>>,
+    }
+
+    impl MockInput {
+        fn new() -> Self {
+            Self {
+                typed: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl InputBackend for MockInput {
+        fn type_text(&self, text: &str, node_id: Option<&str>) -> Result<String, ToolError> {
+            self.typed
+                .lock()
+                .expect("lock")
+                .push((text.to_string(), node_id.map(str::to_string)));
+            Ok(format!("Typed {text}"))
+        }
+
+        fn hotkey(&self, keys: &[String]) -> Result<String, ToolError> {
+            Ok(format!("Pressed {}", keys.join("+")))
+        }
+
+        fn scroll(
+            &self,
+            direction: &str,
+            amount: u32,
+            by: &str,
+            _node_id: Option<&str>,
+            _x: Option<u32>,
+            _y: Option<u32>,
+        ) -> Result<String, ToolError> {
+            Ok(format!("Scrolled {direction} {amount} {by}"))
+        }
+    }
 
     struct MockAx {
         snapshot: String,
@@ -512,6 +1066,10 @@ mod tests {
         }
     }
 
+    fn mock_apps() -> Arc<dyn AppBackend> {
+        Arc::new(MockApps)
+    }
+
     fn temp_workspace() -> Workspace {
         let root = std::env::temp_dir().join(format!("crosspond-ax-{}", Uuid::new_v4()));
         Workspace::create(root).unwrap()
@@ -524,11 +1082,24 @@ mod tests {
         context
     }
 
+    fn full_registry(
+        ax: Arc<dyn AccessibilityBackend>,
+        shot: Arc<dyn ScreenshotBackend>,
+    ) -> ToolRegistry {
+        computer_and_screenshot_registry(
+            ax,
+            shot,
+            mock_apps(),
+            Arc::new(MockInput::new()),
+            Arc::new(MockCalendar),
+        )
+    }
+
     #[test]
     fn snapshot_and_press_with_numeric_id() {
         let workspace = temp_workspace();
         let backend = Arc::new(MockAx::checkout());
-        let registry = computer_registry(backend);
+        let registry = computer_registry(backend, mock_apps());
         let context = ctx(&workspace);
         let snap = registry
             .execute("get_accessibility_snapshot", &context, json!({}))
@@ -544,7 +1115,7 @@ mod tests {
     #[test]
     fn stale_node_id_errors() {
         let workspace = temp_workspace();
-        let err = computer_registry(Arc::new(MockAx::checkout()))
+        let err = computer_registry(Arc::new(MockAx::checkout()), mock_apps())
             .execute("ui_press", &ctx(&workspace), json!({"node_id": "99"}))
             .unwrap_err();
         assert!(err.to_string().contains("stale"));
@@ -554,7 +1125,7 @@ mod tests {
     #[test]
     fn press_approval_copy_uses_node_label() {
         let workspace = temp_workspace();
-        let registry = computer_registry(Arc::new(MockAx::checkout()));
+        let registry = computer_registry(Arc::new(MockAx::checkout()), mock_apps());
         let (title, description) =
             registry.approval_prompt("ui_press", &ctx(&workspace), &json!({"node_id": "4"}));
         assert_eq!(title, "Press \"Continue\"");
@@ -565,7 +1136,7 @@ mod tests {
     #[test]
     fn set_value_approval_hides_secure_text() {
         let workspace = temp_workspace();
-        let registry = computer_registry(Arc::new(MockAx::checkout()));
+        let registry = computer_registry(Arc::new(MockAx::checkout()), mock_apps());
         let (title, _) = registry.approval_prompt(
             "ui_set_value",
             &ctx(&workspace),
@@ -592,7 +1163,7 @@ mod tests {
             clicks: Arc::clone(&clicks),
             has_shot: Mutex::new(false),
         });
-        let registry = computer_and_screenshot_registry(
+        let registry = full_registry(
             Arc::new(MockAx::checkout()),
             Arc::clone(&shot) as Arc<dyn ScreenshotBackend>,
         );
@@ -619,12 +1190,9 @@ mod tests {
     #[test]
     fn click_without_screenshot_errors() {
         let workspace = temp_workspace();
-        let err = computer_and_screenshot_registry(
-            Arc::new(MockAx::checkout()),
-            Arc::new(MockShot::new()),
-        )
-        .execute("ui_click", &ctx(&workspace), json!({"x": 1, "y": 2}))
-        .unwrap_err();
+        let err = full_registry(Arc::new(MockAx::checkout()), Arc::new(MockShot::new()))
+            .execute("ui_click", &ctx(&workspace), json!({"x": 1, "y": 2}))
+            .unwrap_err();
         assert!(err.to_string().contains("take_screenshot"));
         let _ = std::fs::remove_dir_all(&workspace.root);
     }
@@ -632,10 +1200,7 @@ mod tests {
     #[test]
     fn click_approval_copy_includes_coordinates() {
         let workspace = temp_workspace();
-        let registry = computer_and_screenshot_registry(
-            Arc::new(MockAx::checkout()),
-            Arc::new(MockShot::new()),
-        );
+        let registry = full_registry(Arc::new(MockAx::checkout()), Arc::new(MockShot::new()));
         let (title, description) =
             registry.approval_prompt("ui_click", &ctx(&workspace), &json!({"x": 40, "y": 80}));
         assert_eq!(title, "Click at (40, 80)");
@@ -654,7 +1219,7 @@ mod tests {
             clicks: Arc::new(Mutex::new(Vec::new())),
             has_shot: Mutex::new(true),
         });
-        let err = computer_and_screenshot_registry(
+        let err = full_registry(
             Arc::new(MockAx::checkout()),
             shot as Arc<dyn ScreenshotBackend>,
         )
@@ -673,13 +1238,47 @@ mod tests {
             clicks: Arc::clone(&clicks),
             has_shot: Mutex::new(true),
         });
-        computer_and_screenshot_registry(
+        full_registry(
             Arc::new(MockAx::checkout()),
             shot as Arc<dyn ScreenshotBackend>,
         )
         .execute("ui_click", &ctx(&workspace), json!({"x": 12.4, "y": 18.6}))
         .unwrap();
         assert_eq!(*clicks.lock().unwrap(), vec![(12, 19)]);
+        let _ = std::fs::remove_dir_all(&workspace.root);
+    }
+
+    #[test]
+    fn list_apps_and_open_app_with_mocks() {
+        let workspace = temp_workspace();
+        let registry = full_registry(Arc::new(MockAx::checkout()), Arc::new(MockShot::new()));
+        let listed = registry
+            .execute("list_apps", &ctx(&workspace), json!({}))
+            .unwrap();
+        assert!(listed.text.contains("Safari"));
+        let opened = registry
+            .execute("open_app", &ctx(&workspace), json!({"name": "Safari"}))
+            .unwrap();
+        assert!(opened.text.contains("Opened Safari"));
+        let _ = std::fs::remove_dir_all(&workspace.root);
+    }
+
+    #[test]
+    fn ui_type_with_mock() {
+        let workspace = temp_workspace();
+        let input = Arc::new(MockInput::new());
+        let registry = computer_and_screenshot_registry(
+            Arc::new(MockAx::checkout()),
+            Arc::new(MockShot::new()),
+            mock_apps(),
+            Arc::clone(&input) as Arc<dyn InputBackend>,
+            Arc::new(MockCalendar),
+        );
+        let result = registry
+            .execute("ui_type", &ctx(&workspace), json!({"text": "hello"}))
+            .unwrap();
+        assert!(result.text.contains("Typed hello"));
+        assert_eq!(input.typed.lock().unwrap()[0], ("hello".into(), None));
         let _ = std::fs::remove_dir_all(&workspace.root);
     }
 }

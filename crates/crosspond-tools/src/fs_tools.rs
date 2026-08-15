@@ -51,7 +51,7 @@ impl Tool for ReadFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "read_file".into(),
-            description: "Read a UTF-8 text file from the workspace.".into(),
+            description: "Read a UTF-8 text file from the workspace. Absolute Mac paths outside the workspace require user Allow.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -69,7 +69,7 @@ impl Tool for ReadFile {
         let requested = required_string(&input, "path")?;
         let resolved = resolve_path(&context.workspace.root, &requested)
             .map_err(|err| ToolError::Failed(err.to_string()))?;
-        deny_external(resolved.scope, false)?;
+        deny_external(resolved.scope, context.allow_external)?;
         let metadata = fs::metadata(&resolved.path).map_err(map_io)?;
         if metadata.is_dir() {
             return Err(ToolError::Failed("path is a directory".into()));
@@ -88,6 +88,13 @@ impl Tool for ReadFile {
             image: None,
         })
     }
+    fn approval_prompt(&self, _context: &ToolContext, input: &Value) -> (String, String) {
+        let path = input
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("a file");
+        ("Read a file outside the workspace".into(), path.to_string())
+    }
 }
 
 struct ListDirectory;
@@ -96,7 +103,7 @@ impl Tool for ListDirectory {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "list_directory".into(),
-            description: "List files in a workspace directory. Not recursive.".into(),
+            description: "List files in a workspace directory. Not recursive. Absolute Mac paths outside the workspace require user Allow.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -113,7 +120,7 @@ impl Tool for ListDirectory {
         let requested = optional_string(&input, "path").unwrap_or_else(|| ".".into());
         let resolved = resolve_path(&context.workspace.root, &requested)
             .map_err(|err| ToolError::Failed(err.to_string()))?;
-        deny_external(resolved.scope, false)?;
+        deny_external(resolved.scope, context.allow_external)?;
         let metadata = fs::metadata(&resolved.path).map_err(map_io)?;
         if !metadata.is_dir() {
             return Err(ToolError::Failed("path is not a directory".into()));
@@ -141,6 +148,17 @@ impl Tool for ListDirectory {
             created_file: None,
             image: None,
         })
+    }
+
+    fn approval_prompt(&self, _context: &ToolContext, input: &Value) -> (String, String) {
+        let path = input
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("a directory");
+        (
+            "List a directory outside the workspace".into(),
+            path.to_string(),
+        )
     }
 }
 
@@ -407,6 +425,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "ok");
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_dir_all(&workspace.root);
+    }
+
+    #[test]
+    fn external_read_file_requires_allow_external() {
+        let workspace = temp_workspace();
+        let target =
+            std::env::temp_dir().join(format!("crosspond-read-ext-{}.txt", Uuid::new_v4()));
+        fs::write(&target, "external").unwrap();
+        let registry = filesystem_registry();
+        let context = ctx(&workspace);
+        let err = registry
+            .execute(
+                "read_file",
+                &context,
+                json!({"path": target.to_string_lossy()}),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("outside"));
+        let mut approved = context;
+        approved.allow_external = true;
+        let result = registry
+            .execute(
+                "read_file",
+                &approved,
+                json!({"path": target.to_string_lossy()}),
+            )
+            .unwrap();
+        assert_eq!(result.text, "external");
         let _ = fs::remove_file(&target);
         let _ = fs::remove_dir_all(&workspace.root);
     }

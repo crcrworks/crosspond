@@ -7,12 +7,12 @@
 | `crosspond-app` | GPUI UI, process entry | core, macos, tools, GPUI |
 | `crosspond-core` | runtime commands/events, agent loop, policy, receipts, context types | model, tools, tokio, uuid |
 | `crosspond-model` | LLM provider abstraction | reqwest, serde |
-| `crosspond-tools` | filesystem tools, computer-tool defs, web search/fetch, `AccessibilityBackend`, `ScreenshotBackend` | serde, reqwest; not macos |
-| `crosspond-macos` | hotkeys, Keychain, ambient context, cua-driver computer use | core, tools, platform crates, not GPUI |
+| `crosspond-tools` | filesystem, computer, web, shell/URL, calendar tool defs; backends as traits | serde, reqwest; not macos |
+| `crosspond-macos` | hotkeys, Keychain, ambient context, cua-driver, EventKit | core, tools, platform crates, not GPUI |
 
-`crosspond-model` must not depend on `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend` and `ScreenshotBackend` from tools.
+`crosspond-model` must not depend on `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` from tools.
 
-## Phase 5 data flow
+## Agent data flow
 
 ```
 GPUI thread                          Tokio runtime thread
@@ -27,13 +27,17 @@ Option+Space
         │                      inject ambient block into system prompt
         │                      OpenAI-compatible stream (text + images)
         │                      fs tools (workspace auto; external after Allow)
-        │                      get_accessibility_snapshot (auto)
-        │                      take_screenshot (auto) → tool text + image
+        │                      list_apps / open_app / focus_app
+        │                      get_accessibility_snapshot / take_screenshot
+        │                        (optional app= retarget; else ambient pid)
         │                      web_search / fetch_url (auto; Exa key for search)
+        │                      calendar_events (auto; EventKit / Calendar TCC)
+        │                      ui_type / ui_hotkey / ui_scroll
         │                      ui_press / ui_set_value / ui_click
         │                        Manual → ApprovalRequired
         │                        Agent + ask_user → ApprovalRequired
         │                        Auto (and Agent + ask_user false) skip the card
+        │                      run_command / open_url (non-http) → Allow
  Allow / Cancel  ──mpsc──►     Approve / Reject that action
  Escape / Stop   ──mpsc──►     Cancel the whole task
  AgentEvent      ◄─mpsc──   ContextCollected / AssistantDelta /
@@ -45,15 +49,17 @@ Option+Space
 
 Commands and events are defined in `crosspond-core`. The UI never runs model HTTP or tools on the GPUI thread. The runtime never imports GPUI. Context collection runs on the main thread and must happen before `App::activate`, otherwise Crosspond is the frontmost app.
 
-Computer tools target the **ambient** frontmost pid from when the launcher opened, not whichever app is frontmost after the hotkey. Snapshot, press, set-value, screenshot, and click all go through a host-spawned **cua-driver** MCP child (`mcp --direct` when the installed binary supports it, otherwise `mcp --no-daemon-relaunch`). Crosspond keeps its own tool names and Allow cards; cua-driver’s full MCP catalog is not exposed to the model. Window chrome (close / minimize / zoom) is omitted from the snapshot; cua-driver delivers background actions so the user’s cursor is not moved.
+Computer tools default to the **ambient** frontmost pid from when the launcher opened. The model may pass `app` (display name or bundle id) on snapshot / screenshot / UI tools, or call `open_app` / `focus_app`, to drive another process. Snapshot, press, set-value, type, hotkey, scroll, screenshot, and click go through a host-spawned **cua-driver** MCP child (`mcp --direct` when the installed binary supports it, otherwise `mcp --no-daemon-relaunch`). Crosspond keeps its own tool names and Allow cards; cua-driver’s full MCP catalog is not exposed to the model. Window chrome (close / minimize / zoom) is omitted from the snapshot; cua-driver delivers background actions so the user’s cursor is not moved.
 
 `take_screenshot` asks cua-driver for that pid’s largest on-screen window image. `ui_click` sends exact pixels from that image (`delivery_mode: background`); cua-driver owns Retina, window origin, and flipped-coordinate mapping. A successful click invalidates its input image and returns a fresh post-click screenshot for model verification. Only the newest screenshot image is kept in the model request; older images are dropped.
 
 `ui_press` / `ui_set_value` address cua-driver `element_index` values (and `element_token` when present) from the latest snapshot. Prefer `ui_press` over `ui_click` whenever the control has a label in the tree.
 
+`calendar_events` reads EventKit (not Calendar.app UI). Prefer it for schedule questions.
+
 Node ids are integers for the latest Accessibility snapshot generation. A new snapshot or a successful UI action invalidates old ids.
 
-Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode.
+Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External reads/writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode.
 
 A session reuses one workspace under `~/.crosspond/workspaces/<first-task-id>/`. Finder selections are copied into that workspace’s `input/` on the first turn. Each submit still writes `~/.crosspond/tasks/<task-id>/`. Closing the launcher sends `ResetSession`, which drops follow-up history, ambient context, and the session workspace.
 

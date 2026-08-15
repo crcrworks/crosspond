@@ -16,12 +16,30 @@ global-hotkey.workspace = true
 security-framework.workspace = true
 security-framework-sys.workspace = true
 objc2.workspace = true
-objc2-foundation.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSDate",
+    "NSError",
+    "NSFormatter",
+    "NSISO8601DateFormatter",
+    "NSPredicate",
+    "NSString",
+] }
 objc2-app-kit = { workspace = true, features = [
     "NSWorkspace",
     "NSRunningApplication",
     "libc",
 ] }
+objc2-event-kit = { workspace = true, features = [
+    "EKCalendar",
+    "EKCalendarItem",
+    "EKEvent",
+    "EKEventStore",
+    "EKObject",
+    "EKTypes",
+    "block2",
+] }
+block2.workspace = true
 core-foundation.workspace = true
 libc.workspace = true
 base64.workspace = true
