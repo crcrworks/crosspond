@@ -83,14 +83,9 @@ impl ContextCapsule {
             && self.attachments.is_empty()
     }
 
-    /// Short UI lines. Never includes selected text contents.
+    /// Short UI lines. Never includes selected text contents or the frontmost app.
     pub fn badge_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
-        if let Some(app) = &self.frontmost_app
-            && !app.name.is_empty()
-        {
-            lines.push(app.name.clone());
-        }
         if !self.selected_files.is_empty() {
             let n = self.selected_files.len();
             lines.push(if n == 1 {
@@ -269,11 +264,11 @@ mod tests {
         assert_eq!(
             badges,
             [
-                "Safari".to_string(),
-                "1 selected file".into(),
+                "1 selected file".to_string(),
                 "Selected text: 24 chars".into()
             ]
         );
+        assert!(!badges.iter().any(|line| line.contains("Safari")));
         assert!(!badges.iter().any(|line| line.contains("secret")));
         let log = capsule.log_value().to_string();
         assert!(!log.contains("secret"));
