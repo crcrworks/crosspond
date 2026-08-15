@@ -154,6 +154,33 @@ impl Transcript {
             _ => {}
         }
     }
+
+    #[cfg(test)]
+    pub fn live_activity(&self) -> LiveActivity {
+        if let Some(name) = self.running_tool() {
+            return LiveActivity::Tool(name.to_string());
+        }
+        for block in self.blocks.iter().rev() {
+            match block {
+                TranscriptBlock::Tools { .. } => return LiveActivity::PreparingNextMoves,
+                TranscriptBlock::Thinking { .. } => return LiveActivity::Thinking,
+                TranscriptBlock::Text { text } if text.trim().is_empty() => continue,
+                TranscriptBlock::Text { .. } => return LiveActivity::Writing,
+            }
+        }
+        LiveActivity::Thinking
+    }
+
+    pub fn running_tool(&self) -> Option<&str> {
+        for block in self.blocks.iter().rev() {
+            if let TranscriptBlock::Tools { items, .. } = block
+                && let Some(current) = items.iter().rev().find(|item| item.running)
+            {
+                return Some(current.name.as_str());
+            }
+        }
+        None
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -165,6 +192,26 @@ enum GroupKind {
 impl Default for Transcript {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// What the agent is doing right now, for the Cursor-style footer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LiveActivity {
+    Thinking,
+    PreparingNextMoves,
+    Writing,
+    Tool(String),
+}
+
+impl LiveActivity {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Thinking => "Thinking".into(),
+            Self::PreparingNextMoves => "Preparing next moves".into(),
+            Self::Writing => "Writing".into(),
+            Self::Tool(name) => tool_activity_label(name).trim_end_matches('…').to_string(),
+        }
     }
 }
 
@@ -370,6 +417,31 @@ mod tests {
         );
         assert_eq!(tool_icon_path("ui_press"), "icons/pointer.svg");
         assert_eq!(tool_icon_path("unknown_tool"), "icons/wrench.svg");
+    }
+
+    #[test]
+    fn live_activity_follows_the_agent_phase() {
+        let mut transcript = Transcript::new();
+        assert_eq!(transcript.live_activity(), LiveActivity::Thinking);
+        assert_eq!(transcript.live_activity().label(), "Thinking");
+
+        transcript.push_reasoning("plan");
+        assert_eq!(transcript.live_activity(), LiveActivity::Thinking);
+
+        transcript.start_tool("get_accessibility_snapshot");
+        assert_eq!(
+            transcript.live_activity(),
+            LiveActivity::Tool("get_accessibility_snapshot".into())
+        );
+        assert_eq!(transcript.live_activity().label(), "Looking at the screen");
+
+        transcript.finish_tool("get_accessibility_snapshot");
+        assert_eq!(transcript.live_activity(), LiveActivity::PreparingNextMoves);
+        assert_eq!(transcript.live_activity().label(), "Preparing next moves");
+
+        transcript.push_text("Done.");
+        assert_eq!(transcript.live_activity(), LiveActivity::Writing);
+        assert_eq!(transcript.live_activity().label(), "Writing");
     }
 
     #[test]

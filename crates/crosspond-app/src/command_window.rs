@@ -12,8 +12,8 @@ use gpui::{
 use crate::activity_label::activity_label;
 use crate::text_input::TextInput;
 use crate::transcript::{
-    Transcript, TranscriptBlock, tool_activity_label, tool_done_label, tool_icon_path,
-    tools_header_icon,
+    LiveActivity, Transcript, TranscriptBlock, tool_activity_label, tool_done_label,
+    tool_icon_path, tools_header_icon,
 };
 use crate::ui;
 
@@ -40,6 +40,7 @@ pub struct CommandWindow {
     pending_approval: Option<PendingApproval>,
     commands: CommandSender,
     tool_starts: Vec<(String, Instant)>,
+    activity: LiveActivity,
 }
 
 struct PendingApproval {
@@ -62,6 +63,7 @@ impl CommandWindow {
             pending_approval: None,
             commands,
             tool_starts: Vec::new(),
+            activity: LiveActivity::Thinking,
         }
     }
 
@@ -77,6 +79,7 @@ impl CommandWindow {
                 }
                 self.prompt = prompt;
                 self.state = CommandWindowState::PreparingContext;
+                self.activity = LiveActivity::Thinking;
             }
             AgentEvent::AssistantDelta { task_id, text } => {
                 if self.current_task != Some(task_id) {
@@ -84,6 +87,7 @@ impl CommandWindow {
                 }
                 self.transcript.push_text(&text);
                 self.state = CommandWindowState::Running;
+                self.activity = LiveActivity::Writing;
             }
             AgentEvent::ReasoningDelta { task_id, text } => {
                 if self.current_task != Some(task_id) {
@@ -91,6 +95,7 @@ impl CommandWindow {
                 }
                 self.transcript.push_reasoning(&text);
                 self.state = CommandWindowState::Running;
+                self.activity = LiveActivity::Thinking;
             }
             AgentEvent::TaskCompleted { task_id, summary } => {
                 if self.current_task != Some(task_id) {
@@ -128,6 +133,7 @@ impl CommandWindow {
                 }
                 self.tool_starts.push((tool.clone(), Instant::now()));
                 self.transcript.start_tool(&tool);
+                self.activity = LiveActivity::Tool(tool);
             }
             AgentEvent::ArtifactCreated {
                 task_id,
@@ -166,6 +172,7 @@ impl CommandWindow {
                     return;
                 }
                 self.state = CommandWindowState::Running;
+                self.activity = LiveActivity::Thinking;
             }
         }
         self.sync_window_size(window);
@@ -183,6 +190,7 @@ impl CommandWindow {
         self.current_task = None;
         self.pending_approval = None;
         self.tool_starts.clear();
+        self.activity = LiveActivity::Thinking;
         self.input.update(cx, |input, cx| {
             input.reset();
             input.set_placeholder(ASK_PLACEHOLDER);
@@ -241,6 +249,7 @@ impl CommandWindow {
         self.transcript.clear();
         self.artifacts.clear();
         self.pending_approval = None;
+        self.activity = LiveActivity::Thinking;
         self.state = CommandWindowState::PreparingContext;
         self.commands
             .send(RuntimeCommand::StartTask(StartTaskRequest {
@@ -310,26 +319,6 @@ impl CommandWindow {
         }
     }
 
-    fn status_line(&self) -> Option<String> {
-        match self.state {
-            CommandWindowState::Idle => None,
-            CommandWindowState::PreparingContext => Some("Preparing…".into()),
-            CommandWindowState::Running => Some("Working…".into()),
-            CommandWindowState::WaitingApproval => Some("Waiting for approval…".into()),
-            CommandWindowState::Completed | CommandWindowState::Failed => None,
-            CommandWindowState::Cancelled => Some("Cancelled".into()),
-        }
-    }
-
-    fn status_is_running(&self) -> bool {
-        matches!(
-            self.state,
-            CommandWindowState::PreparingContext
-                | CommandWindowState::Running
-                | CommandWindowState::WaitingApproval
-        )
-    }
-
     fn take_tool_start(&mut self, name: &str) -> Option<Instant> {
         if let Some(index) = self.tool_starts.iter().rposition(|(tool, _)| tool == name) {
             Some(self.tool_starts.remove(index).1)
@@ -346,6 +335,7 @@ impl CommandWindow {
         const MIN_RUNNING: Duration = Duration::from_millis(800);
         if elapsed >= MIN_RUNNING {
             self.transcript.finish_tool(&tool);
+            self.activity = LiveActivity::PreparingNextMoves;
             return;
         }
         let wait = MIN_RUNNING - elapsed;
@@ -357,6 +347,7 @@ impl CommandWindow {
                     return;
                 }
                 this.transcript.finish_tool(&tool);
+                this.activity = LiveActivity::PreparingNextMoves;
                 cx.notify();
             })
             .ok();
@@ -377,8 +368,7 @@ impl gpui::Render for CommandWindow {
         let border = if dark { rgb(0x3a3a3c) } else { rgb(0xd2d2d7) };
         let text = if dark { rgb(0xf5f5f7) } else { rgb(0x1d1d1f) };
         let muted = if dark { rgb(0x8e8e93) } else { rgb(0x6e6e73) };
-        let status = self.status_line();
-        let status_running = self.status_is_running();
+        let status = heartbeat_status(self.state, &self.transcript, &self.activity);
         let prompt_label = (!self.prompt.is_empty() && self.state != CommandWindowState::Idle)
             .then(|| self.prompt.clone());
         let artifacts = self.artifacts.clone();
@@ -435,7 +425,17 @@ impl gpui::Render for CommandWindow {
                             .items_center()
                             .gap_3()
                             .child(div().size_2().rounded_full().bg(rgb(0x30d158)))
-                            .child(self.input.clone()),
+                            .child(div().flex_1().min_w_0().child(self.input.clone()))
+                            .when(show_stop, |parent| {
+                                parent.child(ui::button("stop", "Stop", dark, {
+                                    let entity = entity.clone();
+                                    move |event, window, cx| {
+                                        entity.update(cx, |this, cx| {
+                                            this.on_stop(event, window, cx);
+                                        });
+                                    }
+                                }))
+                            }),
                     )
                     .children(
                         badges
@@ -447,39 +447,6 @@ impl gpui::Render for CommandWindow {
                             div().flex_none().text_sm().text_color(muted).child(prompt)
                         }),
                     )
-                    .children(status.map(|line| {
-                        div()
-                            .flex_none()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_sm()
-                                    .text_color(muted)
-                                    .child(activity_label(
-                                        "status-line",
-                                        line,
-                                        status_running,
-                                        muted,
-                                    )),
-                            )
-                            .when(show_stop, |parent| {
-                                parent.child(ui::button("stop", "Stop", dark, {
-                                    let entity = cx.entity();
-                                    move |event, window, cx| {
-                                        entity.update(cx, |this, cx| {
-                                            this.on_stop(event, window, cx);
-                                        });
-                                    }
-                                }))
-                            })
-                    }))
                     .child(
                         div()
                             .id("transcript")
@@ -517,6 +484,7 @@ impl gpui::Render for CommandWindow {
                                             .text_color(muted)
                                             .child(format!("Created {name}"))
                                     }))
+                                    .children(status.map(|line| activity_heartbeat(line, muted)))
                                     .children(approval.map(|(title, description)| {
                                         render_approval_card(
                                             title,
@@ -530,6 +498,41 @@ impl gpui::Render for CommandWindow {
                     ),
             )
     }
+}
+
+fn heartbeat_status(
+    state: CommandWindowState,
+    transcript: &Transcript,
+    activity: &LiveActivity,
+) -> Option<String> {
+    match state {
+        CommandWindowState::Idle
+        | CommandWindowState::Completed
+        | CommandWindowState::Failed
+        | CommandWindowState::Cancelled
+        | CommandWindowState::WaitingApproval => None,
+        CommandWindowState::PreparingContext => Some("Gathering context".into()),
+        CommandWindowState::Running => {
+            if transcript.running_tool().is_some() {
+                return None;
+            }
+            match activity {
+                LiveActivity::Writing | LiveActivity::Tool(_) => None,
+                LiveActivity::Thinking | LiveActivity::PreparingNextMoves => Some(activity.label()),
+            }
+        }
+    }
+}
+
+fn activity_heartbeat(line: String, muted: gpui::Rgba) -> impl IntoElement {
+    div()
+        .flex_none()
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .text_sm()
+        .text_color(muted)
+        .child(activity_label("status-line", line, true, muted))
 }
 
 fn render_transcript_block(
@@ -743,4 +746,103 @@ fn tool_detail_row(
                 )),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status(
+        state: CommandWindowState,
+        transcript: &Transcript,
+        activity: LiveActivity,
+    ) -> Option<String> {
+        heartbeat_status(state, transcript, &activity)
+    }
+
+    #[test]
+    fn heartbeat_hides_when_idle_done_or_writing() {
+        let mut transcript = Transcript::new();
+        let thinking = LiveActivity::Thinking;
+        assert_eq!(
+            status(CommandWindowState::Idle, &transcript, thinking.clone()),
+            None
+        );
+        assert_eq!(
+            status(CommandWindowState::Completed, &transcript, thinking.clone()),
+            None
+        );
+        assert_eq!(
+            status(CommandWindowState::Failed, &transcript, thinking.clone()),
+            None
+        );
+        assert_eq!(
+            status(CommandWindowState::Cancelled, &transcript, thinking.clone()),
+            None
+        );
+        assert_eq!(
+            status(
+                CommandWindowState::WaitingApproval,
+                &transcript,
+                thinking.clone()
+            ),
+            None
+        );
+        transcript.push_text("Done.");
+        assert_eq!(
+            status(
+                CommandWindowState::Running,
+                &transcript,
+                LiveActivity::Writing
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn heartbeat_shows_when_the_screen_would_otherwise_sit_still() {
+        let mut transcript = Transcript::new();
+        assert_eq!(
+            status(
+                CommandWindowState::PreparingContext,
+                &transcript,
+                LiveActivity::Thinking
+            ),
+            Some("Gathering context".into())
+        );
+        assert_eq!(
+            status(
+                CommandWindowState::Running,
+                &transcript,
+                LiveActivity::Thinking
+            ),
+            Some("Thinking".into())
+        );
+        transcript.start_tool("read_file");
+        assert_eq!(
+            status(
+                CommandWindowState::Running,
+                &transcript,
+                LiveActivity::Tool("read_file".into())
+            ),
+            None
+        );
+        transcript.finish_tool("read_file");
+        assert_eq!(
+            status(
+                CommandWindowState::Running,
+                &transcript,
+                LiveActivity::PreparingNextMoves
+            ),
+            Some("Preparing next moves".into())
+        );
+        assert_eq!(
+            status(
+                CommandWindowState::Running,
+                &transcript,
+                LiveActivity::Thinking
+            ),
+            Some("Thinking".into())
+        );
+    }
 }
