@@ -134,15 +134,18 @@ impl Transcript {
         for (idx, block) in self.blocks.iter().enumerate().rev() {
             match block {
                 TranscriptBlock::Text { text } if text.trim().is_empty() => continue,
-                TranscriptBlock::Text { .. } => return None,
                 TranscriptBlock::Thinking { .. } if kind == GroupKind::Thinking => {
                     return Some(idx);
                 }
                 TranscriptBlock::Tools { .. } if kind == GroupKind::Tools => return Some(idx),
-                TranscriptBlock::Thinking { .. } | TranscriptBlock::Tools { .. } => continue,
+                _ => return None,
             }
         }
         None
+    }
+
+    pub fn live_thinking_index(&self) -> Option<usize> {
+        self.last_group_index(GroupKind::Thinking)
     }
 
     pub fn toggle(&mut self, index: usize) {
@@ -219,8 +222,8 @@ impl TranscriptBlock {
     pub fn collapsed_label(&self) -> String {
         match self {
             Self::Thinking { text, .. } => {
-                if text.is_empty() {
-                    "Thinking…".into()
+                if text.trim().is_empty() {
+                    "Thinking".into()
                 } else {
                     "Thought".into()
                 }
@@ -367,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn thinking_between_tools_does_not_split_the_group() {
+    fn thinking_between_tools_starts_a_new_group() {
         let mut transcript = Transcript::new();
         transcript.push_reasoning("first");
         transcript.start_tool("get_accessibility_snapshot");
@@ -375,20 +378,36 @@ mod tests {
         transcript.push_reasoning(" more");
         transcript.start_tool("ui_press");
         transcript.finish_tool("ui_press");
-        assert_eq!(transcript.blocks().len(), 2);
+        assert_eq!(transcript.blocks().len(), 4);
         match &transcript.blocks()[0] {
-            TranscriptBlock::Thinking { text, .. } => assert_eq!(text, "first more"),
+            TranscriptBlock::Thinking { text, .. } => assert_eq!(text, "first"),
             other => panic!("{other:?}"),
         }
         match &transcript.blocks()[1] {
             TranscriptBlock::Tools { items, .. } => {
-                assert_eq!(items.len(), 2);
-                assert!(!items[0].running);
-                assert!(!items[1].running);
-                assert_eq!(transcript.blocks()[1].collapsed_label(), "Used 2 tools");
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].name, "get_accessibility_snapshot");
             }
             other => panic!("{other:?}"),
         }
+        match &transcript.blocks()[2] {
+            TranscriptBlock::Thinking { text, .. } => assert_eq!(text, " more"),
+            other => panic!("{other:?}"),
+        }
+        match &transcript.blocks()[3] {
+            TranscriptBlock::Tools { items, .. } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].name, "ui_press");
+                assert_eq!(
+                    transcript.blocks()[3].collapsed_label(),
+                    "Pressed a control"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(transcript.live_thinking_index(), None);
+        transcript.push_reasoning("next");
+        assert_eq!(transcript.live_thinking_index(), Some(4));
     }
 
     #[test]

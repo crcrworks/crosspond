@@ -6,7 +6,7 @@ use crosspond_core::{
 };
 use gpui::{
     AnyElement, App, Context, Entity, FocusHandle, KeyBinding, SharedString, Timer, Window,
-    actions, div, prelude::*, rgb, size,
+    actions, div, prelude::*, rems, rgb, size,
 };
 
 use crate::activity_label::activity_label;
@@ -368,6 +368,9 @@ impl gpui::Render for CommandWindow {
         let border = if dark { rgb(0x3a3a3c) } else { rgb(0xd2d2d7) };
         let text = if dark { rgb(0xf5f5f7) } else { rgb(0x1d1d1f) };
         let muted = if dark { rgb(0x8e8e93) } else { rgb(0x6e6e73) };
+        let live_thinking = (self.activity == LiveActivity::Thinking)
+            .then(|| self.transcript.live_thinking_index())
+            .flatten();
         let status = heartbeat_status(self.state, &self.transcript, &self.activity);
         let prompt_label = (!self.prompt.is_empty() && self.state != CommandWindowState::Idle)
             .then(|| self.prompt.clone());
@@ -460,7 +463,7 @@ impl gpui::Render for CommandWindow {
                                     .flex_none()
                                     .w_full()
                                     .justify_start()
-                                    .gap_1()
+                                    .gap_0()
                                     .children(blocks.into_iter().filter_map(|(index, block)| {
                                         if matches!(
                                             &block,
@@ -472,6 +475,7 @@ impl gpui::Render for CommandWindow {
                                         Some(render_transcript_block(
                                             index,
                                             block,
+                                            live_thinking == Some(index),
                                             muted,
                                             result_color,
                                             entity.clone(),
@@ -518,6 +522,7 @@ fn heartbeat_status(
             }
             match activity {
                 LiveActivity::Writing | LiveActivity::Tool(_) => None,
+                LiveActivity::Thinking if transcript.live_thinking_index().is_some() => None,
                 LiveActivity::Thinking | LiveActivity::PreparingNextMoves => Some(activity.label()),
             }
         }
@@ -538,26 +543,28 @@ fn activity_heartbeat(line: String, muted: gpui::Rgba) -> impl IntoElement {
 fn render_transcript_block(
     index: usize,
     block: TranscriptBlock,
+    thinking_live: bool,
     muted: gpui::Rgba,
     result_color: gpui::Rgba,
     entity: Entity<CommandWindow>,
 ) -> impl IntoElement {
     match block {
         TranscriptBlock::Thinking { text, expanded } => {
-            let thinking = text.is_empty();
-            let label = if thinking {
-                "Thinking…".to_string()
+            let label = if thinking_live {
+                "Thinking".to_string()
             } else {
                 "Thought".to_string()
             };
-            let details = if expanded && !text.trim().is_empty() {
+            let body = text.trim().to_string();
+            let details = if expanded && !body.is_empty() {
                 vec![
                     div()
                         .pl_4()
                         .whitespace_normal()
                         .text_sm()
+                        .line_height(rems(1.35))
                         .text_color(muted)
-                        .child(text)
+                        .child(body)
                         .into_any_element(),
                 ]
             } else {
@@ -567,7 +574,7 @@ fn render_transcript_block(
                 ("think", index),
                 if expanded { "▾" } else { "▸" },
                 None,
-                activity_label(("think-header", index), label, thinking, muted),
+                activity_label(("think-header", index), label, thinking_live, muted),
                 muted,
                 details,
                 entity,
@@ -620,8 +627,9 @@ fn render_transcript_block(
             .flex_none()
             .whitespace_normal()
             .text_sm()
+            .line_height(rems(1.35))
             .text_color(result_color)
-            .child(text)
+            .child(text.trim_end().to_string())
             .into_any_element(),
     }
 }
@@ -693,7 +701,7 @@ fn collapsible_block(
                 .w_full()
                 .cursor_pointer()
                 .hover(|this| this.opacity(0.8))
-                .on_click(move |_, _, cx| {
+                .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
                     entity.update(cx, |this, cx| {
                         this.toggle_block(index, cx);
                     });
@@ -843,6 +851,15 @@ mod tests {
                 LiveActivity::Thinking
             ),
             Some("Thinking".into())
+        );
+        transcript.push_reasoning("plan");
+        assert_eq!(
+            status(
+                CommandWindowState::Running,
+                &transcript,
+                LiveActivity::Thinking
+            ),
+            None
         );
     }
 }
