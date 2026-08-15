@@ -6,15 +6,18 @@ unsafe extern "C" {
     fn CGRequestScreenCaptureAccess() -> bool;
 }
 
+pub(crate) fn screen_recording_granted() -> bool {
+    // SAFETY: this TCC helper takes no pointers and only queries permission.
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
 pub(crate) fn ensure_screen_capture() -> Result<(), crosspond_tools::ToolError> {
-    // SAFETY: these TCC helpers take no pointers and only query/request permission.
-    let trusted = unsafe { CGPreflightScreenCaptureAccess() };
-    if trusted {
+    if screen_recording_granted() {
         return Ok(());
     }
+    // SAFETY: this TCC helper takes no pointers and only requests permission.
     let _ = unsafe { CGRequestScreenCaptureAccess() };
-    let trusted = unsafe { CGPreflightScreenCaptureAccess() };
-    if trusted {
+    if screen_recording_granted() {
         Ok(())
     } else {
         Err(crosspond_tools::ToolError::Failed(

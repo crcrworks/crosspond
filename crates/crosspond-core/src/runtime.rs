@@ -19,7 +19,9 @@ use crate::context::{ContextCapsule, StagedInput, stage_selected_files};
 use crate::event::AgentEvent;
 use crate::ids::TaskId;
 use crate::policy::{AgentAsk, ComputerApprovalMode, PolicyDecision, evaluate_with, risk_for_tool};
-use crate::receipt::{Receipt, append_event_log, write_receipt, write_task_meta};
+use crate::receipt::{
+    Receipt, append_event_log, receipt_action_line, write_receipt, write_task_meta,
+};
 use crate::secret::{SecretKey, SecretStore};
 use crate::workspace::{FsWorkspaceManager, WorkspaceManager, default_tasks_root};
 
@@ -287,7 +289,13 @@ impl Runtime {
         };
 
         let task_dir = self.tasks_root.join(task_id.to_string());
-        write_task_meta(&task_dir, task_id, &request.prompt, "running");
+        write_task_meta(
+            &task_dir,
+            task_id,
+            &request.prompt,
+            "running",
+            Some(workspace.root.as_path()),
+        );
         append_event_log(&task_dir, json!({ "type": "task_started" }));
 
         if self.session.is_empty() {
@@ -328,7 +336,13 @@ impl Runtime {
                     return;
                 }
                 StepOutcome::Failed(message) => {
-                    write_task_meta(&task_dir, task_id, &request.prompt, "failed");
+                    write_task_meta(
+                        &task_dir,
+                        task_id,
+                        &request.prompt,
+                        "failed",
+                        Some(workspace.root.as_path()),
+                    );
                     let _ = self
                         .events
                         .send(AgentEvent::TaskFailed { task_id, message });
@@ -395,7 +409,7 @@ impl Runtime {
                                 "success": success,
                             }),
                         );
-                        if success && let Some(line) = receipt_line(&call.name, &text) {
+                        if success && let Some(line) = receipt_action_line(&call.name, &text) {
                             receipt_actions.push(line);
                         }
                         if let Some(path) = created.as_ref()
@@ -405,6 +419,7 @@ impl Runtime {
                             let _ = self.events.send(AgentEvent::ArtifactCreated {
                                 task_id,
                                 display_name: name,
+                                path: path.clone(),
                             });
                         }
                         let _ = self.events.send(AgentEvent::ToolFinished {
@@ -435,17 +450,31 @@ impl Runtime {
                         artifacts,
                     };
                     let _ = write_receipt(&task_dir, &receipt);
-                    write_task_meta(&task_dir, task_id, &request.prompt, "completed");
+                    write_task_meta(
+                        &task_dir,
+                        task_id,
+                        &request.prompt,
+                        "completed",
+                        Some(workspace.root.as_path()),
+                    );
                     append_event_log(&task_dir, json!({ "type": "task_completed" }));
-                    let _ = self
-                        .events
-                        .send(AgentEvent::TaskCompleted { task_id, summary });
+                    let _ = self.events.send(AgentEvent::TaskCompleted {
+                        task_id,
+                        summary,
+                        receipt,
+                    });
                     return;
                 }
             }
         }
 
-        write_task_meta(&task_dir, task_id, &request.prompt, "failed");
+        write_task_meta(
+            &task_dir,
+            task_id,
+            &request.prompt,
+            "failed",
+            Some(workspace.root.as_path()),
+        );
         let _ = self.events.send(AgentEvent::TaskFailed {
             task_id,
             message: "Agent step limit exceeded".into(),
@@ -453,13 +482,17 @@ impl Runtime {
     }
 
     fn finish_cancelled(&mut self, task_id: TaskId, prompt: &str, task_dir: &Path, reset: bool) {
+        let workspace = self
+            .session_workspace
+            .as_ref()
+            .map(|workspace| workspace.root.clone());
         if reset {
             self.session.clear();
             self.session_workspace = None;
             self.session_context = ContextCapsule::default();
             self.staged_inputs.clear();
         }
-        write_task_meta(task_dir, task_id, prompt, "cancelled");
+        write_task_meta(task_dir, task_id, prompt, "cancelled", workspace.as_deref());
         let _ = self.events.send(AgentEvent::TaskCancelled { task_id });
     }
 
@@ -728,17 +761,11 @@ fn model_tools(registry: &ToolRegistry) -> Vec<ToolDefinition> {
 }
 
 fn artifact_display_name(workspace: &Workspace, path: &Path) -> Option<String> {
-    path.strip_prefix(&workspace.output)
+    let output = workspace.output.canonicalize().ok()?;
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    path.strip_prefix(output)
         .ok()
         .map(|relative| relative.display().to_string())
-}
-
-fn receipt_line(name: &str, text: &str) -> Option<String> {
-    match name {
-        "write_file" | "create_directory" => Some(text.to_string()),
-        "ui_press" | "ui_set_value" | "ui_click" => text.lines().next().map(str::to_string),
-        _ => None,
-    }
 }
 
 async fn execute_tool(
@@ -1056,8 +1083,17 @@ mod tests {
         })
         .await;
         match completed {
-            AgentEvent::TaskCompleted { summary, .. } => {
+            AgentEvent::TaskCompleted {
+                summary, receipt, ..
+            } => {
                 assert!(summary.contains("hello.txt"));
+                assert!(
+                    receipt
+                        .actions
+                        .iter()
+                        .any(|line| line.contains("hello.txt"))
+                );
+                assert!(receipt.artifacts.iter().any(|name| name.contains("hello")));
             }
             other => panic!("{other:?}"),
         }

@@ -101,7 +101,7 @@ fn main() {
             cx,
         );
 
-        if start_visible {
+        if start_visible || settings::needs_onboarding(cx) {
             launcher::show(cx);
         }
     });

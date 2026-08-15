@@ -55,6 +55,14 @@ pub trait SecretStore: Send + Sync {
     fn delete(&self, key: &SecretKey) -> Result<(), SecretError>;
 }
 
+pub fn provider_key_is_set(secrets: &dyn SecretStore) -> bool {
+    secrets
+        .get(&SecretKey::PROVIDER_API_KEY)
+        .ok()
+        .flatten()
+        .is_some_and(|key| !key.is_empty())
+}
+
 #[cfg(test)]
 pub(crate) mod memory {
     use std::collections::HashMap;

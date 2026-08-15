@@ -15,6 +15,7 @@ mod finder;
 mod hotkey;
 mod input;
 mod keychain;
+mod permissions;
 mod screenshot;
 #[cfg(target_os = "macos")]
 mod tcc;
@@ -26,6 +27,7 @@ pub use context::MacOsContextCollector;
 pub use hotkey::{HotkeyError, MacOsGlobalHotkey};
 pub use input::MacOsInput;
 pub use keychain::MacOsKeychainSecretStore;
+pub use permissions::{PermissionKind, PermissionSnapshot};
 pub use screenshot::MacOsScreenshot;
 
 /// Accessibility and screenshot backends that share one cua-driver child.

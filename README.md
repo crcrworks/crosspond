@@ -2,7 +2,7 @@
 
 Command bar for your computer agent. macOS only.
 
-Phase 11 completes the Whole-Mac agent stack on top of Phase 6: retarget any app (`list_apps` / `open_app`), keyboard and scroll, approved `run_command` / `open_url`, EventKit `calendar_events`, and approved external file reads — plus earlier BYOK chat, workspace tools, ambient context, Accessibility, and screenshot/click.
+Phase 12 adds receipts in the launcher, recent task history, and first-launch onboarding on top of the Phase 11 Whole-Mac agent: retarget any app (`list_apps` / `open_app`), keyboard and scroll, approved `run_command` / `open_url`, EventKit `calendar_events`, and approved external file reads — plus earlier BYOK chat, workspace tools, ambient context, Accessibility, and screenshot/click.
 
 ## Run
 
@@ -22,12 +22,12 @@ cargo run -p crosspond-app
 
 Then:
 
-1. Press **⌘,** (or Crosspond → Settings) and set Base URL, model, and API key. Optionally add an Exa API key for `web_search`.
-2. Click **Save**, then **Test Connection**.
-3. Grant Accessibility when macOS asks (needed for selected text and UI actions). Grant Screen Recording for screenshots and clicks. Grant Calendars for `calendar_events`. Finder selection may also prompt for Automation.
+1. On first launch, Crosspond opens a welcome. Press **⌘,** (or **Open Settings**) and set Base URL, model, and API key. Optionally add an Exa API key for `web_search`.
+2. Click **Save**, then **Test Connection**, then **Continue**.
+3. Grant Accessibility, Screen Recording, or Calendars later from Settings → Permissions, or when a tool needs them. Finder selection may also prompt for Automation.
 4. Select text in another app, or files in Finder — or leave Safari / Helium in front.
 5. Press **Option + Space**. A badge should show the app and “Selected text: N chars” or “N selected files”.
-6. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions show an **Allow** / **Cancel** card first (unless Auto).
+6. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions show an **Allow** / **Cancel** card first (unless Auto). After a task, a receipt lists what changed; **History** opens recent tasks.
 
 **Escape** or **Stop** cancels the whole task. Approval **Cancel** rejects only that action. Hiding the window starts a new session.
 

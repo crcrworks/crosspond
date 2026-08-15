@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use crosspond_core::{
     AgentEvent, AppConfig, CommandSender, ConfigStore, RuntimeCommand, SecretKey, SecretStore,
-    SecretString,
+    SecretString, provider_key_is_set,
 };
+use crosspond_macos::{PermissionKind, PermissionSnapshot};
 use gpui::{
     App, Bounds, Context, Entity, FocusHandle, FontWeight, Global, TitlebarOptions, Window,
     WindowBounds, WindowHandle, WindowKind, WindowOptions, div, prelude::*, px, rgb, size,
@@ -73,6 +74,14 @@ pub fn open(cx: &mut App) {
 
     cx.global_mut::<SettingsHost>().window = Some(handle);
     cx.activate(true);
+}
+
+pub fn needs_onboarding(cx: &App) -> bool {
+    !has_provider_key(cx)
+}
+
+pub fn has_provider_key(cx: &App) -> bool {
+    cx.has_global::<Services>() && provider_key_is_set(&*cx.global::<Services>().secrets)
 }
 
 pub fn apply_event(event: &AgentEvent, cx: &mut App) -> bool {
@@ -336,6 +345,11 @@ impl gpui::Render for SettingsWindow {
                 .child(div().text_sm().text_color(muted).whitespace_normal().child(
                     "Required for web_search. Free credits at https://dashboard.exa.ai/api-keys",
                 ))
+                .child(section_label("Permissions", muted))
+                .child(div().text_sm().text_color(muted).whitespace_normal().child(
+                    "Chat works without these. Enable them when you want selected text, screenshots, or calendar reads.",
+                ))
+                .children(permission_rows(dark, muted))
                 .child(
                     div()
                         .flex()
@@ -371,6 +385,67 @@ impl gpui::Render for SettingsWindow {
                 })),
         )
     }
+}
+
+fn permission_rows(dark: bool, muted: gpui::Rgba) -> Vec<gpui::AnyElement> {
+    let snapshot = PermissionSnapshot::current();
+    vec![
+        permission_row(
+            "Accessibility",
+            snapshot.accessibility,
+            PermissionKind::Accessibility,
+            muted,
+            dark,
+        ),
+        permission_row(
+            "Screen Recording",
+            snapshot.screen_recording,
+            PermissionKind::ScreenRecording,
+            muted,
+            dark,
+        ),
+        permission_row(
+            "Calendars",
+            snapshot.calendars,
+            PermissionKind::Calendars,
+            muted,
+            dark,
+        ),
+    ]
+}
+
+fn permission_row(
+    label: &'static str,
+    granted: bool,
+    kind: PermissionKind,
+    muted: gpui::Rgba,
+    dark: bool,
+) -> gpui::AnyElement {
+    let status = if granted { "Enabled" } else { "Not enabled" };
+    let color = if granted { gpui::rgb(0x30d158) } else { muted };
+    let url = kind.settings_url();
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(field_label(label, muted))
+                .child(div().text_sm().text_color(color).child(status)),
+        )
+        .child(ui::button(
+            label,
+            "Open System Settings",
+            dark,
+            move |_, _, cx| {
+                cx.open_url(url);
+            },
+        ))
+        .into_any_element()
 }
 
 fn section_label(label: &'static str, color: gpui::Rgba) -> impl IntoElement {

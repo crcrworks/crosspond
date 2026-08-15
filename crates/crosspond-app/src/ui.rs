@@ -1,5 +1,6 @@
 use gpui::{
-    App, ClickEvent, SharedString, Styled, Window, WindowAppearance, div, prelude::*, px, rgb, svg,
+    App, ClickEvent, ElementId, SharedString, Styled, Window, WindowAppearance, div, prelude::*,
+    px, rgb, svg,
 };
 
 pub fn is_dark(window: &Window) -> bool {
@@ -11,7 +12,7 @@ pub fn is_dark(window: &Window) -> bool {
 
 /// Button chrome from GPUI 0.2.2 `examples/window.rs`, with dark/light colors.
 pub fn button(
-    id: &'static str,
+    id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     dark: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,

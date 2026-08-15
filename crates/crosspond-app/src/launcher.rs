@@ -126,6 +126,7 @@ pub fn show(cx: &mut App) {
     let already_visible;
     let collector;
     let window;
+    let needs_onboarding = crate::settings::needs_onboarding(cx);
     {
         let launcher = cx.global::<Launcher>();
         already_visible = launcher.visible;
@@ -133,11 +134,14 @@ pub fn show(cx: &mut App) {
         window = launcher.window;
     }
     // Collect before Crosspond becomes frontmost, otherwise "this" is ourselves.
-    let ambient = (!already_visible).then(|| collector.collect());
+    // Skip on first launch so we do not prompt for Accessibility.
+    let ambient = (!already_visible && !needs_onboarding).then(|| collector.collect());
     cx.global_mut::<Launcher>().visible = true;
     cx.activate(true);
     let _ = window.update(cx, |view, window, cx| {
-        if let Some(ambient) = ambient {
+        if needs_onboarding {
+            view.enter_onboarding(window, cx);
+        } else if let Some(ambient) = ambient {
             view.set_ambient_context(ambient, window, cx);
         }
         window.activate_window();
@@ -193,9 +197,7 @@ fn poll_once(cx: &mut App) {
     }
 
     for event in events {
-        if crate::settings::apply_event(&event, cx) {
-            continue;
-        }
+        let _ = crate::settings::apply_event(&event, cx);
         let _ = window.update(cx, |view, window, cx| {
             view.apply_event(event, window, cx);
         });

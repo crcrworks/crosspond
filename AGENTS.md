@@ -6,9 +6,9 @@ Treat `docs/mvp.md` and `docs/architecture.md` as the product and design source 
 
 Implement one phase at a time. Do not start the next phase until the current one builds, formats, lints, and tests.
 
-Current phase: **11 — External file read (Whole-Mac agent complete through EventKit + shell)**.
+Current phase: **12 — Polish (receipts UI, history, onboarding)**.
 
-Out of scope until later phases: history, onboarding polish, drag, `kill_app`, exposing cua-driver’s full catalog.
+Out of scope until later phases: drag, `kill_app`, exposing cua-driver’s full catalog, signing/notarization.
 
 ## Crate boundaries
 

@@ -38,13 +38,18 @@ Option+Space
         │                        Agent + ask_user → ApprovalRequired
         │                        Auto (and Agent + ask_user false) skip the card
         │                      run_command / open_url (non-http) → Allow
+        │                      write receipt.json under ~/.crosspond/tasks/<task-id>/
  Allow / Cancel  ──mpsc──►     Approve / Reject that action
  Escape / Stop   ──mpsc──►     Cancel the whole task
+        │                      (Escape first closes History, then hides)
  AgentEvent      ◄─mpsc──   ContextCollected / AssistantDelta /
         │                      ToolStarted / ApprovalRequired /
-        │                      ArtifactCreated / completed
+        │                      ArtifactCreated / TaskCompleted(+receipt) /
+        │                      completed
         ▼
  Command window / Settings
+ First launch (no API key): onboarding, then Settings. No Accessibility prompt.
+ History reads ~/.crosspond/tasks/ (task.json + receipt.json).
 ```
 
 Commands and events are defined in `crosspond-core`. The UI never runs model HTTP or tools on the GPUI thread. The runtime never imports GPUI. Context collection runs on the main thread and must happen before `App::activate`, otherwise Crosspond is the frontmost app.
@@ -59,9 +64,9 @@ Computer tools default to the **ambient** frontmost pid from when the launcher o
 
 Node ids are integers for the latest Accessibility snapshot generation. A new snapshot or a successful UI action invalidates old ids.
 
-Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External reads/writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode.
+Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External reads/writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode. **History** lists recent tasks. Closing the launcher sends `ResetSession`, which drops follow-up history, ambient context, and the session workspace. Past receipts remain under `~/.crosspond/tasks/`.
 
-A session reuses one workspace under `~/.crosspond/workspaces/<first-task-id>/`. Finder selections are copied into that workspace’s `input/` on the first turn. Each submit still writes `~/.crosspond/tasks/<task-id>/`. Closing the launcher sends `ResetSession`, which drops follow-up history, ambient context, and the session workspace.
+A session reuses one workspace under `~/.crosspond/workspaces/<first-task-id>/`. Finder selections are copied into that workspace’s `input/` on the first turn. Each submit still writes `~/.crosspond/tasks/<task-id>/` (`task.json`, `events.jsonl`, `receipt.json`).
 
 The agent loop is capped at 16 steps. Tool output is capped at 100KB. Tools run on a blocking thread with a 30s timeout. Selected text is capped at 32,768 characters. AX snapshots cap depth, node count, and text length. Screenshot size is whatever cua-driver returns.
 
@@ -76,8 +81,10 @@ The launcher window is created once (`show: false`) and toggled; it is not destr
 
 `App::hide()` hides Settings as well. That is a known limitation of this GPUI version.
 
+First launch with no API key shows the launcher in onboarding and opens Settings from there. Accessibility is not requested until the user uses selected text or computer tools.
+
 ## Hotkeys
 
 `GlobalHotkeyService` lives in `crosspond-core`. macOS registers Option + Space with `global-hotkey` on the main thread and exposes `poll()`. The GPUI app drains that poll on a short `Timer` loop. Settings-driven hotkeys come later; the trait is the extension point.
 
-⌘, opens Settings. Escape cancels an in-flight request (including while waiting for approval); otherwise it hides the launcher. Approval **Cancel** rejects only that tool call.
+⌘, opens Settings. Escape cancels an in-flight request (including while waiting for approval); closes History if it is open; otherwise it hides the launcher. Approval **Cancel** rejects only that tool call.

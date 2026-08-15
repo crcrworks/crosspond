@@ -1,12 +1,14 @@
+use std::path::PathBuf;
+
 use crate::ids::TaskId;
+use crate::receipt::Receipt;
 
 use super::command::ApprovalId;
 
 /// Runtime → UI.
 ///
-/// Phase 4 emits task lifecycle events, `ContextCollected`, `AssistantDelta`,
-/// `ReasoningDelta`, tool activity, `ApprovalRequired`, `ArtifactCreated`, and
-/// `ConnectionTested`.
+/// Phase 12 adds a `Receipt` on `TaskCompleted` and a filesystem `path` on
+/// `ArtifactCreated` so the launcher can reveal files in Finder.
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
     TaskStarted {
@@ -41,10 +43,12 @@ pub enum AgentEvent {
     ArtifactCreated {
         task_id: TaskId,
         display_name: String,
+        path: PathBuf,
     },
     TaskCompleted {
         task_id: TaskId,
         summary: String,
+        receipt: Receipt,
     },
     TaskFailed {
         task_id: TaskId,

@@ -40,7 +40,7 @@ Calendar event notes/bodies may be returned to the model from `calendar_events`,
 | `open_url` with public http(s) (SSRF-checked) | auto |
 | Destructive | approval |
 
-The launcher shows an Allow / Cancel card for tools that require approval. **Allow** runs that one call (`allow_external` for an external path, or the computer / shell / URL action). **Cancel** returns a rejection to the model and the loop continues. Escape / Stop cancels the whole task. A chip next to the prompt cycles UI-action approval: **Auto**, **AI**, **Manual**.
+The launcher shows an Allow / Cancel card for tools that require approval. **Allow** runs that one call (`allow_external` for an external path, or the computer / shell / URL action). **Cancel** returns a rejection to the model and the loop continues. Escape / Stop cancels the whole task; Escape also closes History if it is open. A chip next to the prompt cycles UI-action approval: **Auto**, **AI**, **Manual**. **History** lists recent tasks from `~/.crosspond/tasks/` (prompt + receipt only — not a chat transcript).
 
 Workspace membership is not `path.starts_with(workspace)`. Classify through `resolve_path` / `classify_write_path`, which handle `..`, symlinks, and canonicalization by walking parents of the resolved path.
 

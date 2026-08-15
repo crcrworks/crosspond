@@ -8,6 +8,7 @@ mod command;
 mod config;
 mod context;
 mod event;
+mod history;
 mod hotkey;
 mod ids;
 mod policy;
@@ -24,16 +25,18 @@ pub use context::{
     StagedInput, WindowContext,
 };
 pub use event::AgentEvent;
+pub use history::{TaskHistoryEntry, history_group_label, history_title, list_recent_tasks};
 pub use hotkey::{GlobalHotkeyService, HotkeyEvent};
 pub use ids::TaskId;
 pub use policy::{
     AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate, evaluate_with,
     risk_for_tool,
 };
-pub use receipt::Receipt;
+pub use receipt::{Receipt, receipt_action_line};
 pub use runtime::{
     CommandSender, EventPump, MAX_AGENT_STEPS, MISSING_API_KEY_MESSAGE, RuntimeChannels,
     spawn_runtime, spawn_runtime_with, spawn_runtime_with_tools,
 };
-pub use secret::{SecretError, SecretKey, SecretStore, SecretString};
+pub use secret::{SecretError, SecretKey, SecretStore, SecretString, provider_key_is_set};
 pub use status::{CommandWindowState, TaskStatus};
+pub use workspace::default_tasks_root;
