@@ -5,12 +5,15 @@
 | Crate | Role | May depend on |
 | --- | --- | --- |
 | `crosspond-app` | GPUI UI, process entry | core, macos, tools, GPUI |
-| `crosspond-core` | runtime commands/events, agent loop, policy, receipts, context types | model, tools, tokio, uuid |
+| `crosspond-core` | runtime commands/events, agent loop, policy, receipts, context types | model, tools, knowledge, tokio, uuid |
+| `crosspond-knowledge` | Obsidian-compatible Knowledge Vault (Markdown + YAML) | serde, uuid; not GPUI, not core |
 | `crosspond-model` | LLM provider abstraction | reqwest, serde |
 | `crosspond-tools` | filesystem, computer, web, shell/URL, calendar tool defs; backends as traits | serde, reqwest; not macos |
 | `crosspond-macos` | hotkeys, Keychain, ambient context, cua-driver, EventKit | core, tools, platform crates, not GPUI |
 
-`crosspond-model` must not depend on `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` from tools.
+`crosspond-model` must not depend on `crosspond-core`. `crosspond-knowledge` must not depend on GPUI or `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` from tools.
+
+The Knowledge Vault path is `config.json` `vault_path` (optional). It is not hard-coded under `~/.crosspond`. Markdown files are the source of truth; Crosspond creates `_system/Schema.md`, `Index.md`, and `Log.md` when opening a vault.
 
 ## Agent data flow
 

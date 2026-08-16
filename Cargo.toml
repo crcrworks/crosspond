@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/crosspond-app",
     "crates/crosspond-core",
+    "crates/crosspond-knowledge",
     "crates/crosspond-macos",
     "crates/crosspond-model",
     "crates/crosspond-tools",
@@ -18,6 +19,7 @@ publish = false
 
 [workspace.dependencies]
 crosspond-core = { path = "crates/crosspond-core" }
+crosspond-knowledge = { path = "crates/crosspond-knowledge" }
 crosspond-macos = { path = "crates/crosspond-macos" }
 crosspond-model = { path = "crates/crosspond-model" }
 crosspond-tools = { path = "crates/crosspond-tools" }
@@ -29,10 +31,13 @@ gpui = "=0.2.2"
 global-hotkey = "=0.8.0"
 tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 thiserror = "=2.0.20"
-uuid = { version = "=1.24.0", features = ["v4"] }
+uuid = { version = "=1.24.0", features = ["v4", "v7"] }
 unicode-segmentation = "=1.13.3"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
+serde_yaml = "=0.9.34"
+sha2 = "=0.10.9"
+time = { version = "=0.3.41", default-features = false, features = ["std", "formatting"] }
 reqwest = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
 security-framework = "=3.7.0"
 security-framework-sys = "=2.17.0"

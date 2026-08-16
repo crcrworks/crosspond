@@ -24,6 +24,9 @@ pub use context::{
     AppContext, ContextCapsule, ContextCollector, MAX_AMBIENT_TEXT_CHARS, NullContextCollector,
     StagedInput, WindowContext,
 };
+pub use crosspond_knowledge::{
+    FsVaultRepository, KnowledgeId, KnowledgeNote, NoteKind, VaultError, VaultRepository,
+};
 pub use event::AgentEvent;
 pub use history::{TaskHistoryEntry, history_group_label, history_title, list_recent_tasks};
 pub use hotkey::{GlobalHotkeyService, HotkeyEvent};

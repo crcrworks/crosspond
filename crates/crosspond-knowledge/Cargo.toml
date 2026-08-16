@@ -1,5 +1,5 @@
 [package]
-name = "crosspond-core"
+name = "crosspond-knowledge"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,11 +7,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-crosspond-knowledge.workspace = true
-crosspond-model.workspace = true
-crosspond-tools.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+time.workspace = true
 uuid.workspace = true

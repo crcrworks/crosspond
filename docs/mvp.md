@@ -4,6 +4,10 @@
 
 The user should never have to prepare the AI before asking for work. No projects, agent pickers, skill pickers, or manual workspace setup.
 
+## Knowledge Vault Phase 1
+
+Crosspond can open a user-chosen Obsidian-compatible vault and write normal Markdown notes with YAML frontmatter and `[[wikilinks]]`. Opening a vault creates `_system/Schema.md`, `Index.md`, and `Log.md` if they are missing. The vault path is `config.json` `vault_path`, not a folder under `~/.crosspond`.
+
 ## Knowledge Vault Phase 0
 
 Tasks no longer get a workspace directory on start. Chat and computer-use actions run without creating `~/.crosspond/scratch/<task-id>/`. A scratch space is created only when file processing, downloads, or shell execution need a working directory. Existing `~/.crosspond/workspaces/` data is left in place.
