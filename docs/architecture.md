@@ -13,7 +13,7 @@
 
 `crosspond-model` must not depend on `crosspond-core`. `crosspond-knowledge` must not depend on GPUI or `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` from tools.
 
-The Knowledge Vault path is `config.json` `vault_path` (optional). It is not hard-coded under `~/.crosspond`. Markdown files are the source of truth; Crosspond creates `_system/Schema.md`, `Index.md`, and `Log.md` when opening a vault. Search state lives in `~/.crosspond/index/<vault-id>.sqlite` and can be rebuilt from the Markdown. When a vault is configured, `StartTask` runs `KnowledgeRouter` and injects a Knowledge Brief into the system prompt. Command prompts that match a Procedure also get a follow plan (requires before uses). The model reads notes through `knowledge_*` tools (`crosspond-tools` talks to a `KnowledgeBackend` trait; `crosspond-core` adapts `IndexedVault`). Tools must not depend on `crosspond-knowledge`. Computer use stays in the existing tool backends; Procedures are guidance, not a workflow DSL.
+The Knowledge Vault path is `config.json` `vault_path` (optional). It is not hard-coded under `~/.crosspond`. Markdown files are the source of truth; Crosspond creates `_system/Schema.md`, `Index.md`, and `Log.md` when opening a vault. Search state lives in `~/.crosspond/index/<vault-id>.sqlite` and can be rebuilt from the Markdown. When a vault is configured, `StartTask` runs `KnowledgeRouter` and injects a Knowledge Brief into the system prompt. Command prompts that match a Procedure also get a follow plan (requires before uses). The model reads notes through `knowledge_*` tools (`crosspond-tools` talks to a `KnowledgeBackend` trait; `crosspond-core` adapts `IndexedVault`). Tools must not depend on `crosspond-knowledge`. Computer use stays in the existing tool backends; Procedures are guidance, not a workflow DSL. Completed meaningful tasks write Activity notes under `history/YYYY/MM/` via `ActivityRecorder` (no raw traces).
 
 ## Agent data flow
 
@@ -47,6 +47,8 @@ Option+Space
         │                        Auto (and Agent + ask_user false) skip the card
         │                      run_command / open_url (non-http) → Allow
         │                      write receipt.json under ~/.crosspond/tasks/<task-id>/
+        │                      write history/YYYY/MM/*.md Activity when a procedure
+        │                        ran or the receipt has actions/artifacts
  Allow / Cancel  ──mpsc──►     Approve / Reject that action
  Escape / Stop   ──mpsc──►     Cancel the whole task
         │                      (Escape first closes History, then hides)

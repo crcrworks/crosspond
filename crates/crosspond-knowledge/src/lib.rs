@@ -2,11 +2,13 @@
 
 #![deny(unsafe_code)]
 
+pub mod activity;
 pub mod index;
 pub mod model;
 pub mod retrieval;
 pub mod vault;
 
+pub use activity::{ActivityRecord, ActivityRecorder, ActivityStatus, parse_note_id};
 pub use index::{
     IndexSnapshot, IndexedLink, IndexedVault, SearchHit, SearchIndex, index_db_path, index_note_id,
     vault_index_id,

@@ -4,6 +4,10 @@
 
 The user should never have to prepare the AI before asking for work. No projects, agent pickers, skill pickers, or manual workspace setup.
 
+## Knowledge Vault Phase 5
+
+After a meaningful task (a matched Procedure, or computer/file work), Crosspond writes a readable Activity under `history/YYYY/MM/`. The note links the Procedure and Resources and stores the result, sanitized actions, and artifacts. It does not store tool JSON, model tokens, or chain-of-thought. A successful Procedure run may update `last_verified`. Simple Q&A does not create an Activity.
+
 ## Knowledge Vault Phase 4
 
 When a command matches a Procedure, the brief includes a generic follow plan: required Resources first, then uses. The agent must `knowledge_read` those notes before computer tools and take app names, URLs, and paths from the Markdown — not from a hardcoded demo. Procedures still cannot bypass Allow.

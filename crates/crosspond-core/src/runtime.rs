@@ -4,7 +4,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crosspond_knowledge::{
-    IndexedVault, KnowledgeContextRequest, KnowledgeRouter, VaultWatcher, WatchMode, index_db_path,
+    ActivityRecord, ActivityRecorder, ActivityStatus, IndexedVault, KnowledgeBrief,
+    KnowledgeContextRequest, KnowledgeRouter, VaultWatcher, WatchMode, index_db_path,
+    parse_note_id,
 };
 use crosspond_model::{
     ImagePart, Message, ModelError, ModelEvent, ModelProvider, ModelRequest, ProviderBuilder, Role,
@@ -21,6 +23,7 @@ use crate::command::{ApprovalId, RuntimeCommand, StartTaskRequest};
 use crate::config::ConfigStore;
 use crate::context::{ContextCapsule, StagedInput, stage_selected_files};
 use crate::event::AgentEvent;
+use crate::history::history_title;
 use crate::ids::TaskId;
 use crate::policy::{AgentAsk, ComputerApprovalMode, PolicyDecision, evaluate_with, risk_for_tool};
 use crate::receipt::{
@@ -346,15 +349,18 @@ impl Runtime {
         append_event_log(&task_dir, self.session_context.log_value());
         let _ = self.events.send(AgentEvent::ContextCollected { task_id });
 
-        let knowledge_brief = self.knowledge.as_ref().and_then(|vault| {
+        let routed_brief = self.knowledge.as_ref().and_then(|vault| {
             KnowledgeRouter::new(vault)
                 .route(&KnowledgeContextRequest {
                     prompt: request.prompt.clone(),
                 })
                 .ok()
                 .filter(|brief| !brief.is_empty())
-                .map(|brief| brief.render())
         });
+        let knowledge_brief = routed_brief
+            .as_ref()
+            .map(KnowledgeBrief::render)
+            .unwrap_or_default();
         let mut messages = Vec::with_capacity(self.session.len() + 2);
         messages.push(Message::system(system_prompt(
             self.session_scratch.as_ref(),
@@ -362,7 +368,7 @@ impl Runtime {
             &self.staged_inputs,
             config.computer_approval,
             self.knowledge.is_some(),
-            knowledge_brief.as_deref().unwrap_or(""),
+            &knowledge_brief,
         )));
         messages.extend(self.session.iter().cloned());
         messages.push(Message::user(request.prompt.clone()));
@@ -380,6 +386,8 @@ impl Runtime {
                     reset,
                     reused_scratch,
                     &artifacts,
+                    routed_brief.as_ref(),
+                    &receipt_actions,
                 );
                 return;
             }
@@ -397,6 +405,8 @@ impl Runtime {
                         reset,
                         reused_scratch,
                         &artifacts,
+                        routed_brief.as_ref(),
+                        &receipt_actions,
                     );
                     return;
                 }
@@ -428,6 +438,8 @@ impl Runtime {
                                 reset,
                                 reused_scratch,
                                 &artifacts,
+                                routed_brief.as_ref(),
+                                &receipt_actions,
                             );
                             return;
                         }
@@ -458,6 +470,8 @@ impl Runtime {
                                     reset,
                                     reused_scratch,
                                     &artifacts,
+                                    routed_brief.as_ref(),
+                                    &receipt_actions,
                                 );
                                 return;
                             }
@@ -537,6 +551,14 @@ impl Runtime {
                         actions: receipt_actions,
                         artifacts,
                     };
+                    self.record_activity(
+                        routed_brief.as_ref(),
+                        &request.prompt,
+                        ActivityStatus::Completed,
+                        &summary,
+                        &receipt.actions,
+                        &receipt.artifacts,
+                    );
                     let _ = write_receipt(&task_dir, &receipt);
                     write_task_meta(
                         &task_dir,
@@ -564,12 +586,21 @@ impl Runtime {
             "failed",
             path.as_deref(),
         );
+        self.record_activity(
+            routed_brief.as_ref(),
+            &request.prompt,
+            ActivityStatus::Failed,
+            "Agent step limit exceeded",
+            &receipt_actions,
+            &artifacts,
+        );
         let _ = self.events.send(AgentEvent::TaskFailed {
             task_id,
             message: "Agent step limit exceeded".into(),
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_cancelled(
         &mut self,
         task_id: TaskId,
@@ -578,10 +609,78 @@ impl Runtime {
         reset: bool,
         reused_scratch: bool,
         artifacts: &[String],
+        brief: Option<&KnowledgeBrief>,
+        actions: &[String],
     ) {
         let path = self.finish_scratch(reused_scratch, artifacts, reset);
         write_task_meta(task_dir, task_id, prompt, "cancelled", path.as_deref());
+        self.record_activity(
+            brief,
+            prompt,
+            ActivityStatus::Cancelled,
+            "",
+            actions,
+            artifacts,
+        );
         let _ = self.events.send(AgentEvent::TaskCancelled { task_id });
+    }
+
+    fn record_activity(
+        &self,
+        brief: Option<&KnowledgeBrief>,
+        prompt: &str,
+        status: ActivityStatus,
+        result: &str,
+        actions: &[String],
+        artifacts: &[String],
+    ) {
+        let Some(vault) = &self.knowledge else {
+            return;
+        };
+        let follow = brief.and_then(|brief| brief.follow.as_ref());
+        let meaningful = follow.is_some() || !actions.is_empty() || !artifacts.is_empty();
+        if !meaningful {
+            return;
+        }
+        if status != ActivityStatus::Completed && follow.is_none() {
+            return;
+        }
+        let title = follow
+            .map(|follow| follow.procedure.title.as_str())
+            .filter(|title| !title.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| history_title(prompt));
+        let procedure = follow.and_then(|follow| parse_note_id(&follow.procedure.id));
+        let resources = follow
+            .map(|follow| {
+                follow
+                    .requires
+                    .iter()
+                    .chain(follow.uses.iter())
+                    .filter_map(|item| parse_note_id(&item.id))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let knowledge = brief
+            .map(|brief| {
+                brief
+                    .knowledge
+                    .iter()
+                    .filter_map(|item| parse_note_id(&item.id))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let _ = ActivityRecorder::new(vault).record(ActivityRecord {
+            title,
+            result: result.to_string(),
+            status,
+            procedure,
+            resources,
+            knowledge,
+            sources: Vec::new(),
+            actions: actions.to_vec(),
+            artifacts: artifacts.to_vec(),
+        });
     }
 
     fn ensure_scratch(
@@ -1182,6 +1281,30 @@ mod tests {
         (indexed, vault, sqlite)
     }
 
+    fn activity_notes(vault: &Path) -> Vec<PathBuf> {
+        let history = vault.join("history");
+        let mut notes = Vec::new();
+        let Ok(years) = std::fs::read_dir(&history) else {
+            return notes;
+        };
+        for year in years.flatten() {
+            let Ok(months) = std::fs::read_dir(year.path()) else {
+                continue;
+            };
+            for month in months.flatten() {
+                let Ok(files) = std::fs::read_dir(month.path()) else {
+                    continue;
+                };
+                for file in files.flatten() {
+                    if file.path().extension().and_then(|ext| ext.to_str()) == Some("md") {
+                        notes.push(file.path());
+                    }
+                }
+            }
+        }
+        notes
+    }
+
     #[tokio::test]
     async fn command_prompt_injects_lab_procedure_before_the_model_runs() {
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -1230,6 +1353,41 @@ mod tests {
         assert!(system.contains("Required first"));
         assert!(!system.contains("Open WireGuard"));
 
+        let activities = activity_notes(&vault);
+        assert_eq!(activities.len(), 1);
+        let text = std::fs::read_to_string(&activities[0]).unwrap();
+        assert!(text.contains("Check Lab Assignment"));
+        assert!(text.contains("[[Lab VPN]]"));
+        assert!(text.contains("## Result"));
+        assert!(!text.contains("\"arguments\""));
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn simple_question_does_not_write_activity() {
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let (mut runtime, tmp) =
+            test_runtime(echo_builder(), seeded_secrets(), ToolRegistry::new());
+        runtime.knowledge = Some(Arc::new(indexed));
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                task_id,
+                "What is a mutex?",
+            )))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(activity_notes(&vault).is_empty());
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;
