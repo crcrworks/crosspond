@@ -27,6 +27,17 @@ pub fn looks_like_command(prompt: &str) -> bool {
         || text.ends_with('て')
 }
 
+pub fn looks_like_read_later(prompt: &str) -> bool {
+    let lower = prompt.trim().to_lowercase();
+    !lower.is_empty()
+        && (lower.contains("あとで読む")
+            || lower.contains("後で読む")
+            || lower.contains("read later")
+            || lower.contains("save for later")
+            || lower.contains("save this page")
+            || lower.contains("このページを保存"))
+}
+
 pub fn search_queries(prompt: &str) -> Vec<String> {
     let trimmed = prompt.trim();
     if trimmed.is_empty() {
@@ -104,6 +115,9 @@ mod tests {
         assert!(queries.iter().any(|query| query == "研究室の課題確認"));
         assert!(looks_like_command("研究室の課題確認して"));
         assert!(!looks_like_command("研究室のVPNって何?"));
+        assert!(looks_like_read_later("このページをあとで読む"));
+        assert!(looks_like_read_later("Save this page for later"));
+        assert!(!looks_like_read_later("経費精算して"));
     }
 
     #[test]

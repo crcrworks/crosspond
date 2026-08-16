@@ -31,6 +31,7 @@ pub struct ContextCapsule {
     pub frontmost_app: Option<AppContext>,
     pub focused_window: Option<WindowContext>,
     pub selected_text: Option<String>,
+    pub page_url: Option<String>,
     pub selected_files: Vec<PathBuf>,
     pub attachments: Vec<PathBuf>,
 }
@@ -44,6 +45,7 @@ impl std::fmt::Debug for ContextCapsule {
                 "selected_text_chars",
                 &self.selected_text.as_ref().map(|text| text.chars().count()),
             )
+            .field("page_url_present", &self.page_url.is_some())
             .field("selected_files", &self.selected_files.len())
             .field("attachments", &self.attachments.len())
             .finish()
@@ -79,6 +81,7 @@ impl ContextCapsule {
                 .and_then(|window| window.title.as_ref())
                 .is_none()
             && self.selected_text.is_none()
+            && self.page_url.is_none()
             && self.selected_files.is_empty()
             && self.attachments.is_empty()
     }
@@ -100,6 +103,9 @@ impl ContextCapsule {
                 lines.push(format!("Selected text: {n} chars"));
             }
         }
+        if self.page_url.is_some() {
+            lines.push("Current page".into());
+        }
         lines
     }
 
@@ -118,6 +124,7 @@ impl ContextCapsule {
                 .as_ref()
                 .map(|text| text.chars().count())
                 .unwrap_or(0),
+            "page_url_present": self.page_url.is_some(),
             "selected_files": self.selected_files.len(),
         })
     }
@@ -146,6 +153,11 @@ impl ContextCapsule {
             && !title.is_empty()
         {
             lines.push(format!("Focused window: {title}"));
+        }
+        if let Some(url) = &self.page_url
+            && !url.is_empty()
+        {
+            lines.push(format!("Current page URL: {url}"));
         }
         if let Some(text) = &self.selected_text {
             let (body, total) = truncate_chars(text, MAX_AMBIENT_TEXT_CHARS);
@@ -258,6 +270,7 @@ mod tests {
                 pid: 1,
             }),
             selected_text: Some("secret document contents".into()),
+            page_url: Some("https://example.invalid/page?token=secret-token".into()),
             selected_files: vec![PathBuf::from("/tmp/report.csv")],
             ..ContextCapsule::default()
         };
@@ -266,7 +279,8 @@ mod tests {
             badges,
             [
                 "1 selected file".to_string(),
-                "Selected text: 24 chars".into()
+                "Selected text: 24 chars".into(),
+                "Current page".into()
             ]
         );
         assert!(!badges.iter().any(|line| line.contains("Safari")));
@@ -274,8 +288,10 @@ mod tests {
         let log = capsule.log_value().to_string();
         assert!(!log.contains("secret"));
         assert!(!log.contains("report.csv"));
+        assert!(!log.contains("example.invalid"));
         let debug = format!("{capsule:?}");
         assert!(!debug.contains("secret"));
+        assert!(!debug.contains("example.invalid"));
     }
 
     #[test]

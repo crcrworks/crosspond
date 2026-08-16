@@ -42,6 +42,9 @@ fn collect_macos() -> ContextCapsule {
         capsule.focused_window = crate::ax::focused_window_title(app.pid)
             .map(|title| WindowContext { title: Some(title) });
         capsule.selected_text = crate::ax::selected_text(app.pid);
+        if is_browser(&app.bundle_id) {
+            capsule.page_url = crate::ax::document_url(app.pid);
+        }
     }
 
     if app.bundle_id.eq_ignore_ascii_case(FINDER_BUNDLE_ID) {
@@ -76,6 +79,21 @@ pub(crate) fn frontmost_app() -> Option<AppContext> {
     })
 }
 
+fn is_browser(bundle_id: &str) -> bool {
+    matches!(
+        bundle_id,
+        "com.apple.Safari"
+            | "com.apple.SafariTechnologyPreview"
+            | "com.google.Chrome"
+            | "com.google.Chrome.canary"
+            | "com.brave.Browser"
+            | "company.thebrowser.Browser"
+            | "org.mozilla.firefox"
+            | "com.microsoft.edgemac"
+            | "com.operasoftware.Opera"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +102,7 @@ mod tests {
     fn skips_crosspond_bundle() {
         assert_eq!(CROSSPOND_BUNDLE_ID, "com.crosspond.app");
         assert_eq!(FINDER_BUNDLE_ID, "com.apple.finder");
+        assert!(is_browser("com.apple.Safari"));
+        assert!(!is_browser("com.apple.finder"));
     }
 }

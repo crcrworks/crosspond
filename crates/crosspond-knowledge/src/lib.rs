@@ -25,7 +25,7 @@ pub use model::{
 };
 pub use retrieval::{
     KnowledgeBrief, KnowledgeContextRequest, KnowledgeRouter, KnowledgeSummary, looks_like_command,
-    search_queries,
+    looks_like_read_later, search_queries,
 };
 pub use vault::{
     FsVaultRepository, VaultError, VaultRepository, VaultWatcher, WatchMode, parse_wikilinks,

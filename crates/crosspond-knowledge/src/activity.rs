@@ -98,6 +98,7 @@ impl<'a> ActivityRecorder<'a> {
             trust: None,
             relations: None,
             last_verified: Some(day),
+            source_status: None,
             body: None,
         })?;
         Ok(())

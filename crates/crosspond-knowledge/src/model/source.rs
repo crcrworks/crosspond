@@ -8,3 +8,14 @@ pub enum SourceStatus {
     Processed,
     Archived,
 }
+
+impl SourceStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unread => "unread",
+            Self::Processing => "processing",
+            Self::Processed => "processed",
+            Self::Archived => "archived",
+        }
+    }
+}

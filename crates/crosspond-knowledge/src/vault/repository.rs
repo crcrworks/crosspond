@@ -204,6 +204,9 @@ impl VaultRepository for FsVaultRepository {
         if let Some(last_verified) = patch.last_verified {
             note.last_verified = Some(last_verified);
         }
+        if let Some(status) = patch.source_status {
+            note.source_status = Some(status);
+        }
         if let Some(body) = patch.body {
             note.body = body;
         }
@@ -372,6 +375,7 @@ mod tests {
                 trust: None,
                 relations: None,
                 last_verified: None,
+                source_status: None,
                 body: None,
             })
             .unwrap_err();
@@ -424,6 +428,7 @@ mod tests {
                 trust: None,
                 relations: None,
                 last_verified: None,
+                source_status: None,
                 body: Some("# Lab VPN\n\nUpdated profile: Lab.\n".into()),
             })
             .unwrap();

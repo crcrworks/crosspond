@@ -107,5 +107,6 @@ pub struct KnowledgePatch {
     pub trust: Option<TrustLevel>,
     pub relations: Option<Relations>,
     pub last_verified: Option<String>,
+    pub source_status: Option<SourceStatus>,
     pub body: Option<String>,
 }

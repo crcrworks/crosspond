@@ -19,6 +19,14 @@ pub trait KnowledgeBackend: Send + Sync {
         source_kind: Option<&str>,
     ) -> Result<String, String>;
     fn propose_update(&self, id: &str) -> Result<String, String>;
+    fn save_unread(
+        &self,
+        title: &str,
+        body: &str,
+        url: Option<&str>,
+        source_kind: Option<&str>,
+    ) -> Result<String, String>;
+    fn archive_source(&self, id: &str) -> Result<String, String>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,6 +66,8 @@ pub fn register_knowledge_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(KnowledgeFindProcedure));
     registry.register(Arc::new(KnowledgeIngest));
     registry.register(Arc::new(KnowledgeProposeUpdate));
+    registry.register(Arc::new(KnowledgeReadLater));
+    registry.register(Arc::new(KnowledgeArchiveSource));
 }
 
 fn backend(context: &ToolContext) -> Result<&dyn KnowledgeBackend, ToolError> {
@@ -359,7 +369,7 @@ impl Tool for KnowledgeProposeUpdate {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "knowledge_propose_update".into(),
-            description: "Re-plan and apply validated Knowledge updates for an existing Source id. Does not accept arbitrary note bodies.".into(),
+            description: "Process an existing Source id: apply a validated update plan and mark it processed. Does not accept arbitrary note bodies.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -374,6 +384,81 @@ impl Tool for KnowledgeProposeUpdate {
         let id = required_id(&input)?;
         let text = backend(context)?
             .propose_update(&id)
+            .map_err(ToolError::Failed)?;
+        Ok(ToolResult {
+            text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
+struct KnowledgeReadLater;
+
+impl Tool for KnowledgeReadLater {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "knowledge_read_later".into(),
+            description: "Save a URL, selected text, PDF, or local document as an unread Source. Do not pass secrets. Later, knowledge_propose_update connects it into existing notes.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Source title" },
+                    "body": { "type": "string", "description": "Source text (untrusted). For a PDF or binary file, pass the filename only." },
+                    "url": { "type": "string", "description": "Optional page URL" },
+                    "source_kind": { "type": "string", "description": "url, text, pdf, or file" }
+                },
+                "required": ["title"]
+            }),
+        }
+    }
+
+    fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let title = input
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ToolError::Failed("title is required".into()))?;
+        let body = input
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let url = input.get("url").and_then(Value::as_str);
+        let source_kind = input.get("source_kind").and_then(Value::as_str);
+        let text = backend(context)?
+            .save_unread(title, body, url, source_kind)
+            .map_err(ToolError::Failed)?;
+        Ok(ToolResult {
+            text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
+struct KnowledgeArchiveSource;
+
+impl Tool for KnowledgeArchiveSource {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "knowledge_archive_source".into(),
+            description: "Mark a Source as archived. Does not delete the Markdown file.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Source note id" }
+                },
+                "required": ["id"]
+            }),
+        }
+    }
+
+    fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let id = required_id(&input)?;
+        let text = backend(context)?
+            .archive_source(&id)
             .map_err(ToolError::Failed)?;
         Ok(ToolResult {
             text: truncate_output(text),
@@ -444,6 +529,20 @@ mod tests {
         fn propose_update(&self, id: &str) -> Result<String, String> {
             Ok(format!("SOURCE:\n{id}\n"))
         }
+
+        fn save_unread(
+            &self,
+            title: &str,
+            _body: &str,
+            _url: Option<&str>,
+            _source_kind: Option<&str>,
+        ) -> Result<String, String> {
+            Ok(format!("Saved unread source: {title}"))
+        }
+
+        fn archive_source(&self, id: &str) -> Result<String, String> {
+            Ok(format!("Archived source {id}"))
+        }
     }
 
     fn ctx() -> ToolContext {
@@ -495,6 +594,8 @@ mod tests {
         assert!(registry.get("knowledge_find_procedure").is_some());
         assert!(registry.get("knowledge_ingest").is_some());
         assert!(registry.get("knowledge_propose_update").is_some());
+        assert!(registry.get("knowledge_read_later").is_some());
+        assert!(registry.get("knowledge_archive_source").is_some());
         let ingested = KnowledgeIngest
             .execute(
                 &ctx(),
@@ -502,5 +603,12 @@ mod tests {
             )
             .unwrap();
         assert!(ingested.text.contains("Summer Assignment"));
+        let saved = KnowledgeReadLater
+            .execute(
+                &ctx(),
+                json!({ "title": "Safari page", "url": "https://example.invalid", "source_kind": "url" }),
+            )
+            .unwrap();
+        assert!(saved.text.contains("unread"));
     }
 }

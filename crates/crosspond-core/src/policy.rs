@@ -113,6 +113,7 @@ pub fn risk_for_tool(name: &str, scope: PathScope, input: &serde_json::Value) ->
         | "knowledge_backlinks"
         | "knowledge_find_procedure" => RiskLevel::ReadOnly,
         "knowledge_ingest" | "knowledge_propose_update" => RiskLevel::WorkspaceWrite,
+        "knowledge_read_later" | "knowledge_archive_source" => RiskLevel::WorkspaceWrite,
         "open_app" | "focus_app" | "ui_type" | "ui_hotkey" | "ui_scroll" => {
             RiskLevel::ComputerAction
         }
@@ -305,6 +306,22 @@ mod tests {
         assert_eq!(
             evaluate(risk_for_tool(
                 "knowledge_propose_update",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "knowledge_read_later",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "knowledge_archive_source",
                 PathScope::Workspace,
                 &empty_input()
             )),

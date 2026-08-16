@@ -123,6 +123,57 @@ impl<'a> IngestionEngine<'a> {
             })
     }
 
+    pub fn save_unread(&self, capture: SourceCapture) -> Result<KnowledgeNote, VaultError> {
+        let capture = validate_capture(capture)?;
+        let fingerprint = source_fingerprint(&capture);
+        if let Some(existing) = self.find_duplicate(&fingerprint)? {
+            return Ok(existing);
+        }
+        self.vault.create_note(NewKnowledgeNote {
+            kind: NoteKind::Source,
+            title: capture.title.clone(),
+            aliases: Vec::new(),
+            tags: Vec::new(),
+            trust: TrustLevel::External,
+            relations: Relations::default(),
+            resource_kind: None,
+            body: source_body(&capture, &fingerprint),
+            relative_path: None,
+            url: capture.url.clone(),
+            source_kind: capture.source_kind.clone(),
+            source_status: Some(SourceStatus::Unread),
+        })
+    }
+
+    pub fn set_status(
+        &self,
+        source_id: &str,
+        status: SourceStatus,
+    ) -> Result<KnowledgeNote, VaultError> {
+        let note = self.vault.read_indexed(source_id)?;
+        if note.kind != NoteKind::Source {
+            return Err(VaultError::Io("id is not a source note".into()));
+        }
+        let Some(id) = note.id.clone() else {
+            return Err(VaultError::InvalidId);
+        };
+        if note.source_status == Some(status) {
+            return Ok(note);
+        }
+        self.vault.apply_patch(KnowledgePatch {
+            id,
+            expected_hash: note.content_hash,
+            title: None,
+            aliases: None,
+            tags: None,
+            trust: None,
+            relations: None,
+            last_verified: None,
+            source_status: Some(status),
+            body: None,
+        })
+    }
+
     pub fn propose(&self, source_id: &str) -> Result<IngestionPlan, VaultError> {
         let note = self.vault.read_indexed(source_id)?;
         if note.kind != NoteKind::Source {
@@ -375,6 +426,7 @@ impl<'a> IngestionEngine<'a> {
             trust: None,
             relations: Some(relations),
             last_verified: None,
+            source_status: None,
             body: Some(body),
         })?;
         Ok(())
@@ -400,6 +452,7 @@ impl<'a> IngestionEngine<'a> {
             trust: None,
             relations: Some(relations),
             last_verified: None,
+            source_status: None,
             body: None,
         })?;
         Ok(())
@@ -718,6 +771,38 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("Edited in Obsidian"));
         assert!(!text.contains("[[New Laboratory Assignment]]"));
+        let _ = fs::remove_dir_all(vault);
+        let _ = fs::remove_file(sqlite);
+    }
+
+    #[test]
+    fn unread_source_is_processed_into_existing_knowledge() {
+        let (indexed, vault, sqlite) = lab_vault();
+        let engine = IngestionEngine::new(&indexed);
+        let saved = engine
+            .save_unread(SourceCapture {
+                title: "New Laboratory Assignment".into(),
+                body: "Please check the Summer Assignment on the Lab Wiki.\n".into(),
+                url: Some("https://example.invalid/lab/later".into()),
+                source_kind: Some("url".into()),
+            })
+            .unwrap();
+        assert_eq!(saved.source_status, Some(SourceStatus::Unread));
+        let id = saved.id.clone().unwrap().to_string();
+        let plan = engine.propose(&id).unwrap();
+        assert!(
+            plan.update_notes
+                .iter()
+                .any(|update| update.title == "Summer Assignment")
+        );
+        engine.apply(&plan).unwrap();
+        let processed = engine.set_status(&id, SourceStatus::Processed).unwrap();
+        assert_eq!(processed.source_status, Some(SourceStatus::Processed));
+        let archived = engine.set_status(&id, SourceStatus::Archived).unwrap();
+        assert_eq!(archived.source_status, Some(SourceStatus::Archived));
+        let summer = indexed.search("Summer Assignment", 4).unwrap();
+        let note = indexed.read_indexed(&summer[0].id).unwrap();
+        assert!(note.body.contains("[[New Laboratory Assignment]]"));
         let _ = fs::remove_dir_all(vault);
         let _ = fs::remove_file(sqlite);
     }

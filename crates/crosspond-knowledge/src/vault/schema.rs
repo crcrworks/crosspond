@@ -27,7 +27,7 @@ Typed relations live under `relations` (`requires`, `uses`, `related`, `produced
 
 ## Sources
 
-Sources are immutable records. Generated knowledge should list provenance under `sources` and a Sources section.
+Sources are immutable records. Generated knowledge should list provenance under `sources` and a Sources section. Read Later creates a Source with status `unread`; processing marks it `processed`. `archived` hides it from active use without deleting the file.
 
 ## Procedures
 

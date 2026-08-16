@@ -66,16 +66,7 @@ fn frontmatter_value(note: &KnowledgeNote) -> Mapping {
         insert_string(&mut map, "url", value);
     }
     if let Some(status) = note.source_status {
-        insert_string(
-            &mut map,
-            "status",
-            match status {
-                crate::model::SourceStatus::Unread => "unread",
-                crate::model::SourceStatus::Processing => "processing",
-                crate::model::SourceStatus::Processed => "processed",
-                crate::model::SourceStatus::Archived => "archived",
-            },
-        );
+        insert_string(&mut map, "status", status.as_str());
     }
     if let Some(value) = &note.created {
         insert_string(&mut map, "created", value);

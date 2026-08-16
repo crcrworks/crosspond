@@ -4,6 +4,10 @@
 
 The user should never have to prepare the AI before asking for work. No projects, agent pickers, skill pickers, or manual workspace setup.
 
+## Knowledge Vault Phase 8
+
+Read Later is Source ingestion, not a separate silo. A current page URL, selected text, dropped PDF, or local document becomes an unread Source. Later, `knowledge_propose_update` runs the validated ingestion plan and marks it processed. Selected text and page URLs are not written to logs or receipts.
+
 ## Knowledge Vault Phase 7
 
 After a successful command that used several computer/file actions and did not already follow a Procedure, Crosspond asks **Save this as a Procedure?** on the existing Allow card. Approving writes a Procedure from the sanitized receipt (not from arbitrary model Markdown) and links mentioned Resources. The next short command retrieves it.

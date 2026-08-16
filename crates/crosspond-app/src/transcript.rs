@@ -256,6 +256,8 @@ pub fn tool_activity_label(name: &str) -> String {
         "knowledge_read" => "Reading a note…".into(),
         "knowledge_neighbors" | "knowledge_backlinks" => "Following note links…".into(),
         "knowledge_ingest" | "knowledge_propose_update" => "Updating knowledge…".into(),
+        "knowledge_read_later" => "Saving for later…".into(),
+        "knowledge_archive_source" => "Archiving a source…".into(),
         "run_command" => "Running a command…".into(),
         "open_url" => "Opening a URL…".into(),
         "web_search" => "Searching the web…".into(),
@@ -286,6 +288,8 @@ pub fn tool_done_label(name: &str) -> String {
         "knowledge_read" => "Read a note".into(),
         "knowledge_neighbors" | "knowledge_backlinks" => "Followed note links".into(),
         "knowledge_ingest" | "knowledge_propose_update" => "Updated knowledge".into(),
+        "knowledge_read_later" => "Saved for later".into(),
+        "knowledge_archive_source" => "Archived a source".into(),
         "run_command" => "Ran a command".into(),
         "open_url" => "Opened a URL".into(),
         "web_search" => "Searched the web".into(),
@@ -306,7 +310,10 @@ pub fn tool_icon_path(name: &str) -> &'static str {
         "calendar_events" => "icons/file.svg",
         "knowledge_search" | "knowledge_find_procedure" => "icons/search.svg",
         "knowledge_read" | "knowledge_neighbors" | "knowledge_backlinks" => "icons/file.svg",
-        "knowledge_ingest" | "knowledge_propose_update" => "icons/pencil.svg",
+        "knowledge_ingest"
+        | "knowledge_propose_update"
+        | "knowledge_read_later"
+        | "knowledge_archive_source" => "icons/pencil.svg",
         "run_command" | "open_url" => "icons/wrench.svg",
         "web_search" | "fetch_url" => "icons/search.svg",
         _ => "icons/wrench.svg",

@@ -59,6 +59,33 @@ pub fn selected_text(pid: i32) -> Option<String> {
     ax_string(&focused, "AXSelectedText")
 }
 
+pub fn document_url(pid: i32) -> Option<String> {
+    let app = application_element(pid)?;
+    if let Some(focused) = ax_copy(&app, "AXFocusedUIElement")
+        && let Some(url) = ax_url_string(&focused)
+    {
+        return Some(url);
+    }
+    let window = ax_copy(&app, "AXFocusedWindow")?;
+    ax_url_string(&window)
+}
+
+fn ax_url_string(element: &CFType) -> Option<String> {
+    for attribute in ["AXURL", "AXDocument"] {
+        if let Some(value) = ax_string(element, attribute)
+            && looks_like_http_url(&value)
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn looks_like_http_url(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
 fn application_element(pid: i32) -> Option<CFType> {
     // SAFETY: AXUIElementCreateApplication returns a +1 CF object or null.
     let raw = unsafe { AXUIElementCreateApplication(pid) };
