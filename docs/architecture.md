@@ -13,7 +13,7 @@
 
 `crosspond-model` must not depend on `crosspond-core`. `crosspond-knowledge` must not depend on GPUI or `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` from tools.
 
-The Knowledge Vault path is `config.json` `vault_path` (optional). It is not hard-coded under `~/.crosspond`. Markdown files are the source of truth; Crosspond creates `_system/Schema.md`, `Index.md`, and `Log.md` when opening a vault. Search state lives in `~/.crosspond/index/<vault-id>.sqlite` and can be rebuilt from the Markdown. When a vault is configured, `StartTask` runs `KnowledgeRouter` and injects a Knowledge Brief into the system prompt. Command prompts that match a Procedure also get a follow plan (requires before uses). The model reads notes through `knowledge_*` tools (`crosspond-tools` talks to a `KnowledgeBackend` trait; `crosspond-core` adapts `IndexedVault`). Tools must not depend on `crosspond-knowledge`. Computer use stays in the existing tool backends; Procedures are guidance, not a workflow DSL. Completed meaningful tasks write Activity notes under `history/YYYY/MM/` via `ActivityRecorder` (no raw traces). `knowledge_ingest` captures a Source and applies a validated `IngestionPlan` (provenance appends and links to retrieved candidates only; hash conflicts are reported, never overwritten).
+The Knowledge Vault path is `config.json` `vault_path` (optional). It is not hard-coded under `~/.crosspond`. Markdown files are the source of truth; Crosspond creates `_system/Schema.md`, `Index.md`, and `Log.md` when opening a vault. Search state lives in `~/.crosspond/index/<vault-id>.sqlite` and can be rebuilt from the Markdown. When a vault is configured, `StartTask` runs `KnowledgeRouter` and injects a Knowledge Brief into the system prompt. Command prompts that match a Procedure also get a follow plan (requires before uses). The model reads notes through `knowledge_*` tools (`crosspond-tools` talks to a `KnowledgeBackend` trait; `crosspond-core` adapts `IndexedVault`). Tools must not depend on `crosspond-knowledge`. Computer use stays in the existing tool backends; Procedures are guidance, not a workflow DSL. Completed meaningful tasks write Activity notes under `history/YYYY/MM/` via `ActivityRecorder` (no raw traces). `knowledge_ingest` captures a Source and applies a validated `IngestionPlan` (provenance appends and links to retrieved candidates only; hash conflicts are reported, never overwritten). After a guided success with no existing Procedure, Crosspond asks to save a Procedure; the user must Allow, and the body is generated from the receipt rather than from unrestricted model writes.
 
 ## Agent data flow
 
@@ -51,6 +51,8 @@ Option+Space
         │                      write receipt.json under ~/.crosspond/tasks/<task-id>/
         │                      write history/YYYY/MM/*.md Activity when a procedure
         │                        ran or the receipt has actions/artifacts
+        │                      Save this as a Procedure? (Allow) after a guided
+        │                        success with no existing Procedure
  Allow / Cancel  ──mpsc──►     Approve / Reject that action
  Escape / Stop   ──mpsc──►     Cancel the whole task
         │                      (Escape first closes History, then hides)

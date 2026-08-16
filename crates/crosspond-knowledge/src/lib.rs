@@ -5,6 +5,7 @@
 pub mod activity;
 pub mod index;
 pub mod ingest;
+pub mod learn;
 pub mod model;
 pub mod retrieval;
 pub mod vault;
@@ -17,6 +18,7 @@ pub use index::{
 pub use ingest::{
     IngestionEngine, IngestionOutcome, IngestionPlan, SourceCapture, looks_like_secret,
 };
+pub use learn::{LearnRequest, LinkedResource, ProcedureLearner, ProcedureProposal};
 pub use model::{
     KnowledgeId, KnowledgeNote, KnowledgePatch, NewKnowledgeNote, NoteKind, RelationKind,
     Relations, SourceStatus, TrustLevel, WikiLink,

@@ -4,6 +4,10 @@
 
 The user should never have to prepare the AI before asking for work. No projects, agent pickers, skill pickers, or manual workspace setup.
 
+## Knowledge Vault Phase 7
+
+After a successful command that used several computer/file actions and did not already follow a Procedure, Crosspond asks **Save this as a Procedure?** on the existing Allow card. Approving writes a Procedure from the sanitized receipt (not from arbitrary model Markdown) and links mentioned Resources. The next short command retrieves it.
+
 ## Knowledge Vault Phase 6
 
 New Sources are fingerprinted, deduplicated, and turned into a validated `IngestionPlan` (candidates, creates, provenance appends, links, conflicts). Crosspond applies that plan; the model cannot patch arbitrary note bodies. Existing notes are never silently overwritten — hash conflicts stay in the plan. Secrets are refused.

@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use crosspond_knowledge::{
     ActivityRecord, ActivityRecorder, ActivityStatus, IndexedVault, KnowledgeBrief,
-    KnowledgeContextRequest, KnowledgeRouter, VaultWatcher, WatchMode, index_db_path,
-    parse_note_id,
+    KnowledgeContextRequest, KnowledgeRouter, LearnRequest, LinkedResource, ProcedureLearner,
+    VaultWatcher, WatchMode, index_db_path, parse_note_id,
 };
 use crosspond_model::{
     ImagePart, Message, ModelError, ModelEvent, ModelProvider, ModelRequest, ProviderBuilder, Role,
@@ -551,6 +551,31 @@ impl Runtime {
                         actions: receipt_actions,
                         artifacts,
                     };
+                    match self
+                        .offer_procedure_learn(
+                            task_id,
+                            &task_dir,
+                            &request.prompt,
+                            &receipt,
+                            routed_brief.as_ref(),
+                        )
+                        .await
+                    {
+                        LearnOffer::Cancelled { reset } => {
+                            self.finish_cancelled(
+                                task_id,
+                                &request.prompt,
+                                &task_dir,
+                                reset,
+                                reused_scratch,
+                                &receipt.artifacts,
+                                routed_brief.as_ref(),
+                                &receipt.actions,
+                            );
+                            return;
+                        }
+                        LearnOffer::Done => {}
+                    }
                     self.record_activity(
                         routed_brief.as_ref(),
                         &request.prompt,
@@ -623,6 +648,72 @@ impl Runtime {
             artifacts,
         );
         let _ = self.events.send(AgentEvent::TaskCancelled { task_id });
+    }
+
+    async fn offer_procedure_learn(
+        &mut self,
+        task_id: TaskId,
+        task_dir: &Path,
+        prompt: &str,
+        receipt: &Receipt,
+        brief: Option<&KnowledgeBrief>,
+    ) -> LearnOffer {
+        let proposal = {
+            let Some(vault) = &self.knowledge else {
+                return LearnOffer::Done;
+            };
+            let resources = brief
+                .map(|brief| {
+                    brief
+                        .resources
+                        .iter()
+                        .filter_map(|item| {
+                            parse_note_id(&item.id).map(|id| LinkedResource {
+                                id,
+                                title: item.title.clone(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            match ProcedureLearner::new(vault).propose(&LearnRequest {
+                prompt: prompt.to_string(),
+                actions: receipt.actions.clone(),
+                followed_procedure: brief.is_some_and(|brief| brief.follow.is_some()),
+                resources,
+            }) {
+                Ok(Some(proposal)) => proposal,
+                _ => return LearnOffer::Done,
+            }
+        };
+        let approval_id = ApprovalId::new();
+        append_event_log(task_dir, json!({ "type": "procedure_learn_prompted" }));
+        if self
+            .events
+            .send(AgentEvent::ApprovalRequired {
+                task_id,
+                approval_id,
+                title: "Save this as a Procedure?".into(),
+                description: proposal.render(),
+            })
+            .is_err()
+        {
+            return LearnOffer::Cancelled { reset: false };
+        }
+        match self.wait_for_approval(task_id, approval_id).await {
+            ApprovalWait::Approved => {
+                append_event_log(task_dir, json!({ "type": "procedure_learn_saved" }));
+                if let Some(vault) = &self.knowledge {
+                    let _ = ProcedureLearner::new(vault).save(&proposal);
+                }
+                LearnOffer::Done
+            }
+            ApprovalWait::Rejected => {
+                append_event_log(task_dir, json!({ "type": "procedure_learn_skipped" }));
+                LearnOffer::Done
+            }
+            ApprovalWait::Cancelled { reset } => LearnOffer::Cancelled { reset },
+        }
     }
 
     fn record_activity(
@@ -985,6 +1076,11 @@ enum ApprovalOutcome {
 enum ApprovalWait {
     Approved,
     Rejected,
+    Cancelled { reset: bool },
+}
+
+enum LearnOffer {
+    Done,
     Cancelled { reset: bool },
 }
 
@@ -1391,6 +1487,147 @@ mod tests {
         })
         .await;
         assert!(activity_notes(&vault).is_empty());
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn guided_run_can_save_a_procedure_for_the_next_request() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let phase = Arc::new(Mutex::new(0u8));
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            let phase = Arc::clone(&phase);
+            Arc::new(move |_, _, _| {
+                Arc::new(TeachThenEchoProvider {
+                    requests: Arc::clone(&requests),
+                    phase: Arc::clone(&phase),
+                })
+            })
+        };
+        let id = uuid::Uuid::now_v7();
+        let vault = std::env::temp_dir().join(format!("crosspond-learn-rt-vault-{id}"));
+        let sqlite = std::env::temp_dir().join(format!("crosspond-learn-rt-db-{id}.sqlite"));
+        let indexed = IndexedVault::open(&vault, &sqlite).unwrap();
+        let (mut runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        runtime.knowledge = Some(Arc::new(indexed));
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let first = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                first,
+                "経費精算して",
+            )))
+            .unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired {
+                approval_id,
+                title,
+                description,
+                ..
+            } => {
+                assert_eq!(title, "Save this as a Procedure?");
+                assert!(description.contains("経費精算"));
+                command_tx
+                    .send(RuntimeCommand::Approve(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        let second = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                second,
+                "経費精算して",
+            )))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        let system = {
+            let captured = requests.lock().expect("lock");
+            captured
+                .last()
+                .and_then(|messages| {
+                    messages
+                        .iter()
+                        .find(|message| message.role == Role::System)
+                        .map(|message| message.content.clone())
+                })
+                .unwrap_or_default()
+        };
+        assert!(system.contains("経費精算"));
+        assert!(system.contains("How to follow") || system.contains("Procedure"));
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn rejecting_procedure_learn_does_not_create_a_note() {
+        let phase = Arc::new(Mutex::new(0u8));
+        let build: ProviderBuilder = {
+            let phase = Arc::clone(&phase);
+            Arc::new(move |_, _, _| {
+                Arc::new(TeachThenEchoProvider {
+                    requests: Arc::new(Mutex::new(Vec::new())),
+                    phase: Arc::clone(&phase),
+                })
+            })
+        };
+        let id = uuid::Uuid::now_v7();
+        let vault = std::env::temp_dir().join(format!("crosspond-learn-skip-vault-{id}"));
+        let sqlite = std::env::temp_dir().join(format!("crosspond-learn-skip-db-{id}.sqlite"));
+        let indexed = IndexedVault::open(&vault, &sqlite).unwrap();
+        let knowledge = Arc::new(indexed);
+        let (mut runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        runtime.knowledge = Some(Arc::clone(&knowledge));
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "経費精算して",
+            )))
+            .unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(knowledge.find_procedure("経費精算", 8).unwrap().is_empty());
+
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;
@@ -2146,6 +2383,59 @@ mod tests {
 
         drop(command_tx);
         join.await.unwrap();
+    }
+
+    struct TeachThenEchoProvider {
+        requests: Arc<Mutex<Vec<Vec<Message>>>>,
+        phase: Arc<Mutex<u8>>,
+    }
+
+    impl ModelProvider for TeachThenEchoProvider {
+        fn stream(
+            &self,
+            request: ModelRequest,
+            events: UnboundedSender<ModelEvent>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ModelError>> + Send>>
+        {
+            self.requests
+                .lock()
+                .expect("lock")
+                .push(request.messages.clone());
+            let mut phase = self.phase.lock().expect("lock");
+            *phase = phase.saturating_add(1);
+            let phase = *phase;
+            let prompt = request
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == Role::User)
+                .map(|message| message.content.clone())
+                .unwrap_or_default();
+            Box::pin(async move {
+                if phase == 1 {
+                    let _ = events.send(ModelEvent::ToolCall(ToolCall {
+                        id: "call_a".into(),
+                        name: "write_file".into(),
+                        arguments: r#"{"path":"output/a.txt","content":"a"}"#.into(),
+                    }));
+                    let _ = events.send(ModelEvent::ToolCall(ToolCall {
+                        id: "call_b".into(),
+                        name: "write_file".into(),
+                        arguments: r#"{"path":"output/b.txt","content":"b"}"#.into(),
+                    }));
+                } else {
+                    let _ = events.send(ModelEvent::TextDelta(format!("You typed: {prompt}")));
+                }
+                Ok(())
+            })
+        }
+
+        fn test_connection(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ModelError>> + Send>>
+        {
+            Box::pin(async { Ok(()) })
+        }
     }
 
     struct RecordingProvider {
