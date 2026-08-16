@@ -90,6 +90,36 @@ impl IndexedVault {
         Ok(written)
     }
 
+    pub fn apply_patch(
+        &self,
+        patch: crate::model::KnowledgePatch,
+    ) -> Result<KnowledgeNote, VaultError> {
+        let written = self.repo.apply_patch(patch)?;
+        self.index.upsert_note(&written)?;
+        Ok(written)
+    }
+
+    pub fn read_indexed(&self, id: &str) -> Result<KnowledgeNote, VaultError> {
+        if let Some(relative) = id.strip_prefix("path:") {
+            let absolute = self.repo.root().join(relative);
+            let bytes = std::fs::read(&absolute).map_err(|err| VaultError::Io(err.to_string()))?;
+            return crate::vault::parse_markdown(self.repo.root(), &absolute, &bytes);
+        }
+        let knowledge_id = id
+            .parse::<crate::model::KnowledgeId>()
+            .map_err(|_| VaultError::InvalidId)?;
+        self.repo.read_note(&knowledge_id)
+    }
+
+    pub fn find_procedure(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, VaultError> {
+        let hits = self.search(query, limit.max(20))?;
+        Ok(hits
+            .into_iter()
+            .filter(|hit| hit.kind == crate::model::NoteKind::Procedure)
+            .take(limit)
+            .collect())
+    }
+
     pub fn watch(&self, debounce: Duration, mode: WatchMode) -> Result<VaultWatcher, VaultError> {
         VaultWatcher::start(
             self.repo.root().to_path_buf(),
@@ -103,7 +133,7 @@ impl IndexedVault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{NoteKind, Relations, TrustLevel};
+    use crate::model::{NewKnowledgeNote, NoteKind, Relations, TrustLevel};
     use crate::vault::{FsVaultRepository, VaultRepository};
     use std::fs;
     use std::str::FromStr;
@@ -195,6 +225,38 @@ mod tests {
         assert_eq!(before, after);
         let hits = rebuilt.search("Lab Wiki", 10).unwrap();
         assert!(hits.iter().any(|hit| hit.title == "Lab Wiki"));
+        let _ = fs::remove_dir_all(vault);
+        let _ = fs::remove_file(sqlite);
+    }
+
+    #[test]
+    fn find_procedure_filters_to_procedure_notes() {
+        let (vault, sqlite) = temp_paths();
+        let indexed = IndexedVault::open(&vault, &sqlite).unwrap();
+        indexed
+            .create_note(resource(
+                "Lab VPN",
+                &["研究室VPN"],
+                "# Lab VPN\n\nNeeds the lab profile.\n",
+            ))
+            .unwrap();
+        indexed
+            .create_note(NewKnowledgeNote {
+                kind: NoteKind::Procedure,
+                title: "Check Lab Assignment".into(),
+                aliases: vec!["研究室の課題確認".into()],
+                tags: vec!["lab".into()],
+                trust: TrustLevel::User,
+                relations: Relations::default(),
+                resource_kind: None,
+                body: "# Check Lab Assignment\n\nHow to retrieve assignments.\n".into(),
+                relative_path: None,
+            })
+            .unwrap();
+        let hits = indexed.find_procedure("研究室の課題確認", 8).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Check Lab Assignment");
+        assert_eq!(hits[0].kind, NoteKind::Procedure);
         let _ = fs::remove_dir_all(vault);
         let _ = fs::remove_file(sqlite);
     }

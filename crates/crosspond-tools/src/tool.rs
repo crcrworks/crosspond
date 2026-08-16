@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::knowledge::KnowledgeBackend;
 use crate::scratch::ScratchSpace;
 
 /// Truncate tool output so a directory dump cannot blow the context window.
@@ -23,6 +26,8 @@ pub struct ToolContext {
     pub allow_external: bool,
     /// Search provider API key (Exa for now). `Debug` redacts the value.
     pub search_api_key: Option<String>,
+    /// Read-only Knowledge Vault lookup. Absent when no vault is configured.
+    pub knowledge: Option<Arc<dyn KnowledgeBackend>>,
 }
 
 impl ToolContext {
@@ -49,6 +54,7 @@ impl std::fmt::Debug for ToolContext {
                 "search_api_key",
                 &self.search_api_key.as_ref().map(|_| "***"),
             )
+            .field("knowledge", &self.knowledge.as_ref().map(|_| "set"))
             .finish()
     }
 }

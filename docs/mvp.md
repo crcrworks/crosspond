@@ -4,6 +4,12 @@
 
 The user should never have to prepare the AI before asking for work. No projects, agent pickers, skill pickers, or manual workspace setup.
 
+## Knowledge Vault Phase 3
+
+Before the model acts, Crosspond searches the vault and injects a short Knowledge Brief (titles, ids, snippets — not full notes). The agent can then call `knowledge_search`, `knowledge_read`, `knowledge_neighbors`, `knowledge_backlinks`, and `knowledge_find_procedure`. These lookups are read-only and do not need Allow. Vault Sources stay untrusted; Procedures cannot bypass Allow cards.
+
+Acceptance: a vault with Check Lab Assignment / Lab VPN / Lab Wiki / Lab File Server, and the prompt `研究室の課題確認して`, lists Check Lab Assignment (and those resources) in the brief before execution.
+
 ## Knowledge Vault Phase 2
 
 Markdown remains the source of truth. Crosspond keeps a disposable SQLite FTS5 cache outside the vault (`~/.crosspond/index/<vault-id>.sqlite`) for titles, aliases, tags, bodies, and the link graph. A filesystem watcher re-indexes Obsidian edits after a short debounce. Deleting the database and rebuilding from Markdown restores the same searchable state.

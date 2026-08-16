@@ -128,6 +128,58 @@ impl SearchIndex {
         super::graph::backlinks(&conn, id)
     }
 
+    pub fn lookup(&self, id: &str) -> Result<Option<SearchHit>, VaultError> {
+        let conn = lock(&self.conn)?;
+        let mut stmt = conn
+            .prepare("SELECT id, title, kind, path FROM notes WHERE id = ?1")
+            .map_err(index_err)?;
+        let mut rows = stmt.query(params![id]).map_err(index_err)?;
+        match rows.next().map_err(index_err)? {
+            Some(row) => Ok(hit_from_row(
+                row.get(0).map_err(index_err)?,
+                row.get(1).map_err(index_err)?,
+                row.get(2).map_err(index_err)?,
+                row.get(3).map_err(index_err)?,
+                0,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    pub fn recent_kind(
+        &self,
+        kind: crate::model::NoteKind,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, VaultError> {
+        let conn = lock(&self.conn)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, kind, path FROM notes
+                 WHERE kind = ?1
+                 ORDER BY mtime DESC
+                 LIMIT ?2",
+            )
+            .map_err(index_err)?;
+        let rows = stmt
+            .query_map(params![kind.as_str(), limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(index_err)?;
+        let mut hits = Vec::new();
+        for row in rows {
+            let (id, title, kind, path) = row.map_err(index_err)?;
+            if let Some(hit) = hit_from_row(id, title, kind, path, 4) {
+                hits.push(hit);
+            }
+        }
+        Ok(hits)
+    }
+
     pub fn snapshot(&self) -> Result<IndexSnapshot, VaultError> {
         let conn = lock(&self.conn)?;
         let mut notes = query_snapshot_notes(&conn)?;

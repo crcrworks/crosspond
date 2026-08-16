@@ -7,6 +7,7 @@ mod ax_outline;
 mod calendar;
 mod computer;
 mod fs_tools;
+mod knowledge;
 mod path;
 mod registry;
 mod scratch;
@@ -26,6 +27,9 @@ pub use computer::{
     register_computer_tools, register_input_tools, register_screenshot_tools,
 };
 pub use fs_tools::filesystem_registry;
+pub use knowledge::{
+    KnowledgeBackend, KnowledgeEdge, KnowledgeHit, KnowledgeRecord, register_knowledge_tools,
+};
 pub use path::{
     PathError, PathScope, ResolvedPath, classify_write_path, resolve_path, resolve_requested,
 };

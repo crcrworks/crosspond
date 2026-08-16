@@ -11,6 +11,7 @@ mod event;
 mod history;
 mod hotkey;
 mod ids;
+mod knowledge;
 mod policy;
 mod receipt;
 mod runtime;

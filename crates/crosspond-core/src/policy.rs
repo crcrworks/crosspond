@@ -105,7 +105,13 @@ pub fn risk_for_tool(name: &str, scope: PathScope, input: &serde_json::Value) ->
                 RiskLevel::Shell
             }
         }
-        "list_apps" | "calendar_events" => RiskLevel::ReadOnly,
+        "list_apps"
+        | "calendar_events"
+        | "knowledge_search"
+        | "knowledge_read"
+        | "knowledge_neighbors"
+        | "knowledge_backlinks"
+        | "knowledge_find_procedure" => RiskLevel::ReadOnly,
         "open_app" | "focus_app" | "ui_type" | "ui_hotkey" | "ui_scroll" => {
             RiskLevel::ComputerAction
         }
@@ -257,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn list_apps_and_calendar_are_auto() {
+    fn list_apps_calendar_and_knowledge_are_auto() {
         assert_eq!(
             evaluate(risk_for_tool(
                 "list_apps",
@@ -274,6 +280,19 @@ mod tests {
             )),
             PolicyDecision::Allow
         );
+        for tool in [
+            "knowledge_search",
+            "knowledge_read",
+            "knowledge_neighbors",
+            "knowledge_backlinks",
+            "knowledge_find_procedure",
+        ] {
+            assert_eq!(
+                evaluate(risk_for_tool(tool, PathScope::Workspace, &empty_input())),
+                PolicyDecision::Allow,
+                "{tool}"
+            );
+        }
     }
 
     #[test]

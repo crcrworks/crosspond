@@ -17,6 +17,7 @@ pub fn filesystem_registry() -> ToolRegistry {
     registry.register(std::sync::Arc::new(ListDirectory));
     registry.register(std::sync::Arc::new(WriteFile));
     registry.register(std::sync::Arc::new(CreateDirectory));
+    crate::knowledge::register_knowledge_tools(&mut registry);
     registry
 }
 
@@ -508,5 +509,13 @@ mod tests {
             .unwrap();
         assert_eq!(result.text, "external");
         let _ = fs::remove_file(&target);
+    }
+
+    #[test]
+    fn filesystem_registry_includes_knowledge_tools() {
+        let registry = filesystem_registry();
+        assert!(registry.get("knowledge_search").is_some());
+        assert!(registry.get("knowledge_read").is_some());
+        assert!(registry.get("knowledge_find_procedure").is_some());
     }
 }

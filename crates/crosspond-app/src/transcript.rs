@@ -252,6 +252,9 @@ pub fn tool_activity_label(name: &str) -> String {
         "ui_hotkey" => "Sending a shortcut…".into(),
         "ui_scroll" => "Scrolling…".into(),
         "calendar_events" => "Reading the calendar…".into(),
+        "knowledge_search" | "knowledge_find_procedure" => "Searching knowledge…".into(),
+        "knowledge_read" => "Reading a note…".into(),
+        "knowledge_neighbors" | "knowledge_backlinks" => "Following note links…".into(),
         "run_command" => "Running a command…".into(),
         "open_url" => "Opening a URL…".into(),
         "web_search" => "Searching the web…".into(),
@@ -278,6 +281,9 @@ pub fn tool_done_label(name: &str) -> String {
         "ui_hotkey" => "Sent a shortcut".into(),
         "ui_scroll" => "Scrolled".into(),
         "calendar_events" => "Read the calendar".into(),
+        "knowledge_search" | "knowledge_find_procedure" => "Searched knowledge".into(),
+        "knowledge_read" => "Read a note".into(),
+        "knowledge_neighbors" | "knowledge_backlinks" => "Followed note links".into(),
         "run_command" => "Ran a command".into(),
         "open_url" => "Opened a URL".into(),
         "web_search" => "Searched the web".into(),
@@ -296,6 +302,8 @@ pub fn tool_icon_path(name: &str) -> &'static str {
         "ui_press" | "ui_click" | "ui_type" | "ui_hotkey" | "ui_scroll" => "icons/pointer.svg",
         "ui_set_value" => "icons/text.svg",
         "calendar_events" => "icons/file.svg",
+        "knowledge_search" | "knowledge_find_procedure" => "icons/search.svg",
+        "knowledge_read" | "knowledge_neighbors" | "knowledge_backlinks" => "icons/file.svg",
         "run_command" | "open_url" => "icons/wrench.svg",
         "web_search" | "fetch_url" => "icons/search.svg",
         _ => "icons/wrench.svg",
@@ -471,6 +479,8 @@ mod tests {
         assert_eq!(tool_icon_path("fetch_url"), "icons/search.svg");
         assert_eq!(tool_icon_path("list_apps"), "icons/monitor.svg");
         assert_eq!(tool_icon_path("calendar_events"), "icons/file.svg");
+        assert_eq!(tool_icon_path("knowledge_search"), "icons/search.svg");
+        assert_eq!(tool_icon_path("knowledge_read"), "icons/file.svg");
         assert_eq!(tool_icon_path("ui_type"), "icons/pointer.svg");
         assert_eq!(tool_icon_path("run_command"), "icons/wrench.svg");
         assert_eq!(tool_icon_path("unknown_tool"), "icons/wrench.svg");
