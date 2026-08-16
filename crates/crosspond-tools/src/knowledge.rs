@@ -11,6 +11,14 @@ pub trait KnowledgeBackend: Send + Sync {
     fn neighbors(&self, id: &str) -> Result<Vec<KnowledgeEdge>, String>;
     fn backlinks(&self, id: &str) -> Result<Vec<KnowledgeEdge>, String>;
     fn find_procedure(&self, query: &str, limit: usize) -> Result<Vec<KnowledgeHit>, String>;
+    fn ingest(
+        &self,
+        title: &str,
+        body: &str,
+        url: Option<&str>,
+        source_kind: Option<&str>,
+    ) -> Result<String, String>;
+    fn propose_update(&self, id: &str) -> Result<String, String>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,6 +56,8 @@ pub fn register_knowledge_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(KnowledgeNeighbors));
     registry.register(Arc::new(KnowledgeBacklinks));
     registry.register(Arc::new(KnowledgeFindProcedure));
+    registry.register(Arc::new(KnowledgeIngest));
+    registry.register(Arc::new(KnowledgeProposeUpdate));
 }
 
 fn backend(context: &ToolContext) -> Result<&dyn KnowledgeBackend, ToolError> {
@@ -295,6 +305,84 @@ impl Tool for KnowledgeFindProcedure {
     }
 }
 
+struct KnowledgeIngest;
+
+impl Tool for KnowledgeIngest {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "knowledge_ingest".into(),
+            description: "Capture a Source into the Knowledge Vault and apply a validated update plan against existing notes. Do not pass secrets. The vault, not this tool, chooses which notes to create or patch.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Source title" },
+                    "body": { "type": "string", "description": "Source text (untrusted)" },
+                    "url": { "type": "string", "description": "Optional source URL" },
+                    "source_kind": { "type": "string", "description": "url, text, pdf, or file" }
+                },
+                "required": ["title", "body"]
+            }),
+        }
+    }
+
+    fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let title = input
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ToolError::Failed("title is required".into()))?;
+        let body = input
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if body.is_empty() {
+            return Err(ToolError::Failed("body is required".into()));
+        }
+        let url = input.get("url").and_then(Value::as_str);
+        let source_kind = input.get("source_kind").and_then(Value::as_str);
+        let text = backend(context)?
+            .ingest(title, body, url, source_kind)
+            .map_err(ToolError::Failed)?;
+        Ok(ToolResult {
+            text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
+struct KnowledgeProposeUpdate;
+
+impl Tool for KnowledgeProposeUpdate {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "knowledge_propose_update".into(),
+            description: "Re-plan and apply validated Knowledge updates for an existing Source id. Does not accept arbitrary note bodies.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Source note id" }
+                },
+                "required": ["id"]
+            }),
+        }
+    }
+
+    fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let id = required_id(&input)?;
+        let text = backend(context)?
+            .propose_update(&id)
+            .map_err(ToolError::Failed)?;
+        Ok(ToolResult {
+            text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,6 +427,22 @@ mod tests {
 
         fn find_procedure(&self, query: &str, limit: usize) -> Result<Vec<KnowledgeHit>, String> {
             self.search(query, limit)
+        }
+
+        fn ingest(
+            &self,
+            title: &str,
+            _body: &str,
+            _url: Option<&str>,
+            _source_kind: Option<&str>,
+        ) -> Result<String, String> {
+            Ok(format!(
+                "SOURCE:\n{title}\n\nUPDATE:\n- Summer Assignment\n"
+            ))
+        }
+
+        fn propose_update(&self, id: &str) -> Result<String, String> {
+            Ok(format!("SOURCE:\n{id}\n"))
         }
     }
 
@@ -389,5 +493,14 @@ mod tests {
         register_knowledge_tools(&mut registry);
         assert!(registry.get("knowledge_search").is_some());
         assert!(registry.get("knowledge_find_procedure").is_some());
+        assert!(registry.get("knowledge_ingest").is_some());
+        assert!(registry.get("knowledge_propose_update").is_some());
+        let ingested = KnowledgeIngest
+            .execute(
+                &ctx(),
+                json!({ "title": "New Laboratory Assignment", "body": "See Summer Assignment" }),
+            )
+            .unwrap();
+        assert!(ingested.text.contains("Summer Assignment"));
     }
 }

@@ -160,9 +160,9 @@ impl VaultRepository for FsVaultRepository {
             resource_kind: new.resource_kind,
             credential_ref: None,
             last_verified: None,
-            source_kind: None,
-            url: None,
-            source_status: None,
+            source_kind: new.source_kind,
+            url: new.url,
+            source_status: new.source_status,
             created: Some(stamp.clone()),
             updated: Some(stamp.clone()),
             body: new.body,
@@ -282,6 +282,9 @@ mod tests {
             resource_kind: Some("vpn".into()),
             body: "# Lab VPN\n\nVPN required to access internal laboratory services.\n".into(),
             relative_path: None,
+            url: None,
+            source_kind: None,
+            source_status: None,
         }
     }
 

@@ -378,6 +378,9 @@ mod tests {
             resource_kind: resource_kind.map(str::to_string),
             body: body.into(),
             relative_path: None,
+            url: None,
+            source_kind: None,
+            source_status: None,
         }
     }
 

@@ -263,6 +263,9 @@ mod tests {
                 resource_kind: Some("vpn".into()),
                 body: "# Lab VPN\n".into(),
                 relative_path: None,
+                url: None,
+                source_kind: None,
+                source_status: None,
             })
             .unwrap();
         let _watch = indexed

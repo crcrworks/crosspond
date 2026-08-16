@@ -51,6 +51,59 @@ impl KnowledgeBackend for VaultKnowledge {
             vault.find_procedure(q, n)
         })
     }
+
+    fn ingest(
+        &self,
+        title: &str,
+        body: &str,
+        url: Option<&str>,
+        source_kind: Option<&str>,
+    ) -> Result<String, String> {
+        let engine = crosspond_knowledge::IngestionEngine::new(&self.0);
+        let plan = engine
+            .ingest(crosspond_knowledge::SourceCapture {
+                title: title.into(),
+                body: body.into(),
+                url: url.map(str::to_string),
+                source_kind: source_kind.map(str::to_string),
+            })
+            .map_err(|err| err.to_string())?;
+        let outcome = engine.apply(&plan).map_err(|err| err.to_string())?;
+        Ok(render_ingestion(&plan, &outcome))
+    }
+
+    fn propose_update(&self, id: &str) -> Result<String, String> {
+        let engine = crosspond_knowledge::IngestionEngine::new(&self.0);
+        let plan = engine.propose(id).map_err(|err| err.to_string())?;
+        let outcome = engine.apply(&plan).map_err(|err| err.to_string())?;
+        Ok(render_ingestion(&plan, &outcome))
+    }
+}
+
+fn render_ingestion(
+    plan: &crosspond_knowledge::IngestionPlan,
+    outcome: &crosspond_knowledge::IngestionOutcome,
+) -> String {
+    let mut text = plan.render();
+    if !outcome.created.is_empty() {
+        text.push_str("\nAPPLIED CREATE:\n");
+        for id in &outcome.created {
+            text.push_str(&format!("- {id}\n"));
+        }
+    }
+    if !outcome.updated.is_empty() {
+        text.push_str("\nAPPLIED UPDATE:\n");
+        for id in &outcome.updated {
+            text.push_str(&format!("- {id}\n"));
+        }
+    }
+    if !outcome.conflicts.is_empty() {
+        text.push_str("\nAPPLY CONFLICTS:\n");
+        for conflict in &outcome.conflicts {
+            text.push_str(&format!("- {}: {}\n", conflict.title, conflict.reason));
+        }
+    }
+    text
 }
 
 fn collect_hits(

@@ -156,6 +156,9 @@ mod tests {
             resource_kind: Some("vpn".into()),
             body: body.into(),
             relative_path: None,
+            url: None,
+            source_kind: None,
+            source_status: None,
         }
     }
 
@@ -251,6 +254,9 @@ mod tests {
                 resource_kind: None,
                 body: "# Check Lab Assignment\n\nHow to retrieve assignments.\n".into(),
                 relative_path: None,
+                url: None,
+                source_kind: None,
+                source_status: None,
             })
             .unwrap();
         let hits = indexed.find_procedure("研究室の課題確認", 8).unwrap();

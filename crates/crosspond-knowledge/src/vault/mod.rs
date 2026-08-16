@@ -9,6 +9,7 @@ mod watcher;
 mod writer;
 
 pub use error::VaultError;
+pub(crate) use hash::content_hash;
 pub(crate) use parser::parse_markdown;
 pub use parser::parse_wikilinks;
 pub(crate) use paths::default_relative_path;

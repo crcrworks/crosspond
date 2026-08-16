@@ -92,6 +92,9 @@ pub struct NewKnowledgeNote {
     pub resource_kind: Option<String>,
     pub body: String,
     pub relative_path: Option<PathBuf>,
+    pub url: Option<String>,
+    pub source_kind: Option<String>,
+    pub source_status: Option<SourceStatus>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

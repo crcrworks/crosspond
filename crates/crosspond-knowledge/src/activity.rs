@@ -70,6 +70,9 @@ impl<'a> ActivityRecorder<'a> {
             resource_kind: None,
             body,
             relative_path: None,
+            url: None,
+            source_kind: None,
+            source_status: None,
         })?;
         if record.status == ActivityStatus::Completed
             && let Some(procedure) = &record.procedure
@@ -248,6 +251,9 @@ mod tests {
             resource_kind: None,
             body: body.into(),
             relative_path: None,
+            url: None,
+            source_kind: None,
+            source_status: None,
         }
     }
 

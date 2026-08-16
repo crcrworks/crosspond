@@ -4,6 +4,7 @@
 
 pub mod activity;
 pub mod index;
+pub mod ingest;
 pub mod model;
 pub mod retrieval;
 pub mod vault;
@@ -12,6 +13,9 @@ pub use activity::{ActivityRecord, ActivityRecorder, ActivityStatus, parse_note_
 pub use index::{
     IndexSnapshot, IndexedLink, IndexedVault, SearchHit, SearchIndex, index_db_path, index_note_id,
     vault_index_id,
+};
+pub use ingest::{
+    IngestionEngine, IngestionOutcome, IngestionPlan, SourceCapture, looks_like_secret,
 };
 pub use model::{
     KnowledgeId, KnowledgeNote, KnowledgePatch, NewKnowledgeNote, NoteKind, RelationKind,
