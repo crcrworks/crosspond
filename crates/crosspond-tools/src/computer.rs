@@ -878,10 +878,8 @@ impl Tool for UiScroll {
 mod tests {
     use super::*;
     use crate::calendar::MockCalendar;
-    use crate::workspace::Workspace;
     use serde_json::json;
     use std::sync::Mutex;
-    use uuid::Uuid;
 
     struct MockApps;
 
@@ -1070,13 +1068,8 @@ mod tests {
         Arc::new(MockApps)
     }
 
-    fn temp_workspace() -> Workspace {
-        let root = std::env::temp_dir().join(format!("crosspond-ax-{}", Uuid::new_v4()));
-        Workspace::create(root).unwrap()
-    }
-
-    fn ctx(workspace: &Workspace) -> ToolContext {
-        let mut context = ToolContext::new(workspace.clone());
+    fn ctx() -> ToolContext {
+        let mut context = ToolContext::new();
         context.frontmost_name = Some("Safari".into());
         context.frontmost_pid = Some(42);
         context
@@ -1097,10 +1090,9 @@ mod tests {
 
     #[test]
     fn snapshot_and_press_with_numeric_id() {
-        let workspace = temp_workspace();
         let backend = Arc::new(MockAx::checkout());
         let registry = computer_registry(backend, mock_apps());
-        let context = ctx(&workspace);
+        let context = ctx();
         let snap = registry
             .execute("get_accessibility_snapshot", &context, json!({}))
             .unwrap();
@@ -1109,54 +1101,46 @@ mod tests {
             .execute("ui_press", &context, json!({"node_id": 4}))
             .unwrap();
         assert!(pressed.text.contains("Pressed node 4"));
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]
     fn stale_node_id_errors() {
-        let workspace = temp_workspace();
         let err = computer_registry(Arc::new(MockAx::checkout()), mock_apps())
-            .execute("ui_press", &ctx(&workspace), json!({"node_id": "99"}))
+            .execute("ui_press", &ctx(), json!({"node_id": "99"}))
             .unwrap_err();
         assert!(err.to_string().contains("stale"));
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]
     fn press_approval_copy_uses_node_label() {
-        let workspace = temp_workspace();
         let registry = computer_registry(Arc::new(MockAx::checkout()), mock_apps());
         let (title, description) =
-            registry.approval_prompt("ui_press", &ctx(&workspace), &json!({"node_id": "4"}));
+            registry.approval_prompt("ui_press", &ctx(), &json!({"node_id": "4"}));
         assert_eq!(title, "Press \"Continue\"");
         assert_eq!(description, "in Safari");
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]
     fn set_value_approval_hides_secure_text() {
-        let workspace = temp_workspace();
         let registry = computer_registry(Arc::new(MockAx::checkout()), mock_apps());
         let (title, _) = registry.approval_prompt(
             "ui_set_value",
-            &ctx(&workspace),
+            &ctx(),
             &json!({"node_id": "9", "value": "hunter2"}),
         );
         assert_eq!(title, "Fill \"Password\"");
         assert!(!title.contains("hunter2"));
         let (title, _) = registry.approval_prompt(
             "ui_set_value",
-            &ctx(&workspace),
+            &ctx(),
             &json!({"node_id": "2", "value": "a@b.com"}),
         );
         assert!(title.contains("Email"));
         assert!(title.contains("a@b.com"));
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]
     fn screenshot_then_click() {
-        let workspace = temp_workspace();
         let clicks = Arc::new(Mutex::new(Vec::new()));
         let shot = Arc::new(MockShot {
             captured: Mutex::new(0),
@@ -1167,7 +1151,7 @@ mod tests {
             Arc::new(MockAx::checkout()),
             Arc::clone(&shot) as Arc<dyn ScreenshotBackend>,
         );
-        let context = ctx(&workspace);
+        let context = ctx();
         let result = registry
             .execute("take_screenshot", &context, json!({}))
             .unwrap();
@@ -1184,36 +1168,30 @@ mod tests {
         assert!(clicked.image.is_some());
         assert_eq!(*clicks.lock().unwrap(), vec![(10, 20)]);
         assert_eq!(*shot.captured.lock().unwrap(), 2);
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]
     fn click_without_screenshot_errors() {
-        let workspace = temp_workspace();
         let err = full_registry(Arc::new(MockAx::checkout()), Arc::new(MockShot::new()))
-            .execute("ui_click", &ctx(&workspace), json!({"x": 1, "y": 2}))
+            .execute("ui_click", &ctx(), json!({"x": 1, "y": 2}))
             .unwrap_err();
         assert!(err.to_string().contains("take_screenshot"));
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]
     fn click_approval_copy_includes_coordinates() {
-        let workspace = temp_workspace();
         let registry = full_registry(Arc::new(MockAx::checkout()), Arc::new(MockShot::new()));
         let (title, description) =
-            registry.approval_prompt("ui_click", &ctx(&workspace), &json!({"x": 40, "y": 80}));
+            registry.approval_prompt("ui_click", &ctx(), &json!({"x": 40, "y": 80}));
         assert_eq!(title, "Click at (40, 80)");
         assert_eq!(description, "in Safari");
         let (title, _) =
-            registry.approval_prompt("ui_click", &ctx(&workspace), &json!({"x": 40.2, "y": 80.7}));
+            registry.approval_prompt("ui_click", &ctx(), &json!({"x": 40.2, "y": 80.7}));
         assert_eq!(title, "Click at (40, 81)");
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]
     fn click_rejects_origin_corner() {
-        let workspace = temp_workspace();
         let shot = Arc::new(MockShot {
             captured: Mutex::new(0),
             clicks: Arc::new(Mutex::new(Vec::new())),
@@ -1223,15 +1201,13 @@ mod tests {
             Arc::new(MockAx::checkout()),
             shot as Arc<dyn ScreenshotBackend>,
         )
-        .execute("ui_click", &ctx(&workspace), json!({"x": 0, "y": 0}))
+        .execute("ui_click", &ctx(), json!({"x": 0, "y": 0}))
         .unwrap_err();
         assert!(err.to_string().contains("(0, 0)"));
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]
     fn click_accepts_float_coordinates() {
-        let workspace = temp_workspace();
         let clicks = Arc::new(Mutex::new(Vec::new()));
         let shot = Arc::new(MockShot {
             captured: Mutex::new(0),
@@ -1242,30 +1218,24 @@ mod tests {
             Arc::new(MockAx::checkout()),
             shot as Arc<dyn ScreenshotBackend>,
         )
-        .execute("ui_click", &ctx(&workspace), json!({"x": 12.4, "y": 18.6}))
+        .execute("ui_click", &ctx(), json!({"x": 12.4, "y": 18.6}))
         .unwrap();
         assert_eq!(*clicks.lock().unwrap(), vec![(12, 19)]);
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]
     fn list_apps_and_open_app_with_mocks() {
-        let workspace = temp_workspace();
         let registry = full_registry(Arc::new(MockAx::checkout()), Arc::new(MockShot::new()));
-        let listed = registry
-            .execute("list_apps", &ctx(&workspace), json!({}))
-            .unwrap();
+        let listed = registry.execute("list_apps", &ctx(), json!({})).unwrap();
         assert!(listed.text.contains("Safari"));
         let opened = registry
-            .execute("open_app", &ctx(&workspace), json!({"name": "Safari"}))
+            .execute("open_app", &ctx(), json!({"name": "Safari"}))
             .unwrap();
         assert!(opened.text.contains("Opened Safari"));
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]
     fn ui_type_with_mock() {
-        let workspace = temp_workspace();
         let input = Arc::new(MockInput::new());
         let registry = computer_and_screenshot_registry(
             Arc::new(MockAx::checkout()),
@@ -1275,10 +1245,9 @@ mod tests {
             Arc::new(MockCalendar),
         );
         let result = registry
-            .execute("ui_type", &ctx(&workspace), json!({"text": "hello"}))
+            .execute("ui_type", &ctx(), json!({"text": "hello"}))
             .unwrap();
         assert!(result.text.contains("Typed hello"));
         assert_eq!(input.typed.lock().unwrap()[0], ("hello".into(), None));
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 }

@@ -6,9 +6,9 @@ Treat `docs/mvp.md` and `docs/architecture.md` as the product and design source 
 
 Implement one phase at a time. Do not start the next phase until the current one builds, formats, lints, and tests.
 
-Current phase: **12 — Polish (receipts UI, history, onboarding)**.
+Current phase: **Knowledge Vault 0 — Remove mandatory workspace**.
 
-Out of scope until later phases: drag, `kill_app`, exposing cua-driver’s full catalog, signing/notarization.
+Out of scope until later phases: Knowledge Vault Phases 1–8, drag, `kill_app`, exposing cua-driver’s full catalog, signing/notarization.
 
 ## Crate boundaries
 

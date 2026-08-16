@@ -4,7 +4,11 @@
 
 The user should never have to prepare the AI before asking for work. No projects, agent pickers, skill pickers, or manual workspace setup.
 
-## Phase 12 (current)
+## Knowledge Vault Phase 0
+
+Tasks no longer get a workspace directory on start. Chat and computer-use actions run without creating `~/.crosspond/scratch/<task-id>/`. A scratch space is created only when file processing, downloads, or shell execution need a working directory. Existing `~/.crosspond/workspaces/` data is left in place.
+
+## Phase 12 (current product UI)
 
 Polish: a human-readable receipt after each task, recent task history, and first-launch onboarding — on top of the Phase 11 Whole-Mac agent.
 

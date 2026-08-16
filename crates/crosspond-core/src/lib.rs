@@ -14,9 +14,9 @@ mod ids;
 mod policy;
 mod receipt;
 mod runtime;
+mod scratch;
 mod secret;
 mod status;
-mod workspace;
 
 pub use command::{ApprovalId, RuntimeCommand, StartTaskRequest};
 pub use config::{AppConfig, ConfigError, ConfigStore, FileConfigStore, ProviderKind};
@@ -37,6 +37,6 @@ pub use runtime::{
     CommandSender, EventPump, MAX_AGENT_STEPS, MISSING_API_KEY_MESSAGE, RuntimeChannels,
     spawn_runtime, spawn_runtime_with, spawn_runtime_with_tools,
 };
+pub use scratch::default_tasks_root;
 pub use secret::{SecretError, SecretKey, SecretStore, SecretString, provider_key_is_set};
 pub use status::{CommandWindowState, TaskStatus};
-pub use workspace::default_tasks_root;

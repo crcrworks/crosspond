@@ -23,10 +23,10 @@ Option+Space
         │
     show launcher + badges
         │
- Enter / StartTask(+capsule) ──mpsc──►  stage Finder files into input/
+ Enter / StartTask(+capsule) ──mpsc──►  stage Finder files into scratch input/ only if selected
         │                      inject ambient block into system prompt
         │                      OpenAI-compatible stream (text + images)
-        │                      fs tools (workspace auto; external after Allow)
+        │                      fs tools (scratch auto when needed; external after Allow)
         │                      list_apps / open_app / focus_app
         │                      get_accessibility_snapshot / take_screenshot
         │                        (optional app= retarget; else ambient pid)
@@ -64,9 +64,9 @@ Computer tools default to the **ambient** frontmost pid from when the launcher o
 
 Node ids are integers for the latest Accessibility snapshot generation. A new snapshot or a successful UI action invalidates old ids.
 
-Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External reads/writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode. **History** lists recent tasks. Closing the launcher sends `ResetSession`, which drops follow-up history, ambient context, and the session workspace. Past receipts remain under `~/.crosspond/tasks/`.
+Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External reads/writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode. **History** lists recent tasks. Closing the launcher sends `ResetSession`, which drops follow-up history, ambient context, and any session scratch handle. Past receipts remain under `~/.crosspond/tasks/`. Legacy `~/.crosspond/workspaces/` directories are left untouched.
 
-A session reuses one workspace under `~/.crosspond/workspaces/<first-task-id>/`. Finder selections are copied into that workspace’s `input/` on the first turn. Each submit still writes `~/.crosspond/tasks/<task-id>/` (`task.json`, `events.jsonl`, `receipt.json`).
+Tasks do not create a working directory on start. A scratch space under `~/.crosspond/scratch/<task-id>/` is created only when a file, download, or shell tool actually needs one (or when Finder selections are staged into `input/`). Follow-up turns in the same session reuse that scratch. Empty temporary scratches are removed when the task ends. Each submit still writes `~/.crosspond/tasks/<task-id>/` (`task.json`, `events.jsonl`, `receipt.json`).
 
 The agent loop is capped at 16 steps. Tool output is capped at 100KB. Tools run on a blocking thread with a 30s timeout. Selected text is capped at 32,768 characters. AX snapshots cap depth, node count, and text length. Screenshot size is whatever cua-driver returns.
 

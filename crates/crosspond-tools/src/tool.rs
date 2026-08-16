@@ -1,7 +1,7 @@
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::workspace::Workspace;
+use crate::scratch::ScratchSpace;
 
 /// Truncate tool output so a directory dump cannot blow the context window.
 pub const MAX_TOOL_OUTPUT_BYTES: usize = 100 * 1024;
@@ -13,9 +13,10 @@ pub struct ToolDefinition {
     pub parameters: Value,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ToolContext {
-    pub workspace: Workspace,
+    /// Present only after the runtime lazily created a scratch space.
+    pub scratch: Option<ScratchSpace>,
     pub frontmost_name: Option<String>,
     pub frontmost_pid: Option<i32>,
     /// Set only for a single tool call after the user approved an external write.
@@ -25,13 +26,14 @@ pub struct ToolContext {
 }
 
 impl ToolContext {
-    pub fn new(workspace: Workspace) -> Self {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_scratch(scratch: ScratchSpace) -> Self {
         Self {
-            workspace,
-            frontmost_name: None,
-            frontmost_pid: None,
-            allow_external: false,
-            search_api_key: None,
+            scratch: Some(scratch),
+            ..Self::default()
         }
     }
 }
@@ -39,7 +41,7 @@ impl ToolContext {
 impl std::fmt::Debug for ToolContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolContext")
-            .field("workspace", &self.workspace)
+            .field("scratch", &self.scratch)
             .field("frontmost_name", &self.frontmost_name)
             .field("frontmost_pid", &self.frontmost_pid)
             .field("allow_external", &self.allow_external)

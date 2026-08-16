@@ -157,7 +157,8 @@ impl ContextCapsule {
         }
         if !staged.is_empty() {
             lines.push(String::new());
-            lines.push("Selected files were copied into the workspace input/ directory.".into());
+            lines
+                .push("Selected files were copied into the scratch space input/ directory.".into());
             lines.push("Use read_file on those input/ paths.".into());
             for file in staged {
                 lines.push(format!(
@@ -168,7 +169,7 @@ impl ContextCapsule {
             }
         } else if !self.selected_files.is_empty() {
             lines.push(String::new());
-            lines.push("Selected files could not be copied into the workspace:".into());
+            lines.push("Selected files could not be copied into the scratch space:".into());
             for path in &self.selected_files {
                 lines.push(format!("- {}", path.display()));
             }

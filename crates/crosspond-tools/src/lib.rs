@@ -9,11 +9,11 @@ mod computer;
 mod fs_tools;
 mod path;
 mod registry;
+mod scratch;
 mod shell;
 mod ssrf;
 mod tool;
 mod web;
-mod workspace;
 
 pub use ax_outline::{
     AxOutlineNode, MAX_AX_DEPTH, MAX_AX_NODES, MAX_AX_TEXT_CHARS, render_ax_outline,
@@ -26,14 +26,16 @@ pub use computer::{
     register_computer_tools, register_input_tools, register_screenshot_tools,
 };
 pub use fs_tools::filesystem_registry;
-pub use path::{PathError, PathScope, ResolvedPath, classify_write_path, resolve_path};
+pub use path::{
+    PathError, PathScope, ResolvedPath, classify_write_path, resolve_path, resolve_requested,
+};
 pub use registry::ToolRegistry;
+pub use scratch::{ScratchError, ScratchReason, ScratchSpace};
 pub use shell::register_shell_tools;
 pub use ssrf::{is_blocked_ip, validate_fetch_url};
 pub use tool::{
     MAX_TOOL_OUTPUT_BYTES, Tool, ToolContext, ToolDefinition, ToolError, ToolImage, ToolResult,
 };
 pub use web::{format_exa_results, register_web_tools, strip_html, web_tools_registry};
-pub use workspace::{Workspace, WorkspaceError};
 
 pub const MAX_LIST_ENTRIES: usize = 200;

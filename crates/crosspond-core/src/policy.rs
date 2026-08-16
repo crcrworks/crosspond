@@ -131,10 +131,7 @@ fn risk_for_tool_scope(name: &str, scope: PathScope) -> RiskLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::TaskId;
-    use crate::workspace::FsWorkspaceManager;
-    use crate::workspace::WorkspaceManager;
-    use crosspond_tools::classify_write_path;
+    use crosspond_tools::{ScratchSpace, classify_write_path};
     use serde_json::json;
     use std::fs;
 
@@ -169,13 +166,12 @@ mod tests {
     #[test]
     fn write_desktop_requires_approval() {
         let root = std::env::temp_dir().join(format!("crosspond-policy-{}", uuid::Uuid::new_v4()));
-        let manager = FsWorkspaceManager::new(root.join("workspaces"));
-        let workspace = manager.create(TaskId::new()).unwrap();
+        let space = ScratchSpace::create(root.join("scratch")).unwrap();
         let desktop = format!(
             "{}/Desktop/file.txt",
             std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
         );
-        let scope = classify_write_path(&workspace.root, &desktop).unwrap();
+        let scope = classify_write_path(&space.root, &desktop).unwrap();
         assert_eq!(scope, PathScope::External);
         assert_eq!(
             evaluate(risk_for_tool("write_file", scope, &empty_input())),

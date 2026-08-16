@@ -4,6 +4,7 @@ use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PathScope {
+    /// Inside the task scratch space.
     Workspace,
     External,
 }
@@ -18,29 +19,52 @@ pub struct ResolvedPath {
 pub enum PathError {
     #[error("path is required")]
     Empty,
+    #[error("no scratch space is available")]
+    NoScratch,
     #[error("couldn’t resolve path: {0}")]
     Io(String),
 }
 
-/// Resolve `requested` against `workspace` and classify it.
+/// Resolve `requested` against `scratch_root` and classify it.
 ///
 /// Membership uses canonical paths and parent walking, not `Path::starts_with`.
-pub fn resolve_path(workspace: &Path, requested: &str) -> Result<ResolvedPath, PathError> {
+pub fn resolve_path(scratch_root: &Path, requested: &str) -> Result<ResolvedPath, PathError> {
+    resolve_requested(Some(scratch_root), requested)
+}
+
+/// Resolve a tool path when a scratch space may not exist yet.
+///
+/// Relative paths require a scratch root. Absolute paths are always External
+/// when no scratch root is provided.
+pub fn resolve_requested(
+    scratch_root: Option<&Path>,
+    requested: &str,
+) -> Result<ResolvedPath, PathError> {
     let requested = requested.trim();
     if requested.is_empty() {
         return Err(PathError::Empty);
     }
-    let workspace = workspace
+    let raw = Path::new(requested);
+    let Some(scratch_root) = scratch_root else {
+        if !raw.is_absolute() {
+            return Err(PathError::NoScratch);
+        }
+        let path = resolve_components(Path::new("/"), raw)?;
+        return Ok(ResolvedPath {
+            path,
+            scope: PathScope::External,
+        });
+    };
+    let scratch_root = scratch_root
         .canonicalize()
         .map_err(|err| PathError::Io(err.to_string()))?;
-    let raw = Path::new(requested);
     let joined = if raw.is_absolute() {
         raw.to_path_buf()
     } else {
-        workspace.join(raw)
+        scratch_root.join(raw)
     };
-    let path = resolve_components(&workspace, &joined)?;
-    let scope = if is_inside(&workspace, &path) {
+    let path = resolve_components(&scratch_root, &joined)?;
+    let scope = if is_inside(&scratch_root, &path) {
         PathScope::Workspace
     } else {
         PathScope::External
@@ -48,8 +72,8 @@ pub fn resolve_path(workspace: &Path, requested: &str) -> Result<ResolvedPath, P
     Ok(ResolvedPath { path, scope })
 }
 
-pub fn classify_write_path(workspace: &Path, requested: &str) -> Result<PathScope, PathError> {
-    Ok(resolve_path(workspace, requested)?.scope)
+pub fn classify_write_path(scratch_root: &Path, requested: &str) -> Result<PathScope, PathError> {
+    Ok(resolve_path(scratch_root, requested)?.scope)
 }
 
 fn resolve_components(workspace: &Path, joined: &Path) -> Result<PathBuf, PathError> {
@@ -162,5 +186,20 @@ mod tests {
         let root = setup_workspace();
         assert!(matches!(resolve_path(&root, "  "), Err(PathError::Empty)));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn relative_path_without_scratch_errors() {
+        assert!(matches!(
+            resolve_requested(None, "output/hello.txt"),
+            Err(PathError::NoScratch)
+        ));
+    }
+
+    #[test]
+    fn absolute_path_without_scratch_is_external() {
+        let resolved = resolve_requested(None, "/tmp/crosspond-no-scratch.txt").unwrap();
+        assert_eq!(resolved.scope, PathScope::External);
+        assert!(resolved.path.ends_with("crosspond-no-scratch.txt"));
     }
 }
