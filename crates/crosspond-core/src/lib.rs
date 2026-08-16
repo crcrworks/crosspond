@@ -25,7 +25,8 @@ pub use context::{
     StagedInput, WindowContext,
 };
 pub use crosspond_knowledge::{
-    FsVaultRepository, KnowledgeId, KnowledgeNote, NoteKind, VaultError, VaultRepository,
+    FsVaultRepository, IndexedVault, KnowledgeId, KnowledgeNote, NoteKind, SearchHit, SearchIndex,
+    VaultError, VaultRepository, index_db_path,
 };
 pub use event::AgentEvent;
 pub use history::{TaskHistoryEntry, history_group_label, history_title, list_recent_tasks};

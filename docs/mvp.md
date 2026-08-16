@@ -4,6 +4,10 @@
 
 The user should never have to prepare the AI before asking for work. No projects, agent pickers, skill pickers, or manual workspace setup.
 
+## Knowledge Vault Phase 2
+
+Markdown remains the source of truth. Crosspond keeps a disposable SQLite FTS5 cache outside the vault (`~/.crosspond/index/<vault-id>.sqlite`) for titles, aliases, tags, bodies, and the link graph. A filesystem watcher re-indexes Obsidian edits after a short debounce. Deleting the database and rebuilding from Markdown restores the same searchable state.
+
 ## Knowledge Vault Phase 1
 
 Crosspond can open a user-chosen Obsidian-compatible vault and write normal Markdown notes with YAML frontmatter and `[[wikilinks]]`. Opening a vault creates `_system/Schema.md`, `Index.md`, and `Log.md` if they are missing. The vault path is `config.json` `vault_path`, not a folder under `~/.crosspond`.

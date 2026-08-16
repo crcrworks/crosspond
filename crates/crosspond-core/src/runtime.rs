@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crosspond_knowledge::{IndexedVault, VaultWatcher, WatchMode, index_db_path};
 use crosspond_model::{
     ImagePart, Message, ModelError, ModelEvent, ModelProvider, ModelRequest, ProviderBuilder, Role,
     ToolCall, ToolDefinition, default_provider_builder, keep_latest_images,
@@ -156,6 +157,7 @@ pub fn spawn_runtime_with(
 ) -> (RuntimeChannels, JoinHandle<()>) {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (knowledge, vault_watch) = open_vault_index(config.as_ref());
 
     let join = thread::Builder::new()
         .name("crosspond-runtime".into())
@@ -179,6 +181,8 @@ pub fn spawn_runtime_with(
                 session_scratch: None,
                 session_context: ContextCapsule::default(),
                 staged_inputs: Vec::new(),
+                knowledge,
+                _vault_watch: vault_watch,
             }));
         })
         .expect("failed to spawn runtime thread");
@@ -205,6 +209,31 @@ struct Runtime {
     session_scratch: Option<ScratchSpace>,
     session_context: ContextCapsule,
     staged_inputs: Vec<StagedInput>,
+    #[allow(dead_code)]
+    knowledge: Option<Arc<IndexedVault>>,
+    _vault_watch: Option<VaultWatcher>,
+}
+
+fn open_vault_index(config: &dyn ConfigStore) -> (Option<Arc<IndexedVault>>, Option<VaultWatcher>) {
+    let Ok(cfg) = config.load() else {
+        return (None, None);
+    };
+    let Some(vault_path) = cfg.vault_path else {
+        return (None, None);
+    };
+    if vault_path.as_os_str().is_empty() {
+        return (None, None);
+    }
+    let home = std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into());
+    let index_path = index_db_path(&PathBuf::from(home).join(".crosspond"), &vault_path);
+    let Ok(indexed) = IndexedVault::open(vault_path, index_path) else {
+        return (None, None);
+    };
+    let indexed = Arc::new(indexed);
+    let watch = indexed
+        .watch(Duration::from_millis(300), WatchMode::Native)
+        .ok();
+    (Some(indexed), watch)
 }
 
 async fn run_loop(mut runtime: Runtime) {
@@ -967,6 +996,8 @@ mod tests {
             session_scratch: None,
             session_context: ContextCapsule::default(),
             staged_inputs: Vec::new(),
+            knowledge: None,
+            _vault_watch: None,
         };
         (runtime, TempHome(root))
     }

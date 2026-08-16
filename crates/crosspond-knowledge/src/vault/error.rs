@@ -24,4 +24,6 @@ pub enum VaultError {
     ReservedPath(String),
     #[error("couldn’t access vault: {0}")]
     Io(String),
+    #[error("couldn’t update search index: {0}")]
+    Index(String),
 }
