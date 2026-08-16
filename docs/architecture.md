@@ -13,7 +13,7 @@
 
 `crosspond-model` must not depend on `crosspond-core`. `crosspond-knowledge` must not depend on GPUI or `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` from tools.
 
-The Knowledge Vault path is `config.json` `vault_path` (optional). It is not hard-coded under `~/.crosspond`. Markdown files are the source of truth; Crosspond creates `_system/Schema.md`, `Index.md`, and `Log.md` when opening a vault. Search state lives in `~/.crosspond/index/<vault-id>.sqlite` and can be rebuilt from the Markdown. When a vault is configured, `StartTask` runs `KnowledgeRouter` and injects a Knowledge Brief into the system prompt. The model reads notes through `knowledge_*` tools (`crosspond-tools` talks to a `KnowledgeBackend` trait; `crosspond-core` adapts `IndexedVault`). Tools must not depend on `crosspond-knowledge`.
+The Knowledge Vault path is `config.json` `vault_path` (optional). It is not hard-coded under `~/.crosspond`. Markdown files are the source of truth; Crosspond creates `_system/Schema.md`, `Index.md`, and `Log.md` when opening a vault. Search state lives in `~/.crosspond/index/<vault-id>.sqlite` and can be rebuilt from the Markdown. When a vault is configured, `StartTask` runs `KnowledgeRouter` and injects a Knowledge Brief into the system prompt. Command prompts that match a Procedure also get a follow plan (requires before uses). The model reads notes through `knowledge_*` tools (`crosspond-tools` talks to a `KnowledgeBackend` trait; `crosspond-core` adapts `IndexedVault`). Tools must not depend on `crosspond-knowledge`. Computer use stays in the existing tool backends; Procedures are guidance, not a workflow DSL.
 
 ## Agent data flow
 
@@ -29,6 +29,7 @@ Option+Space
  Enter / StartTask(+capsule) ──mpsc──►  stage Finder files into scratch input/ only if selected
         │                      inject ambient block into system prompt
         │                      inject Knowledge Brief when vault_path is set
+        │                      (procedure follow plan: requires → uses → computer tools)
         │                      OpenAI-compatible stream (text + images)
         │                      knowledge_search / knowledge_read /
         │                        knowledge_neighbors / knowledge_backlinks /

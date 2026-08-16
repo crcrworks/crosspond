@@ -6,9 +6,9 @@ Treat `docs/mvp.md` and `docs/architecture.md` as the product and design source 
 
 Implement one phase at a time. Do not start the next phase until the current one builds, formats, lints, and tests.
 
-Current phase: **Knowledge Vault 3 — Agent retrieval**.
+Current phase: **Knowledge Vault 4 — Procedure + computer use**.
 
-Out of scope until later phases: Knowledge Vault Phases 4–8, drag, `kill_app`, exposing cua-driver’s full catalog, signing/notarization.
+Out of scope until later phases: Knowledge Vault Phases 5–8, drag, `kill_app`, exposing cua-driver’s full catalog, signing/notarization.
 
 ## Crate boundaries
 

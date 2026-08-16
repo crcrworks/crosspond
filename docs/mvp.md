@@ -4,6 +4,10 @@
 
 The user should never have to prepare the AI before asking for work. No projects, agent pickers, skill pickers, or manual workspace setup.
 
+## Knowledge Vault Phase 4
+
+When a command matches a Procedure, the brief includes a generic follow plan: required Resources first, then uses. The agent must `knowledge_read` those notes before computer tools and take app names, URLs, and paths from the Markdown — not from a hardcoded demo. Procedures still cannot bypass Allow.
+
 ## Knowledge Vault Phase 3
 
 Before the model acts, Crosspond searches the vault and injects a short Knowledge Brief (titles, ids, snippets — not full notes). The agent can then call `knowledge_search`, `knowledge_read`, `knowledge_neighbors`, `knowledge_backlinks`, and `knowledge_find_procedure`. These lookups are read-only and do not need Allow. Vault Sources stay untrusted; Procedures cannot bypass Allow cards.
