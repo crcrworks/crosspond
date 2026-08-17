@@ -5,6 +5,7 @@ mod activity_label;
 mod assets;
 mod command_window;
 mod launcher;
+mod markdown;
 mod settings;
 mod text_input;
 mod transcript;

@@ -13,6 +13,7 @@ use gpui::{
 };
 
 use crate::activity_label::activity_label;
+use crate::markdown::{self, MarkdownPalette};
 use crate::text_input::TextInput;
 use crate::transcript::{
     LiveActivity, Transcript, TranscriptBlock, tool_activity_label, tool_done_label,
@@ -753,6 +754,7 @@ fn render_task_body(
                 live_thinking == Some(index),
                 muted,
                 result_color,
+                dark,
                 entity.clone(),
             ))
         }))
@@ -1090,6 +1092,7 @@ fn render_transcript_block(
     thinking_live: bool,
     muted: gpui::Rgba,
     result_color: gpui::Rgba,
+    dark: bool,
     entity: Entity<CommandWindow>,
 ) -> impl IntoElement {
     match block {
@@ -1167,14 +1170,11 @@ fn render_transcript_block(
             )
             .into_any_element()
         }
-        TranscriptBlock::Text { text } => div()
-            .flex_none()
-            .whitespace_normal()
-            .text_sm()
-            .line_height(rems(1.35))
-            .text_color(result_color)
-            .child(text.trim_end().to_string())
-            .into_any_element(),
+        TranscriptBlock::Text { text } => markdown::render(
+            text.trim_end(),
+            MarkdownPalette::for_appearance(result_color, muted, dark),
+            index,
+        ),
     }
 }
 

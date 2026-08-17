@@ -93,7 +93,7 @@ Routing:\n\
 ui_click returns a fresh post-click screenshot. Verify before another click; do not retry against an older image.\n\
 Click coordinates and node ids are only valid for the latest snapshot/screenshot.\n\
 {}\n\n\
-When the task is complete, respond concisely with what was accomplished and relevant outputs.",
+When the task is complete, respond concisely with what was accomplished and relevant outputs. Format the user-visible reply in Markdown; use lists, tables, and fenced code when they make the answer easier to scan.",
         computer_approval_prompt(computer_approval)
     );
     if !knowledge_brief.is_empty() {
@@ -1353,6 +1353,7 @@ mod tests {
         );
         assert!(!prompt.contains("knowledge_read"));
         assert!(!prompt.contains("Relevant Knowledge"));
+        assert!(prompt.contains("Format the user-visible reply in Markdown"));
     }
 
     fn lab_indexed_vault() -> (IndexedVault, PathBuf, PathBuf) {

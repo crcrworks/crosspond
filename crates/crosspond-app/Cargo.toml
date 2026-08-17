@@ -15,4 +15,5 @@ crosspond-core.workspace = true
 crosspond-macos.workspace = true
 crosspond-tools.workspace = true
 gpui.workspace = true
+pulldown-cmark.workspace = true
 unicode-segmentation.workspace = true
