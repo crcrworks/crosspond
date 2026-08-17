@@ -167,8 +167,7 @@ pub fn hide(cx: &mut App) {
         launcher.window
     };
     let _ = window.update(cx, |view, window, cx| {
-        // Cancel any in-flight work, but keep the conversation for follow-ups.
-        view.cancel_running_task();
+        // Keep any in-flight task running; the poll loop still delivers events while hidden.
         if !view.in_conversation() {
             window.resize(size(WINDOW_WIDTH, IDLE_HEIGHT));
         }

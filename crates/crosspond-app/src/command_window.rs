@@ -265,11 +265,6 @@ impl CommandWindow {
         self.state != CommandWindowState::Idle || !self.transcript.is_empty()
     }
 
-    /// Cancel a running task without clearing the follow-up session (used when hiding).
-    pub fn cancel_running_task(&mut self) {
-        self.cancel_if_running();
-    }
-
     pub fn sync_size_for_show(&self, window: &mut Window) {
         self.sync_window_size(window);
     }

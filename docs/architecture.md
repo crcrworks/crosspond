@@ -60,7 +60,7 @@ Option+Space
   Escape / Stop   ──mpsc──►     Cancel the whole task
         │                      (Escape first closes History, then hides;
         │                       New sends ResetSession)
-        │                      (hide cancels running work; keeps conversation)
+        │                      (hide keeps conversation and in-flight work)
  AgentEvent      ◄─mpsc──   ContextCollected / AssistantDelta /
         │                      ToolStarted / ApprovalRequired /
         │                      ArtifactCreated / TaskCompleted(+receipt) /
@@ -83,7 +83,7 @@ Computer tools default to the **ambient** frontmost pid from when the launcher o
 
 Node ids are integers for the latest Accessibility snapshot generation. A new snapshot or a successful UI action invalidates old ids.
 
-Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External reads/writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode. **History** lists recent tasks. **New** sends `ResetSession`, which drops follow-up history, ambient context, and any session scratch handle. Hiding the launcher cancels an in-flight task but keeps the conversation so the next show can continue chatting. Past receipts remain under `~/.crosspond/tasks/`. Legacy `~/.crosspond/workspaces/` directories are left untouched.
+Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External reads/writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode. **History** lists recent tasks. **New** sends `ResetSession`, which drops follow-up history, ambient context, and any session scratch handle. Hiding the launcher keeps any in-flight task running and preserves the conversation so the next show can continue chatting. Past receipts remain under `~/.crosspond/tasks/`. Legacy `~/.crosspond/workspaces/` directories are left untouched.
 
 Tasks do not create a working directory on start. A scratch space under `~/.crosspond/scratch/<task-id>/` is created only when a file, download, or shell tool actually needs one (or when Finder selections are staged into `input/`). Follow-up turns in the same session reuse that scratch. Empty temporary scratches are removed when the task ends. Each submit still writes `~/.crosspond/tasks/<task-id>/` (`task.json`, `events.jsonl`, `receipt.json`).
 
