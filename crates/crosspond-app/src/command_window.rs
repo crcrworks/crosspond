@@ -22,7 +22,10 @@ use crate::transcript::{
 };
 use crate::ui;
 
-actions!(command_window, [Submit, HideLauncher, OpenHistory]);
+actions!(
+    command_window,
+    [Submit, HideLauncher, HideWindow, OpenHistory, NewChat]
+);
 
 const ASK_PLACEHOLDER: &str = "Ask or do anything...";
 const FOLLOW_UP_PLACEHOLDER: &str = "Ask a follow-up...";
@@ -33,6 +36,9 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("enter", Submit, Some("CommandWindow")),
         KeyBinding::new("escape", HideLauncher, Some("CommandWindow")),
+        KeyBinding::new("cmd-w", HideWindow, Some("CommandWindow")),
+        KeyBinding::new("cmd-n", NewChat, Some("CommandWindow")),
+        KeyBinding::new("cmd-t", NewChat, Some("CommandWindow")),
         KeyBinding::new("up", OpenHistory, Some("CommandWindow")),
     ]
 }
@@ -423,7 +429,19 @@ impl CommandWindow {
         cx.hide();
     }
 
+    fn on_hide_window(&mut self, _: &HideWindow, _: &mut Window, cx: &mut Context<Self>) {
+        cx.defer(crate::launcher::hide);
+    }
+
+    fn on_new_chat(&mut self, _: &NewChat, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_new_session(window, cx);
+    }
+
     fn on_new(&mut self, _: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_new_session(window, cx);
+    }
+
+    fn start_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.overlay, Overlay::Onboarding { .. }) {
             return;
         }
@@ -762,6 +780,8 @@ impl gpui::Render for CommandWindow {
             .key_context("CommandWindow")
             .on_action(cx.listener(Self::on_submit))
             .on_action(cx.listener(Self::on_escape))
+            .on_action(cx.listener(Self::on_hide_window))
+            .on_action(cx.listener(Self::on_new_chat))
             .on_action(cx.listener(Self::on_open_history))
             .flex()
             .flex_col()
@@ -1648,5 +1668,26 @@ mod tests {
         assert!(!should_stick_to_bottom(px(-100.), px(400.), px(-8.)));
         assert!(!should_stick_to_bottom(px(-400.), px(400.), px(80.)));
         assert!(should_stick_to_bottom(px(-400.), px(400.), px(2.)));
+    }
+
+    fn binds(key: &str, cmd: bool, action: &dyn gpui::Action) -> bool {
+        key_bindings().iter().any(|binding| {
+            let Some(stroke) = binding.keystrokes().first() else {
+                return false;
+            };
+            let inner = stroke.inner();
+            binding.action().partial_eq(action)
+                && binding.keystrokes().len() == 1
+                && inner.key == key
+                && inner.modifiers.platform == cmd
+        })
+    }
+
+    #[test]
+    fn launcher_shortcuts_include_new_chat_and_hide() {
+        assert!(binds("n", true, &NewChat));
+        assert!(binds("t", true, &NewChat));
+        assert!(binds("w", true, &HideWindow));
+        assert!(binds("escape", false, &HideLauncher));
     }
 }
