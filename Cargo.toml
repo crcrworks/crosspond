@@ -54,6 +54,7 @@ block2 = "=0.6.2"
 core-foundation = "=0.10.0"
 libc = "=0.2.189"
 
-# crates.io gpui 0.2.2 plus the zed#51035 deadlock fix. Do not replace with Zed main.
+# crates.io gpui 0.2.2 plus the zed#51035 deadlock fix and PopUp IME patches.
+# Do not replace with Zed main.
 [patch.crates-io]
 gpui = { path = "third_party/gpui" }

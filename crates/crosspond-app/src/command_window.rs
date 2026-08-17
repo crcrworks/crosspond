@@ -294,12 +294,16 @@ impl CommandWindow {
         !self.in_conversation() && matches!(self.overlay, Overlay::None)
     }
 
+    pub(crate) fn input_is_composing(&self, cx: &App) -> bool {
+        self.input.read(cx).is_composing()
+    }
+
     fn on_window_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if window.is_window_active() || !self.is_compact_prompt() {
-            return;
-        }
-        // Settings is a separate window; App::hide() would hide it too.
-        if cx.windows().len() > 1 {
+        if window.is_window_active()
+            || !self.is_compact_prompt()
+            || self.input_is_composing(cx)
+            || cx.windows().len() > 1
+        {
             return;
         }
         cx.defer(crate::launcher::hide_compact_if_unfocused);

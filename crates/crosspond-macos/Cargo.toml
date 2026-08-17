@@ -26,6 +26,7 @@ objc2-foundation = { workspace = true, features = [
     "NSString",
 ] }
 objc2-app-kit = { workspace = true, features = [
+    "NSApplication",
     "NSWorkspace",
     "NSRunningApplication",
     "libc",

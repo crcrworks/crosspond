@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crosspond_core::{AgentEvent, ContextCollector, EventPump, GlobalHotkeyService, HotkeyEvent};
+use crosspond_macos::application_is_active;
 use gpui::{
     App, Bounds, Global, Pixels, Timer, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
     WindowHandle, WindowKind, WindowOptions, point, px, size,
@@ -116,9 +117,9 @@ pub fn toggle(cx: &mut App) {
         let launcher = cx.global::<Launcher>();
         (launcher.visible, launcher.window)
     };
-    // NSPanel hidesOnDeactivate can order the launcher out while `visible` stays
-    // true. Treating that as "already open" made Option+Space call hide() and
-    // look like a freeze.
+    // The panel can be ordered out (click-away, IME edge cases) while `visible`
+    // stays true. Treating that as "already open" made Option+Space call hide()
+    // and look like a freeze.
     let window_key = window
         .update(cx, |_, window, _| window.is_window_active())
         .unwrap_or(false);
@@ -181,13 +182,32 @@ pub fn hide_compact_if_unfocused(cx: &mut App) {
     }
     let window = cx.global::<Launcher>().window;
     let should_hide = window
-        .update(cx, |view, window, _| {
-            !window.is_window_active() && view.is_compact_prompt()
+        .update(cx, |view, window, cx| {
+            should_hide_compact_on_blur(
+                window.is_window_active(),
+                view.is_compact_prompt(),
+                view.input_is_composing(cx),
+                application_is_active(),
+                false,
+            )
         })
         .unwrap_or(false);
     if should_hide {
         hide(cx);
     }
+}
+
+/// Compact idle bar hides on click-away, not when IME or another Crosspond
+/// window takes key. IME candidate palettes resign key without deactivating
+/// the app; hiding then leaves Japanese input stuck in roman-only.
+pub(crate) fn should_hide_compact_on_blur(
+    window_is_key: bool,
+    compact: bool,
+    composing: bool,
+    app_active: bool,
+    extra_windows: bool,
+) -> bool {
+    !window_is_key && compact && !composing && !app_active && !extra_windows
 }
 
 pub fn hide(cx: &mut App) {
@@ -279,5 +299,34 @@ fn poll_once(cx: &mut App) {
         let _ = window.update(cx, |view, window, cx| {
             view.apply_event(event, window, cx);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_hide_compact_on_blur;
+
+    #[test]
+    fn compact_bar_hides_when_the_user_leaves_the_app() {
+        assert!(should_hide_compact_on_blur(
+            false, true, false, false, false
+        ));
+    }
+
+    #[test]
+    fn compact_bar_stays_when_ime_or_settings_take_key() {
+        assert!(!should_hide_compact_on_blur(
+            false, true, false, true, false
+        ));
+        assert!(!should_hide_compact_on_blur(
+            false, true, true, false, false
+        ));
+        assert!(!should_hide_compact_on_blur(
+            false, true, false, false, true
+        ));
+        assert!(!should_hide_compact_on_blur(true, true, false, true, false));
+        assert!(!should_hide_compact_on_blur(
+            false, false, false, false, false
+        ));
     }
 }

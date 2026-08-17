@@ -249,6 +249,18 @@ unsafe fn build_classes() {
                     sel!(characterIndexForPoint:),
                     character_index_for_point as extern "C" fn(&Object, Sel, NSPoint) -> u64,
                 );
+                // NSView defaults to NO. Without this, hide/show drops first
+                // responder and Japanese IME never reattaches (roman only).
+                decl.add_method(
+                    sel!(acceptsFirstResponder),
+                    yes as extern "C" fn(&Object, Sel) -> BOOL,
+                );
+                // Candidate windows sit at NSFloatingWindowLevel unless we
+                // report a higher level. PopUp is NSPopUpWindowLevel (101).
+                decl.add_method(
+                    sel!(windowLevel),
+                    window_level as extern "C" fn(&Object, Sel) -> NSInteger,
+                );
             }
             decl.register()
         };
@@ -803,6 +815,11 @@ impl MacWindow {
                         msg_send![native_view, addTrackingArea: tracking_area.autorelease()];
 
                     native_window.setLevel_(NSPopUpWindowLevel);
+                    // NSPanel defaults: hidesOnDeactivate YES, becomesKeyOnlyIfNeeded
+                    // YES. IME candidate windows then order the panel out and leave
+                    // TSM in roman-only until the next click.
+                    let _: () = msg_send![native_window, setHidesOnDeactivate: NO];
+                    let _: () = msg_send![native_window, setBecomesKeyOnlyIfNeeded: NO];
                     let _: () = msg_send![
                         native_window,
                         setAnimationBehavior: NSWindowAnimationBehaviorUtilityWindow
@@ -1210,12 +1227,15 @@ impl PlatformWindow for MacWindow {
     }
 
     fn activate(&self) {
-        let window = self.0.lock().native_window;
-        let executor = self.0.lock().executor.clone();
+        let (window, view, executor) = {
+            let lock = self.0.lock();
+            (lock.native_window, lock.native_view, lock.executor.clone())
+        };
         executor
             .spawn(async move {
                 unsafe {
                     let _: () = msg_send![window, makeKeyAndOrderFront: nil];
+                    attach_text_input_client(window, view.as_ptr() as id);
                 }
             })
             .detach();
@@ -1483,12 +1503,19 @@ impl PlatformWindow for MacWindow {
     }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {
-        let executor = self.0.lock().executor.clone();
+        let (view, executor) = {
+            let lock = self.0.lock();
+            (lock.native_view, lock.executor.clone())
+        };
         executor
             .spawn(async move {
                 unsafe {
-                    let input_context: id =
+                    let view = view.as_ptr() as id;
+                    let mut input_context: id =
                         msg_send![class!(NSTextInputContext), currentInputContext];
+                    if input_context.is_null() {
+                        input_context = msg_send![view, inputContext];
+                    }
                     if input_context.is_null() {
                         return;
                     }
@@ -1604,6 +1631,32 @@ unsafe fn drop_window_state(object: &Object) {
 
 extern "C" fn yes(_: &Object, _: Sel) -> BOOL {
     YES
+}
+
+/// Re-attach TSM after the window becomes key. `App::hide` / NSPanel
+/// otherwise leaves `NSTextInputContext` inactive, so Japanese IME inserts
+/// roman letters and never shows the candidate window.
+unsafe fn attach_text_input_client(native_window: id, native_view: id) {
+    unsafe {
+        if native_window.is_null() || native_view.is_null() {
+            return;
+        }
+        let _: BOOL = msg_send![native_window, makeFirstResponder: native_view];
+        let input_context: id = msg_send![native_view, inputContext];
+        if input_context.is_null() {
+            return;
+        }
+        let _: () = msg_send![input_context, activate];
+        let _: () = msg_send![input_context, invalidateCharacterCoordinates];
+    }
+}
+
+extern "C" fn window_level(this: &Object, _: Sel) -> NSInteger {
+    unsafe {
+        let state = get_window_state(this);
+        let lock = state.lock();
+        msg_send![lock.native_window, level]
+    }
 }
 
 extern "C" fn dealloc_window(this: &Object, _: Sel) {
@@ -2001,6 +2054,8 @@ extern "C" fn window_did_change_key_status(this: &Object, selector: Sel, _: id) 
     }
 
     let executor = lock.executor.clone();
+    let native_window = lock.native_window;
+    let native_view = lock.native_view.as_ptr() as id;
     drop(lock);
 
     // When a window becomes active, trigger an immediate synchronous frame request to prevent
@@ -2010,6 +2065,9 @@ extern "C" fn window_did_change_key_status(this: &Object, selector: Sel, _: id) 
     // path is properly established. Without this guard, the focus state would remain unset until
     // the first mouse click, causing keybindings to be non-functional.
     if selector == sel!(windowDidBecomeKey:) && is_active {
+        unsafe {
+            attach_text_input_client(native_window, native_view);
+        }
         let window_state = unsafe { get_window_state(this) };
         let mut lock = window_state.lock();
 

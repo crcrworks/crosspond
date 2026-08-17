@@ -96,11 +96,11 @@ GPUI 0.2.2 has no per-window `hide()` / `show()`. The official `examples/window.
 - hide: `App::hide()` (`NSApplication hide:`)
 - show: `App::activate(true)` plus `Window::activate_window()`
 
-crates.io `gpui` 0.2.2 holds a `parking_lot` mutex across `resignKeyWindow` in `window_did_change_key_status`. AppKit delivers `windowDidResignKey` synchronously, re-enters the same function, and deadlocks the main thread (Not Responding). Crosspond uses `[patch.crates-io]` → `third_party/gpui`, which is that crates.io tree plus [zed#51035](https://github.com/zed-industries/zed/pull/51035) (drop the lock first). Do not replace this with Zed `main`.
+crates.io `gpui` 0.2.2 holds a `parking_lot` mutex across `resignKeyWindow` in `window_did_change_key_status`. AppKit delivers `windowDidResignKey` synchronously, re-enters the same function, and deadlocks the main thread (Not Responding). Crosspond uses `[patch.crates-io]` → `third_party/gpui`, which is that crates.io tree plus [zed#51035](https://github.com/zed-industries/zed/pull/51035) (drop the lock first) and macOS IME fixes for PopUp panels (report `windowLevel`, accept first responder, keep the panel on deactivate, re-activate `NSTextInputContext` when the window becomes key). Do not replace this with Zed `main`.
 
 The launcher window is created once (`show: false`) and toggled; it is not destroyed on Escape.
 
-The compact idle command bar (no message sent yet, no History/onboarding overlay) hides when it loses key focus. An expanded conversation stays visible. Hide is skipped when Settings is also open, because `App::hide()` cannot hide only the launcher.
+The compact idle command bar (no message sent yet, no History/onboarding overlay) hides when Crosspond is no longer the active app. An expanded conversation stays visible. Hide is skipped when Settings is also open, because `App::hide()` cannot hide only the launcher. Hide is also skipped while Japanese IME (or another in-app palette) has key without deactivating the app.
 
 `App::hide()` hides Settings as well. That is a known limitation of this GPUI version.
 
@@ -108,6 +108,6 @@ First launch with no API key shows the launcher in onboarding and opens Settings
 
 ## Hotkeys
 
-`GlobalHotkeyService` lives in `crosspond-core`. macOS registers Option + Space with `global-hotkey` on the main thread and exposes `poll()`. The GPUI app drains that poll on a short `Timer` loop, and handles the hotkey before applying queued agent events. If the launcher was ordered out (NSPanel `hidesOnDeactivate`) while the in-memory visible flag stayed true, Option+Space shows rather than calling `App::hide()`. Settings-driven hotkeys come later; the trait is the extension point.
+`GlobalHotkeyService` lives in `crosspond-core`. macOS registers Option + Space with `global-hotkey` on the main thread and exposes `poll()`. The GPUI app drains that poll on a short `Timer` loop, and handles the hotkey before applying queued agent events. If the launcher was ordered out while the in-memory visible flag stayed true, Option+Space shows rather than calling `App::hide()`. Settings-driven hotkeys come later; the trait is the extension point.
 
 ⌘, opens Settings. ⌘N and ⌘T reset the session (same as **New**). ⌘W hides the launcher without cancelling work or clearing the conversation. Escape cancels an in-flight request (including while waiting for approval); closes History if it is open; otherwise it hides the launcher without clearing the conversation. **New** resets the session. Approval **Cancel** rejects only that tool call. Enter submits the prompt. Shift+Enter inserts a newline; the field grows with wrapped lines (capped) and pastes keep line breaks.

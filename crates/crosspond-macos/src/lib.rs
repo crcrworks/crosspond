@@ -30,6 +30,27 @@ pub use keychain::MacOsKeychainSecretStore;
 pub use permissions::{PermissionKind, PermissionSnapshot};
 pub use screenshot::MacOsScreenshot;
 
+/// True when this process is the active macOS application.
+///
+/// Japanese IME candidate windows can steal key from the launcher without
+/// deactivating Crosspond. Callers should not treat that as "click away".
+pub fn application_is_active() -> bool {
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSApplication;
+
+        let Some(mtm) = MainThreadMarker::new() else {
+            return false;
+        };
+        NSApplication::sharedApplication(mtm).isActive()
+    }
+}
+
 /// Accessibility and screenshot backends that share one cua-driver child.
 pub fn macos_computer_backends() -> (MacOsAccessibility, MacOsScreenshot) {
     #[cfg(target_os = "macos")]
