@@ -513,10 +513,13 @@ pub fn tool_activity_label(name: &str) -> String {
         "ui_hotkey" => "Sending a shortcut…".into(),
         "ui_scroll" => "Scrolling…".into(),
         "calendar_events" => "Reading the calendar…".into(),
-        "knowledge_search" | "knowledge_find_procedure" => "Searching knowledge…".into(),
+        "knowledge_search" => "Searching vault…".into(),
+        "knowledge_find_procedure" => "Finding a procedure…".into(),
         "knowledge_read" => "Reading a note…".into(),
-        "knowledge_neighbors" | "knowledge_backlinks" => "Following note links…".into(),
-        "knowledge_ingest" | "knowledge_propose_update" => "Updating knowledge…".into(),
+        "knowledge_neighbors" => "Following note links…".into(),
+        "knowledge_backlinks" => "Finding backlinks…".into(),
+        "knowledge_ingest" => "Ingesting into vault…".into(),
+        "knowledge_propose_update" => "Proposing a vault update…".into(),
         "knowledge_read_later" => "Saving for later…".into(),
         "knowledge_archive_source" => "Archiving a source…".into(),
         "run_command" => "Running a command…".into(),
@@ -545,10 +548,13 @@ pub fn tool_done_label(name: &str) -> String {
         "ui_hotkey" => "Sent a shortcut".into(),
         "ui_scroll" => "Scrolled".into(),
         "calendar_events" => "Read the calendar".into(),
-        "knowledge_search" | "knowledge_find_procedure" => "Searched knowledge".into(),
+        "knowledge_search" => "Searched vault".into(),
+        "knowledge_find_procedure" => "Found a procedure".into(),
         "knowledge_read" => "Read a note".into(),
-        "knowledge_neighbors" | "knowledge_backlinks" => "Followed note links".into(),
-        "knowledge_ingest" | "knowledge_propose_update" => "Updated knowledge".into(),
+        "knowledge_neighbors" => "Followed note links".into(),
+        "knowledge_backlinks" => "Found backlinks".into(),
+        "knowledge_ingest" => "Ingested into vault".into(),
+        "knowledge_propose_update" => "Proposed a vault update".into(),
         "knowledge_read_later" => "Saved for later".into(),
         "knowledge_archive_source" => "Archived a source".into(),
         "run_command" => "Ran a command".into(),
@@ -559,44 +565,16 @@ pub fn tool_done_label(name: &str) -> String {
     }
 }
 
-pub fn tool_verb(name: &str) -> &'static str {
-    match name {
-        "web_search" | "knowledge_search" | "knowledge_find_procedure" => "Searched",
-        "read_file"
-        | "list_directory"
-        | "knowledge_read"
-        | "knowledge_neighbors"
-        | "knowledge_backlinks"
-        | "get_accessibility_snapshot"
-        | "take_screenshot"
-        | "list_apps"
-        | "calendar_events"
-        | "fetch_url" => "Explored",
-        "write_file" | "create_directory" | "knowledge_ingest" | "knowledge_propose_update" => {
-            "Edited"
-        }
-        "knowledge_read_later" => "Saved",
-        "knowledge_archive_source" => "Archived",
-        "run_command" => "Ran",
-        "open_url" | "open_app" => "Opened",
-        "focus_app" => "Focused",
-        "ui_click" => "Clicked",
-        "ui_press" => "Pressed",
-        "ui_type" => "Typed",
-        "ui_set_value" => "Filled",
-        "ui_scroll" => "Scrolled",
-        "ui_hotkey" => "Sent",
-        _ => "Ran",
-    }
-}
-
+/// Tool name plus argument summary, e.g. `knowledge_search  cursor origin`.
+///
+/// Uses the real tool id so vault search is not collapsed into the same
+/// "Searched" label as web search.
 pub fn tool_row_label(name: &str, summary: &str) -> String {
-    let verb = tool_verb(name);
     let summary = summary.trim();
     if summary.is_empty() {
-        verb.to_string()
+        name.to_string()
     } else {
-        format!("{verb}  {summary}")
+        format!("{name}  {summary}")
     }
 }
 
@@ -1110,12 +1088,31 @@ mod tests {
     }
 
     #[test]
-    fn tool_row_label_puts_summary_beside_the_verb() {
-        assert_eq!(tool_verb("web_search"), "Searched");
-        assert_eq!(tool_verb("run_command"), "Ran");
-        assert_eq!(tool_verb("read_file"), "Explored");
-        assert_eq!(tool_row_label("run_command", "ls -la"), "Ran  ls -la");
-        assert_eq!(tool_row_label("ui_type", ""), "Typed");
+    fn tool_row_label_uses_the_tool_name() {
+        assert_eq!(
+            tool_row_label("knowledge_search", "cursor origin"),
+            "knowledge_search  cursor origin"
+        );
+        assert_eq!(
+            tool_row_label("web_search", "cursor origin"),
+            "web_search  cursor origin"
+        );
+        assert_eq!(
+            tool_row_label("knowledge_read", "cp_01a010b7ddd07872a2694132d636125b"),
+            "knowledge_read  cp_01a010b7ddd07872a2694132d636125b"
+        );
+        assert_eq!(
+            tool_row_label(
+                "fetch_url",
+                "https://cursor.com/changelog/origin-code-hosting"
+            ),
+            "fetch_url  https://cursor.com/changelog/origin-code-hosting"
+        );
+        assert_eq!(
+            tool_row_label("run_command", "ls -la"),
+            "run_command  ls -la"
+        );
+        assert_eq!(tool_row_label("ui_type", ""), "ui_type");
     }
 
     #[test]
