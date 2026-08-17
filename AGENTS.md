@@ -36,6 +36,7 @@ model    knowledge
 Do not guess GPUI APIs. Confirm against the pinned crate version:
 
 - `gpui = "=0.2.2"` (crates.io, git revision `69e2130295c2649963eb639fc70b4f2ee8ea1624`)
+- `[patch.crates-io]` → `third_party/gpui` drops the window-state lock before `resignKeyWindow` (zed#51035). Do not vendor Zed `main`.
 - that version's `examples/`
 - compiler errors
 

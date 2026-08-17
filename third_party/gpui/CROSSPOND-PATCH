@@ -1,0 +1,4 @@
+Source: crates.io gpui 0.2.2
+Upstream git: 69e2130295c2649963eb639fc70b4f2ee8ea1624
+Patch: drop MacWindowState lock before resignKeyWindow (https://github.com/zed-industries/zed/pull/51035)
+Excluded: examples/, tests/ (library build only)

@@ -14,8 +14,9 @@ UI-only crates stay isolated so a SwiftUI/AppKit replacement remains possible if
 | --- | --- |
 | Crate | `gpui` |
 | Version | `=0.2.2` |
-| Source | crates.io |
+| Source | crates.io, locally patched at `third_party/gpui` |
 | Upstream git (from `.cargo_vcs_info.json`) | `69e2130295c2649963eb639fc70b4f2ee8ea1624` |
+| Local patch | Drop the `MacWindowState` lock before `resignKeyWindow` ([zed#51035](https://github.com/zed-industries/zed/pull/51035)). crates.io 0.2.2 deadlocks the main thread when a PopUp becomes key. |
 | Declared license | Apache-2.0 |
 | Docs / examples used | `https://docs.rs/gpui/0.2.2/` and the crate's `examples/` |
 
@@ -33,7 +34,7 @@ Confirmed against 0.2.2:
 
 Limitations:
 
-- **No per-window hide/show.** 0.2.2 only closes windows (`remove_window`) or hides the whole app. Crosspond toggles with `hide` / `activate`, matching the official example.
+- **PopUp key-status deadlock (patched).** crates.io 0.2.2 deadlocks the main thread on `resignKeyWindow`; `third_party/gpui` applies [zed#51035](https://github.com/zed-industries/zed/pull/51035).
 - **Metal toolchain.** Xcode 27 does not ship the `metal` compiler until `xcodebuild -downloadComponent MetalToolchain`. GPUI's build script fails without it.
 - **Pre-1.0.** Breaking changes between crates.io and Zed `main` are routine.
 - **`cargo run` is not an `.app` bundle.** `LSUIElement` in `resources/macos/Info.plist` does not apply until the binary is wrapped. Dock icon appears in development.
@@ -73,7 +74,7 @@ Dual-licensed crates that *mention* GPL (`self_cell` Apache-2.0 OR GPL-2.0-only,
 
 ## Recommendation
 
-1. Keep GPUI pinned to `=0.2.2` until a deliberate upgrade.
+1. Keep GPUI pinned to `=0.2.2` until a deliberate upgrade. Keep the `[patch.crates-io]` deadlock fix until that upgrade includes zed#51035.
 2. Keep `crosspond-core` / `model` / `tools` / `macos` free of GPUI.
 3. Re-run this audit in Phase 13, and immediately if the GPUI pin changes.
 4. Do not treat Apache-2.0 on the `gpui` crate as a complete answer for a commercial binary until `option-ext` (MPL) and any future GPL edges are reviewed.
