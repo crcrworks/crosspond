@@ -8,8 +8,9 @@ use crosspond_core::{
     default_tasks_root, history_group_label, list_recent_tasks,
 };
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, KeyBinding, SharedString, Subscription, Timer,
-    Window, actions, div, prelude::*, rems, rgb, size,
+    AnyElement, App, Context, Entity, FocusHandle, KeyBinding, Pixels, ScrollHandle,
+    ScrollWheelEvent, SharedString, Subscription, Timer, Window, actions, div, prelude::*, px,
+    rems, rgb, size,
 };
 
 use crate::activity_label::activity_label;
@@ -25,6 +26,8 @@ actions!(command_window, [Submit, HideLauncher, OpenHistory]);
 
 const ASK_PLACEHOLDER: &str = "Ask or do anything...";
 const FOLLOW_UP_PLACEHOLDER: &str = "Ask a follow-up...";
+/// Follow new output while the transcript is within this many pixels of the bottom.
+const STICK_TO_BOTTOM_THRESHOLD: Pixels = px(64.);
 
 pub fn key_bindings() -> Vec<KeyBinding> {
     vec![
@@ -68,6 +71,8 @@ pub struct CommandWindow {
     computer_approval: ComputerApprovalMode,
     tool_starts: Vec<(String, Instant)>,
     activity: LiveActivity,
+    transcript_scroll: ScrollHandle,
+    stick_to_bottom: bool,
     _input_changes: Subscription,
 }
 
@@ -109,6 +114,8 @@ impl CommandWindow {
             computer_approval,
             tool_starts: Vec::new(),
             activity: LiveActivity::Thinking,
+            transcript_scroll: ScrollHandle::new(),
+            stick_to_bottom: true,
             _input_changes,
         }
     }
@@ -259,6 +266,7 @@ impl CommandWindow {
         self.pending_approval = None;
         self.tool_starts.clear();
         self.activity = LiveActivity::Thinking;
+        self.stick_to_bottom = true;
         self.input.update(cx, |input, cx| {
             input.reset();
             input.set_placeholder(ASK_PLACEHOLDER);
@@ -351,6 +359,7 @@ impl CommandWindow {
         self.overlay = Overlay::None;
         self.pending_approval = None;
         self.activity = LiveActivity::Thinking;
+        self.stick_to_bottom = true;
         self.state = CommandWindowState::PreparingContext;
         self.commands
             .send(RuntimeCommand::StartTask(StartTaskRequest {
@@ -586,6 +595,23 @@ impl CommandWindow {
         self.transcript.toggle_step(block, step);
         cx.notify();
     }
+
+    fn on_transcript_scroll(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        _: &mut Context<Self>,
+    ) {
+        if !matches!(self.overlay, Overlay::None) {
+            return;
+        }
+        let delta = event.delta.pixel_delta(window.line_height());
+        self.stick_to_bottom = should_stick_to_bottom(
+            self.transcript_scroll.offset().y,
+            self.transcript_scroll.max_offset().height,
+            delta.y,
+        );
+    }
 }
 
 impl gpui::Render for CommandWindow {
@@ -674,11 +700,17 @@ impl gpui::Render for CommandWindow {
             entity.clone(),
         );
 
+        if matches!(self.overlay, Overlay::None) && self.stick_to_bottom {
+            self.transcript_scroll.scroll_to_bottom();
+        }
+
         let transcript_pane = div()
             .id("transcript")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&self.transcript_scroll)
+            .on_scroll_wheel(cx.listener(Self::on_transcript_scroll))
             .child(body);
 
         let card = div()
@@ -791,6 +823,17 @@ fn render_input_row(
             }))
         })
         .into_any_element()
+}
+
+/// Pin to new output while the viewport is at (or still gesturing toward) the bottom.
+fn should_stick_to_bottom(offset_y: Pixels, max_height: Pixels, delta_y: Pixels) -> bool {
+    let distance = max_height + offset_y;
+    let effective = if delta_y > px(0.) {
+        distance + delta_y
+    } else {
+        distance
+    };
+    effective <= STICK_TO_BOTTOM_THRESHOLD
 }
 
 fn failed_offers_settings(message: &str) -> bool {
@@ -1567,5 +1610,15 @@ mod tests {
             "Couldn’t connect to your AI provider. 401 Unauthorized"
         ));
         assert!(!failed_offers_settings("Agent step limit exceeded"));
+    }
+
+    #[test]
+    fn stick_to_bottom_follows_only_near_the_end() {
+        assert!(should_stick_to_bottom(px(0.), px(0.), px(0.)));
+        assert!(should_stick_to_bottom(px(-400.), px(400.), px(-12.)));
+        assert!(should_stick_to_bottom(px(-360.), px(400.), px(-8.)));
+        assert!(!should_stick_to_bottom(px(-100.), px(400.), px(-8.)));
+        assert!(!should_stick_to_bottom(px(-400.), px(400.), px(80.)));
+        assert!(should_stick_to_bottom(px(-400.), px(400.), px(2.)));
     }
 }
