@@ -110,6 +110,10 @@ impl CommandWindow {
         self.input.read(cx).focus_handle_clone()
     }
 
+    fn focus_prompt(&self, window: &mut Window, cx: &App) {
+        window.focus(&self.input_focus_handle(cx));
+    }
+
     pub fn apply_event(&mut self, event: AgentEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
             AgentEvent::TaskStarted { task_id, prompt } => {
@@ -152,11 +156,7 @@ impl CommandWindow {
                 self.receipt = Some(receipt);
                 self.state = CommandWindowState::Completed;
                 self.pending_approval = None;
-                self.input.update(cx, |input, cx| {
-                    input.reset();
-                    input.set_placeholder(FOLLOW_UP_PLACEHOLDER);
-                    cx.notify();
-                });
+                self.focus_prompt(window, cx);
             }
             AgentEvent::TaskFailed { task_id, message } => {
                 if self.current_task != Some(task_id) {
@@ -321,8 +321,11 @@ impl CommandWindow {
             return;
         }
 
-        let prompt = self.input.read(cx).text().trim().to_string();
-        if prompt.is_empty() {
+        let (prompt, composing) = {
+            let input = self.input.read(cx);
+            (input.text().trim().to_string(), input.is_composing())
+        };
+        if prompt.is_empty() || composing {
             return;
         }
 
@@ -347,6 +350,7 @@ impl CommandWindow {
             input.set_placeholder(FOLLOW_UP_PLACEHOLDER);
             cx.notify();
         });
+        self.focus_prompt(window, cx);
         self.sync_window_size(window);
         cx.notify();
     }

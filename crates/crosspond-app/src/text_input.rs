@@ -61,6 +61,9 @@ pub struct TextInput {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
+    /// Set after the first paint. GPUI 0.2.2 needs one frame with a dispatch
+    /// tree before IME is safe; after that the handler must stay registered.
+    ime_handler_ready: bool,
 }
 
 impl TextInput {
@@ -75,6 +78,7 @@ impl TextInput {
             last_layout: None,
             last_bounds: None,
             is_selecting: false,
+            ime_handler_ready: false,
         }
     }
 
@@ -86,14 +90,20 @@ impl TextInput {
         self.focus_handle.clone()
     }
 
+    pub fn is_composing(&self) -> bool {
+        self.marked_range
+            .as_ref()
+            .is_some_and(|range| range.start < range.end)
+    }
+
     pub fn reset(&mut self) {
         self.content = "".into();
         self.selected_range = 0..0;
         self.selection_reversed = false;
         self.marked_range = None;
-        self.last_layout = None;
-        self.last_bounds = None;
         self.is_selecting = false;
+        // Keep last_layout / ime_handler_ready. Clearing them unregisters the
+        // macOS IME client for a frame, and Japanese input often stays off.
     }
 
     pub fn set_text(&mut self, text: impl Into<SharedString>) {
@@ -103,8 +113,6 @@ impl TextInput {
         self.selected_range = len..len;
         self.selection_reversed = false;
         self.marked_range = None;
-        self.last_layout = None;
-        self.last_bounds = None;
         self.is_selecting = false;
     }
 
@@ -612,8 +620,8 @@ impl Element for TextElement {
         cx: &mut App,
     ) {
         let focus_handle = self.input.read(cx).focus_handle.clone();
-        let ime_ready = self.input.read(cx).last_layout.is_some();
-        if ime_ready {
+        let ime_handler_ready = self.input.read(cx).ime_handler_ready;
+        if ime_handler_ready {
             window.handle_input(
                 &focus_handle,
                 ElementInputHandler::new(bounds, self.input.clone()),
@@ -623,7 +631,7 @@ impl Element for TextElement {
             // GPUI 0.2.2 registers the IME handler at the end of draw, before
             // swapping in this frame's dispatch tree. Japanese IME then calls
             // doCommandBySelector, which dispatches a key against an empty tree
-            // and aborts (`panic_cannot_unwind`). Wait one frame so the tree exists.
+            // and aborts (`panic_cannot_unwind`). Skip only this first paint.
             window.request_animation_frame();
         }
         if let Some(selection) = prepaint.selection.take() {
@@ -641,6 +649,7 @@ impl Element for TextElement {
         self.input.update(cx, |input, _cx| {
             input.last_layout = Some(line);
             input.last_bounds = Some(bounds);
+            input.ime_handler_ready = true;
         });
     }
 }
