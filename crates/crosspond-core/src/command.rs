@@ -24,7 +24,7 @@ pub enum RuntimeCommand {
     Approve(ApprovalId),
     Reject(ApprovalId),
     Cancel(TaskId),
-    /// Drop in-memory follow-up history. Sent when the launcher hides.
+    /// Drop in-memory follow-up history. Sent when the user starts a new conversation (New).
     ResetSession,
     /// Verify the current provider settings without starting a task.
     TestConnection,

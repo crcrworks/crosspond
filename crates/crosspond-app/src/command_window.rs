@@ -144,7 +144,9 @@ impl CommandWindow {
                 if self.current_task != Some(task_id) {
                     return;
                 }
-                if !self.transcript.has_assistant_text() && !summary.trim().is_empty() {
+                if !self.transcript.has_assistant_text_since_last_user()
+                    && !summary.trim().is_empty()
+                {
                     self.transcript.push_text(&summary);
                 }
                 self.receipt = Some(receipt);
@@ -258,6 +260,20 @@ impl CommandWindow {
         cx.notify();
     }
 
+    /// True once the user has started a conversation that should persist across hide.
+    pub fn in_conversation(&self) -> bool {
+        self.state != CommandWindowState::Idle || !self.transcript.is_empty()
+    }
+
+    /// Cancel a running task without clearing the follow-up session (used when hiding).
+    pub fn cancel_running_task(&mut self) {
+        self.cancel_if_running();
+    }
+
+    pub fn sync_size_for_show(&self, window: &mut Window) {
+        self.sync_window_size(window);
+    }
+
     pub fn set_ambient_context(
         &mut self,
         ambient: ContextCapsule,
@@ -318,7 +334,7 @@ impl CommandWindow {
         let task_id = TaskId::new();
         self.current_task = Some(task_id);
         self.prompt = prompt.clone();
-        self.transcript.clear();
+        self.transcript.push_user(&prompt);
         self.artifacts.clear();
         self.receipt = None;
         self.overlay = Overlay::None;
@@ -333,6 +349,7 @@ impl CommandWindow {
             }));
         self.input.update(cx, |input, cx| {
             input.reset();
+            input.set_placeholder(FOLLOW_UP_PLACEHOLDER);
             cx.notify();
         });
         self.sync_window_size(window);
@@ -361,10 +378,19 @@ impl CommandWindow {
             cx.notify();
             return;
         }
-        self.reset_session(cx);
-        self.sync_window_size(window);
+        // Keep the conversation; only New clears it.
         crate::launcher::mark_hidden(cx);
         cx.hide();
+    }
+
+    fn on_new(&mut self, _: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.overlay, Overlay::Onboarding { .. }) {
+            return;
+        }
+        self.reset_session(cx);
+        self.sync_window_size(window);
+        crate::launcher::recollect_ambient(cx);
+        cx.notify();
     }
 
     fn on_open_history(&mut self, _: &OpenHistory, window: &mut Window, cx: &mut Context<Self>) {
@@ -481,13 +507,13 @@ impl CommandWindow {
     fn sync_window_size(&self, window: &mut Window) {
         let current = window.viewport_size();
         let min_width = crate::launcher::WINDOW_WIDTH;
-        let min_height =
-            if self.state == CommandWindowState::Idle && matches!(self.overlay, Overlay::None) {
-                crate::launcher::idle_height(self.ambient.badge_lines().len())
-            } else {
-                crate::launcher::RESULT_HEIGHT
-            };
-        if self.state == CommandWindowState::Idle && matches!(self.overlay, Overlay::None) {
+        let compact = !self.in_conversation() && matches!(self.overlay, Overlay::None);
+        let min_height = if compact {
+            crate::launcher::idle_height(self.ambient.badge_lines().len())
+        } else {
+            crate::launcher::RESULT_HEIGHT
+        };
+        if compact {
             window.resize(size(min_width, min_height));
             return;
         }
@@ -552,10 +578,6 @@ impl gpui::Render for CommandWindow {
             .then(|| self.transcript.live_thinking_index())
             .flatten();
         let status = heartbeat_status(self.state, &self.transcript, &self.activity);
-        let prompt_label = (!self.prompt.is_empty()
-            && self.state != CommandWindowState::Idle
-            && matches!(self.overlay, Overlay::None))
-        .then(|| self.prompt.clone());
         let artifacts = self.artifacts.clone();
         let receipt = self.receipt.clone();
         let blocks: Vec<(usize, TranscriptBlock)> = self
@@ -575,7 +597,10 @@ impl gpui::Render for CommandWindow {
             CommandWindowState::Running | CommandWindowState::PreparingContext
         );
         let onboarding = matches!(self.overlay, Overlay::Onboarding { .. });
+        let chat_layout =
+            self.in_conversation() && matches!(self.overlay, Overlay::None) && !onboarding;
         let show_history = !self.is_busy() && !onboarding;
+        let show_new = chat_layout;
         let failed_settings = self.state == CommandWindowState::Failed
             && matches!(self.overlay, Overlay::None)
             && self
@@ -584,7 +609,7 @@ impl gpui::Render for CommandWindow {
                 .iter()
                 .any(|block| matches!(block, TranscriptBlock::Text { text } if failed_offers_settings(text)));
         let mode_label = self.computer_approval.button_label();
-        let badges = if onboarding {
+        let badges = if onboarding || chat_layout {
             Vec::new()
         } else {
             self.ambient.badge_lines()
@@ -616,6 +641,50 @@ impl gpui::Render for CommandWindow {
             ),
         };
 
+        let input_row = render_input_row(
+            self.input.clone(),
+            onboarding,
+            show_new,
+            show_history,
+            show_stop,
+            mode_label,
+            dark,
+            entity.clone(),
+        );
+
+        let transcript_pane = div()
+            .id("transcript")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .child(body);
+
+        let card = div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .rounded_xl()
+            .border_1()
+            .border_color(border)
+            .bg(bg)
+            .shadow_lg()
+            .text_color(text)
+            .px_4()
+            .py_3()
+            .gap_2();
+
+        let card = if chat_layout {
+            card.child(transcript_pane).child(input_row)
+        } else {
+            card.child(input_row)
+                .children(
+                    badges
+                        .into_iter()
+                        .map(|line| div().flex_none().text_xs().text_color(muted).child(line)),
+                )
+                .child(transcript_pane)
+        };
+
         div()
             .key_context("CommandWindow")
             .on_action(cx.listener(Self::on_submit))
@@ -625,89 +694,79 @@ impl gpui::Render for CommandWindow {
             .flex_col()
             .size_full()
             .p_2()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .size_full()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(border)
-                    .bg(bg)
-                    .shadow_lg()
-                    .text_color(text)
-                    .px_4()
-                    .py_3()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_3()
-                            .child(div().size_2().rounded_full().bg(rgb(0x30d158)))
-                            .when(onboarding, |row| {
-                                row.child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_sm()
-                                        .child("Welcome to Crosspond"),
-                                )
-                            })
-                            .when(!onboarding, |row| {
-                                row.child(div().flex_1().min_w_0().child(self.input.clone()))
-                                    .child(ui::button("ui-mode", mode_label, dark, {
-                                        let entity = entity.clone();
-                                        move |event, window, cx| {
-                                            entity.update(cx, |this, cx| {
-                                                this.on_cycle_computer_approval(event, window, cx);
-                                            });
-                                        }
-                                    }))
-                            })
-                            .when(show_history, |row| {
-                                row.child(ui::button("history", "History", dark, {
-                                    let entity = entity.clone();
-                                    move |event, window, cx| {
-                                        entity.update(cx, |this, cx| {
-                                            this.on_history_button(event, window, cx);
-                                        });
-                                    }
-                                }))
-                            })
-                            .when(show_stop, |parent| {
-                                parent.child(ui::button("stop", "Stop", dark, {
-                                    let entity = entity.clone();
-                                    move |event, window, cx| {
-                                        entity.update(cx, |this, cx| {
-                                            this.on_stop(event, window, cx);
-                                        });
-                                    }
-                                }))
-                            }),
-                    )
-                    .children(
-                        badges
-                            .into_iter()
-                            .map(|line| div().flex_none().text_xs().text_color(muted).child(line)),
-                    )
-                    .children(
-                        prompt_label.map(|prompt| {
-                            div().flex_none().text_sm().text_color(muted).child(prompt)
-                        }),
-                    )
-                    .child(
-                        div()
-                            .id("transcript")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .child(body),
-                    ),
-            )
+            .child(card)
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_input_row(
+    input: Entity<TextInput>,
+    onboarding: bool,
+    show_new: bool,
+    show_history: bool,
+    show_stop: bool,
+    mode_label: &'static str,
+    dark: bool,
+    entity: Entity<CommandWindow>,
+) -> AnyElement {
+    div()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .child(div().size_2().rounded_full().bg(rgb(0x30d158)))
+        .when(onboarding, |row| {
+            row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .child("Welcome to Crosspond"),
+            )
+        })
+        .when(!onboarding, |row| {
+            row.child(div().flex_1().min_w_0().child(input))
+                .child(ui::button("ui-mode", mode_label, dark, {
+                    let entity = entity.clone();
+                    move |event, window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.on_cycle_computer_approval(event, window, cx);
+                        });
+                    }
+                }))
+        })
+        .when(show_new, |row| {
+            row.child(ui::button("new", "New", dark, {
+                let entity = entity.clone();
+                move |event, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.on_new(event, window, cx);
+                    });
+                }
+            }))
+        })
+        .when(show_history, |row| {
+            row.child(ui::button("history", "History", dark, {
+                let entity = entity.clone();
+                move |event, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.on_history_button(event, window, cx);
+                    });
+                }
+            }))
+        })
+        .when(show_stop, |parent| {
+            parent.child(ui::button("stop", "Stop", dark, {
+                let entity = entity.clone();
+                move |event, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.on_stop(event, window, cx);
+                    });
+                }
+            }))
+        })
+        .into_any_element()
 }
 
 fn failed_offers_settings(message: &str) -> bool {
@@ -1096,6 +1155,17 @@ fn render_transcript_block(
     entity: Entity<CommandWindow>,
 ) -> impl IntoElement {
     match block {
+        TranscriptBlock::User { text } => div()
+            .flex_none()
+            .w_full()
+            .pt_1()
+            .pb_1()
+            .text_sm()
+            .text_color(muted)
+            .whitespace_normal()
+            .line_height(rems(1.35))
+            .child(text)
+            .into_any_element(),
         TranscriptBlock::Thinking { text, expanded } => {
             let label = if thinking_live {
                 "Thinking".to_string()

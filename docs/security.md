@@ -64,7 +64,7 @@ The system prompt includes this untrusted-content line. Ambient selected text an
 
 ## Cancellation
 
-Escape / Stop must abort in-flight model requests, abandon a pending approval, and skip remaining tool calls. Hiding the launcher cancels a running task and clears the follow-up session. Closing the UI must not leave a background task running.
+Escape / Stop must abort in-flight model requests, abandon a pending approval, and skip remaining tool calls. Hiding the launcher cancels a running task but keeps the follow-up conversation; **New** clears the session. Closing the UI must not leave a background task running.
 
 ## Permissions
 

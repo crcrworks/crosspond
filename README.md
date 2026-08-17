@@ -29,7 +29,7 @@ Then:
 5. Press **Option + Space**. A badge should show the app and “Selected text: N chars” or “N selected files”.
 6. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions show an **Allow** / **Cancel** card first (unless Auto). After a task, a receipt lists what changed; **History** opens recent tasks.
 
-**Escape** or **Stop** cancels the whole task. Approval **Cancel** rejects only that action. Hiding the window starts a new session.
+**Escape** or **Stop** cancels the whole task. Approval **Cancel** rejects only that action. Hiding the window cancels a running task but keeps the conversation; press **New** to start fresh.
 
 If hotkey registration fails, the window opens immediately so the app is still usable.
 

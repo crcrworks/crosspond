@@ -133,9 +133,14 @@ pub fn show(cx: &mut App) {
         collector = Arc::clone(&launcher.collector);
         window = launcher.window;
     }
+    let in_conversation = window
+        .update(cx, |view, _, _| view.in_conversation())
+        .unwrap_or(false);
     // Collect before Crosspond becomes frontmost, otherwise "this" is ourselves.
     // Skip on first launch so we do not prompt for Accessibility.
-    let ambient = (!already_visible && !needs_onboarding).then(|| collector.collect());
+    // Skip when restoring an existing conversation so ambient badges stay from that session.
+    let ambient =
+        (!already_visible && !needs_onboarding && !in_conversation).then(|| collector.collect());
     cx.global_mut::<Launcher>().visible = true;
     cx.activate(true);
     let _ = window.update(cx, |view, window, cx| {
@@ -144,6 +149,7 @@ pub fn show(cx: &mut App) {
         } else if let Some(ambient) = ambient {
             view.set_ambient_context(ambient, window, cx);
         }
+        view.sync_size_for_show(window);
         window.activate_window();
         let focus = view.input_focus_handle(cx);
         window.focus(&focus);
@@ -161,10 +167,40 @@ pub fn hide(cx: &mut App) {
         launcher.window
     };
     let _ = window.update(cx, |view, window, cx| {
-        view.reset_session(cx);
-        window.resize(size(WINDOW_WIDTH, IDLE_HEIGHT));
+        // Cancel any in-flight work, but keep the conversation for follow-ups.
+        view.cancel_running_task();
+        if !view.in_conversation() {
+            window.resize(size(WINDOW_WIDTH, IDLE_HEIGHT));
+        }
+        cx.notify();
     });
     cx.hide();
+}
+
+/// Re-collect ambient context after New clears the session while the launcher stays open.
+pub fn recollect_ambient(cx: &mut App) {
+    if !cx.has_global::<Launcher>() {
+        return;
+    }
+    if crate::settings::needs_onboarding(cx) {
+        return;
+    }
+    let collector;
+    let window;
+    let visible;
+    {
+        let launcher = cx.global::<Launcher>();
+        visible = launcher.visible;
+        collector = Arc::clone(&launcher.collector);
+        window = launcher.window;
+    }
+    if !visible {
+        return;
+    }
+    let ambient = collector.collect();
+    let _ = window.update(cx, |view, window, cx| {
+        view.set_ambient_context(ambient, window, cx);
+    });
 }
 
 fn start_poll_loop(cx: &App) {

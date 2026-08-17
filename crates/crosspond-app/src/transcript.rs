@@ -10,6 +10,9 @@ pub struct Transcript {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TranscriptBlock {
+    User {
+        text: String,
+    },
     Thinking {
         text: String,
         expanded: bool,
@@ -42,10 +45,31 @@ impl Transcript {
         self.blocks.clear();
     }
 
-    pub fn has_assistant_text(&self) -> bool {
-        self.blocks
-            .iter()
-            .any(|block| matches!(block, TranscriptBlock::Text { text } if !text.trim().is_empty()))
+    pub fn is_empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
+
+    /// Whether the current turn (after the latest user message) already has assistant text.
+    pub fn has_assistant_text_since_last_user(&self) -> bool {
+        for block in self.blocks.iter().rev() {
+            match block {
+                TranscriptBlock::User { .. } => return false,
+                TranscriptBlock::Text { text } if !text.trim().is_empty() => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Append a user turn. Never merges with assistant text; closes tool/thinking groups.
+    pub fn push_user(&mut self, text: &str) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.blocks.push(TranscriptBlock::User {
+            text: trimmed.to_string(),
+        });
     }
 
     pub fn push_reasoning(&mut self, delta: &str) {
@@ -134,6 +158,7 @@ impl Transcript {
         for (idx, block) in self.blocks.iter().enumerate().rev() {
             match block {
                 TranscriptBlock::Text { text } if text.trim().is_empty() => continue,
+                TranscriptBlock::User { .. } => return None,
                 TranscriptBlock::Thinking { .. } if kind == GroupKind::Thinking => {
                     return Some(idx);
                 }
@@ -169,6 +194,7 @@ impl Transcript {
                 TranscriptBlock::Thinking { .. } => return LiveActivity::Thinking,
                 TranscriptBlock::Text { text } if text.trim().is_empty() => continue,
                 TranscriptBlock::Text { .. } => return LiveActivity::Writing,
+                TranscriptBlock::User { .. } => return LiveActivity::Thinking,
             }
         }
         LiveActivity::Thinking
@@ -229,7 +255,7 @@ impl TranscriptBlock {
                 }
             }
             Self::Tools { items, .. } => collapsed_tools_label(items),
-            Self::Text { .. } => String::new(),
+            Self::User { .. } | Self::Text { .. } => String::new(),
         }
     }
 }
@@ -380,6 +406,90 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn user_turn_does_not_merge_with_assistant_text() {
+        let mut transcript = Transcript::new();
+        transcript.push_user("hello");
+        transcript.push_text("Hi there.");
+        transcript.push_user("again");
+        transcript.push_text("Sure.");
+        assert_eq!(transcript.blocks().len(), 4);
+        assert!(matches!(
+            &transcript.blocks()[0],
+            TranscriptBlock::User { text } if text == "hello"
+        ));
+        assert!(matches!(
+            &transcript.blocks()[1],
+            TranscriptBlock::Text { text } if text == "Hi there."
+        ));
+        assert!(matches!(
+            &transcript.blocks()[2],
+            TranscriptBlock::User { text } if text == "again"
+        ));
+        assert!(matches!(
+            &transcript.blocks()[3],
+            TranscriptBlock::Text { text } if text == "Sure."
+        ));
+    }
+
+    #[test]
+    fn user_turn_closes_tool_and_thinking_groups() {
+        let mut transcript = Transcript::new();
+        transcript.push_user("first");
+        transcript.push_reasoning("plan");
+        transcript.start_tool("read_file");
+        transcript.finish_tool("read_file");
+        transcript.push_text("Done.");
+        transcript.push_user("follow-up");
+        transcript.push_reasoning("next");
+        transcript.start_tool("ui_press");
+        assert_eq!(transcript.blocks().len(), 7);
+        assert!(matches!(
+            &transcript.blocks()[5],
+            TranscriptBlock::Thinking { text, .. } if text == "next"
+        ));
+        match &transcript.blocks()[6] {
+            TranscriptBlock::Tools { items, .. } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].name, "ui_press");
+            }
+            other => panic!("{other:?}"),
+        }
+        // Follow-up tools must not merge into the previous turn's tool group.
+        match &transcript.blocks()[2] {
+            TranscriptBlock::Tools { items, .. } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].name, "read_file");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn follow_up_keeps_prior_user_and_assistant() {
+        let mut transcript = Transcript::new();
+        transcript.push_user("summarize this");
+        transcript.push_text("Here is a summary.");
+        assert!(transcript.has_assistant_text_since_last_user());
+        // Follow-up submit keeps transcript and appends the next user turn.
+        transcript.push_user("make it shorter");
+        assert_eq!(transcript.blocks().len(), 3);
+        assert!(!transcript.is_empty());
+        assert!(!transcript.has_assistant_text_since_last_user());
+        assert!(matches!(
+            &transcript.blocks()[0],
+            TranscriptBlock::User { text } if text == "summarize this"
+        ));
+        assert!(matches!(
+            &transcript.blocks()[1],
+            TranscriptBlock::Text { text } if text == "Here is a summary."
+        ));
+        assert!(matches!(
+            &transcript.blocks()[2],
+            TranscriptBlock::User { text } if text == "make it shorter"
+        ));
     }
 
     #[test]
