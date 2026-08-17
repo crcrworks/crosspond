@@ -571,6 +571,8 @@ impl Runtime {
                                 vec![ImagePart {
                                     media_type: img.media_type,
                                     bytes: img.bytes,
+                                    width: Some(img.width),
+                                    height: Some(img.height),
                                 }]
                             })
                             .unwrap_or_default();

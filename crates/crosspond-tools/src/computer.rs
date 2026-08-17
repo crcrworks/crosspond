@@ -48,6 +48,8 @@ pub trait InputBackend: Send + Sync {
 pub trait ScreenshotBackend: Send + Sync {
     fn capture(&self, pid: Option<i32>, app_name: Option<&str>) -> Result<Screenshot, ToolError>;
     fn click(&self, x: u32, y: u32) -> Result<String, ToolError>;
+    /// Re-capture the window last used for screenshot/click, not the ambient app.
+    fn recapture(&self) -> Result<Screenshot, ToolError>;
 }
 
 /// Captured window image for the model.
@@ -541,7 +543,7 @@ impl Tool for UiClick {
         }
     }
 
-    fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+    fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
         let x = parse_u32(&input, "x")?;
         let y = parse_u32(&input, "y")?;
         if x == 0 && y == 0 {
@@ -551,10 +553,7 @@ impl Tool for UiClick {
             ));
         }
         let click_text = self.backend.click(x, y)?;
-        let (text, image) = match self
-            .backend
-            .capture(context.frontmost_pid, context.frontmost_name.as_deref())
-        {
+        let (text, image) = match self.backend.recapture() {
             Ok(shot) => {
                 let text = format!(
                     "{click_text}\n\nPost-click screenshot of {} ({}×{}). Verify the requested control changed before another action.",
@@ -1061,6 +1060,15 @@ mod tests {
             }
             self.clicks.lock().expect("lock").push((x, y));
             Ok(format!("Clicked ({x}, {y}) in App."))
+        }
+
+        fn recapture(&self) -> Result<Screenshot, ToolError> {
+            if !*self.has_shot.lock().expect("lock") {
+                return Err(ToolError::Failed(
+                    "no screenshot yet. Call take_screenshot first.".into(),
+                ));
+            }
+            self.capture(None, Some("App"))
         }
     }
 

@@ -270,6 +270,8 @@ enum WireContentPart {
 #[derive(Serialize)]
 struct WireImageUrl {
     url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -334,6 +336,7 @@ fn content_with_images(text: &str, images: &[crate::provider::ImagePart]) -> Wir
         parts.push(WireContentPart::ImageUrl {
             image_url: WireImageUrl {
                 url: format!("data:{};base64,{encoded}", image.media_type),
+                detail: Some("high"),
             },
         });
     }
@@ -359,14 +362,22 @@ fn wire_messages(messages: &[Message]) -> Vec<WireMessage> {
     }
     out.push(WireMessage {
         role: "user",
-        content: content_with_images(
-            "Screenshot image from the tool result above. ui_click uses exact pixels in this image (origin top-left); preserve its aspect ratio and do not normalize each axis to 1000.",
-            &source.images,
-        ),
+        content: content_with_images(&screenshot_vision_prompt(&source.images), &source.images),
         tool_call_id: None,
         tool_calls: Vec::new(),
     });
     out
+}
+
+fn screenshot_vision_prompt(images: &[crate::provider::ImagePart]) -> String {
+    if let Some(image) = images.first()
+        && let (Some(width), Some(height)) = (image.width, image.height)
+    {
+        return format!(
+            "Screenshot image is {width}×{height} pixels (origin top-left). ui_click x,y must be integer pixels in this exact image; do not normalize each axis to 1000 or use macOS screen coordinates."
+        );
+    }
+    "Screenshot image from the tool result above. ui_click uses exact pixels in this image (origin top-left); preserve its aspect ratio and do not normalize each axis to 1000.".into()
 }
 
 #[derive(Default)]
@@ -664,6 +675,8 @@ mod tests {
                 vec![ImagePart {
                     media_type: "image/jpeg".into(),
                     bytes: b"\xff\xd8\xff".to_vec(),
+                    width: Some(100),
+                    height: Some(50),
                 }],
             ),
         ];
@@ -678,8 +691,10 @@ mod tests {
         let parts = vision["content"].as_array().expect("content array");
         assert_eq!(parts[0]["type"], "text");
         assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[1]["image_url"]["detail"], "high");
         let url = parts[1]["image_url"]["url"].as_str().unwrap();
         assert!(url.starts_with("data:image/jpeg;base64,"));
+        assert!(parts[0]["text"].as_str().unwrap().contains("100×50 pixels"));
     }
 
     #[test]
