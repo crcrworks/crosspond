@@ -98,6 +98,8 @@ GPUI 0.2.2 has no per-window `hide()` / `show()`. The official `examples/window.
 
 The launcher window is created once (`show: false`) and toggled; it is not destroyed on Escape.
 
+The compact idle command bar (no message sent yet, no History/onboarding overlay) hides when it loses key focus. An expanded conversation stays visible. Hide is skipped when Settings is also open, because `App::hide()` cannot hide only the launcher.
+
 `App::hide()` hides Settings as well. That is a known limitation of this GPUI version.
 
 First launch with no API key shows the launcher in onboarding and opens Settings from there. Accessibility is not requested until the user uses selected text or computer tools.

@@ -170,8 +170,31 @@ pub fn show(cx: &mut App) {
     });
 }
 
+/// Hide the compact idle bar after it loses key focus.
+/// Re-checks state after the activation callback so nested `window.update` is safe.
+pub fn hide_compact_if_unfocused(cx: &mut App) {
+    if !cx.has_global::<Launcher>() {
+        return;
+    }
+    if cx.windows().len() > 1 {
+        return;
+    }
+    let window = cx.global::<Launcher>().window;
+    let should_hide = window
+        .update(cx, |view, window, _| {
+            !window.is_window_active() && view.is_compact_prompt()
+        })
+        .unwrap_or(false);
+    if should_hide {
+        hide(cx);
+    }
+}
+
 pub fn hide(cx: &mut App) {
     if !cx.has_global::<Launcher>() {
+        return;
+    }
+    if !cx.global::<Launcher>().visible {
         return;
     }
     let window = {

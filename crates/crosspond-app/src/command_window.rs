@@ -74,6 +74,7 @@ pub struct CommandWindow {
     transcript_scroll: ScrollHandle,
     stick_to_bottom: bool,
     _input_changes: Subscription,
+    _window_activation: Subscription,
 }
 
 struct PendingApproval {
@@ -98,6 +99,7 @@ impl CommandWindow {
             this.sync_window_size(window, cx);
             cx.notify();
         });
+        let _window_activation = cx.observe_window_activation(window, Self::on_window_activation);
         Self {
             input,
             state: CommandWindowState::Idle,
@@ -117,6 +119,7 @@ impl CommandWindow {
             transcript_scroll: ScrollHandle::new(),
             stick_to_bottom: true,
             _input_changes,
+            _window_activation,
         }
     }
 
@@ -278,6 +281,22 @@ impl CommandWindow {
     /// True once the user has started a conversation that should persist across hide.
     pub fn in_conversation(&self) -> bool {
         self.state != CommandWindowState::Idle || !self.transcript.is_empty()
+    }
+
+    /// Compact idle bar: no message sent yet, and no History/onboarding overlay.
+    pub(crate) fn is_compact_prompt(&self) -> bool {
+        !self.in_conversation() && matches!(self.overlay, Overlay::None)
+    }
+
+    fn on_window_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.is_window_active() || !self.is_compact_prompt() {
+            return;
+        }
+        // Settings is a separate window; App::hide() would hide it too.
+        if cx.windows().len() > 1 {
+            return;
+        }
+        cx.defer(crate::launcher::hide_compact_if_unfocused);
     }
 
     pub fn sync_size_for_show(&self, window: &mut Window, cx: &App) {
@@ -528,7 +547,7 @@ impl CommandWindow {
     fn sync_window_size(&self, window: &mut Window, cx: &App) {
         let current = window.viewport_size();
         let min_width = crate::launcher::WINDOW_WIDTH;
-        let compact = !self.in_conversation() && matches!(self.overlay, Overlay::None);
+        let compact = self.is_compact_prompt();
         let min_height = if compact {
             crate::launcher::idle_height(self.ambient.badge_lines().len())
                 + self.input.read(cx).extra_height()
