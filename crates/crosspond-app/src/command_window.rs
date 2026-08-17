@@ -16,8 +16,8 @@ use crate::activity_label::activity_label;
 use crate::markdown::{self, MarkdownPalette};
 use crate::text_input::TextInput;
 use crate::transcript::{
-    LiveActivity, Transcript, TranscriptBlock, tool_activity_label, tool_done_label,
-    tool_icon_path, tools_header_icon,
+    LiveActivity, Transcript, TranscriptBlock, WorkStep, tool_activity_label, tool_done_label,
+    tool_icon_path, work_header_icon,
 };
 use crate::ui;
 
@@ -579,6 +579,11 @@ impl CommandWindow {
 
     fn toggle_block(&mut self, index: usize, cx: &mut Context<Self>) {
         self.transcript.toggle(index);
+        cx.notify();
+    }
+
+    fn toggle_work_step(&mut self, block: usize, step: usize, cx: &mut Context<Self>) {
+        self.transcript.toggle_step(block, step);
         cx.notify();
     }
 }
@@ -1185,74 +1190,65 @@ fn render_transcript_block(
             .line_height(rems(1.35))
             .child(text)
             .into_any_element(),
-        TranscriptBlock::Thinking { text, expanded } => {
-            let label = if thinking_live {
-                "Thinking".to_string()
-            } else {
-                "Thought".to_string()
-            };
-            let body = text.trim().to_string();
-            let details = if expanded && !body.is_empty() {
-                vec![
-                    div()
-                        .pl_4()
-                        .whitespace_normal()
-                        .text_sm()
-                        .line_height(rems(1.35))
-                        .text_color(muted)
-                        .child(body)
-                        .into_any_element(),
-                ]
-            } else {
-                Vec::new()
-            };
-            collapsible_block(
-                ("think", index),
-                if expanded { "▾" } else { "▸" },
-                None,
-                activity_label(("think-header", index), label, thinking_live, muted),
-                muted,
-                details,
-                entity,
-            )
-            .into_any_element()
-        }
-        TranscriptBlock::Tools { items, expanded } => {
-            let header = TranscriptBlock::Tools {
-                items: items.clone(),
+        TranscriptBlock::Work {
+            steps,
+            expanded,
+            worked,
+            started_at,
+        } => {
+            let sealed = worked.is_some();
+            let header_live = thinking_live && !sealed;
+            let header = TranscriptBlock::Work {
+                steps: steps.clone(),
                 expanded,
+                started_at,
+                worked,
             }
-            .collapsed_label();
-            let icon = tools_header_icon(&items);
-            let running = items.iter().any(|item| item.running);
+            .collapsed_label(header_live);
+            let icon = work_header_icon(&steps);
+            let running = !sealed
+                && (header_live
+                    || steps
+                        .iter()
+                        .any(|step| matches!(step, WorkStep::Tool(item) if item.running)));
             let details = if expanded {
-                items
+                steps
                     .iter()
                     .enumerate()
-                    .map(|(row, item)| {
-                        let label = if item.running {
-                            tool_activity_label(&item.name)
-                        } else {
-                            tool_done_label(&item.name)
-                        };
-                        tool_detail_row(
+                    .map(|(row, step)| match step {
+                        WorkStep::Thinking { text, expanded } => render_nested_thinking(
                             index,
                             row,
-                            tool_icon_path(&item.name),
-                            label,
-                            item.running,
+                            text,
+                            *expanded,
                             muted,
-                        )
+                            entity.clone(),
+                        ),
+                        WorkStep::Tool(item) => {
+                            let label = if item.running {
+                                tool_activity_label(&item.name)
+                            } else {
+                                tool_done_label(&item.name)
+                            };
+                            tool_detail_row(
+                                index,
+                                row,
+                                tool_icon_path(&item.name),
+                                label,
+                                item.running && !sealed,
+                                muted,
+                            )
+                        }
                     })
                     .collect()
             } else {
                 Vec::new()
             };
             collapsible_block(
-                ("tools", index),
+                ("work", index),
                 if expanded { "▾" } else { "▸" },
-                Some(icon),
-                activity_label(("tool-header", index), header, running, muted),
+                icon,
+                activity_label(("work-header", index), header, running, muted),
                 muted,
                 details,
                 entity,
@@ -1265,6 +1261,72 @@ fn render_transcript_block(
             index,
         ),
     }
+}
+
+fn render_nested_thinking(
+    block: usize,
+    step: usize,
+    text: &str,
+    expanded: bool,
+    muted: gpui::Rgba,
+    entity: Entity<CommandWindow>,
+) -> AnyElement {
+    let body = text.trim().to_string();
+    let label = if body.is_empty() {
+        "Thinking".to_string()
+    } else {
+        "Thought".to_string()
+    };
+    div()
+        .flex()
+        .flex_col()
+        .flex_none()
+        .gap_1()
+        .pl_4()
+        .child(
+            div()
+                .id((SharedString::from(format!("think-step-{block}")), step))
+                .flex()
+                .flex_none()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .w_full()
+                .cursor_pointer()
+                .hover(|this| this.opacity(0.8))
+                .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.toggle_work_step(block, step, cx);
+                    });
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(if expanded { "▾" } else { "▸" }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_sm()
+                        .text_color(muted)
+                        .whitespace_nowrap()
+                        .child(label),
+                ),
+        )
+        .children((expanded && !body.is_empty()).then(|| {
+            div()
+                .pl_4()
+                .whitespace_normal()
+                .text_sm()
+                .line_height(rems(1.35))
+                .text_color(muted)
+                .child(body)
+        }))
+        .into_any_element()
 }
 
 fn render_approval_card(

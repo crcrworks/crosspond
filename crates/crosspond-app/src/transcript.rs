@@ -1,7 +1,9 @@
-//! Collapsible thinking / tool groups for the command window transcript.
+//! Collapsible work groups for the command window transcript.
 //!
-//! Matches the Cursor / Codex pattern: consecutive tools collapse into one
-//! header; visible assistant text starts a new group below it.
+//! Thinking and tools share one group until visible assistant text appears.
+//! Sealed groups collapse under a "Worked for …" header.
+
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Transcript {
@@ -13,17 +15,22 @@ pub enum TranscriptBlock {
     User {
         text: String,
     },
-    Thinking {
-        text: String,
+    Work {
+        steps: Vec<WorkStep>,
         expanded: bool,
-    },
-    Tools {
-        items: Vec<ToolLine>,
-        expanded: bool,
+        started_at: Instant,
+        /// `Some` once sealed; header becomes "Worked for …".
+        worked: Option<Duration>,
     },
     Text {
         text: String,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorkStep {
+    Thinking { text: String, expanded: bool },
+    Tool(ToolLine),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -61,12 +68,13 @@ impl Transcript {
         false
     }
 
-    /// Append a user turn. Never merges with assistant text; closes tool/thinking groups.
+    /// Append a user turn. Never merges with assistant text; seals open work.
     pub fn push_user(&mut self, text: &str) {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return;
         }
+        self.seal_open_work();
         self.blocks.push(TranscriptBlock::User {
             text: trimmed.to_string(),
         });
@@ -76,18 +84,33 @@ impl Transcript {
         if delta.is_empty() {
             return;
         }
-        if let Some(idx) = self.last_group_index(GroupKind::Thinking) {
-            if let TranscriptBlock::Thinking { text, .. } = &mut self.blocks[idx] {
+        if let Some(idx) = self.open_work_index()
+            && let TranscriptBlock::Work { steps, .. } = &mut self.blocks[idx]
+        {
+            if let Some(WorkStep::Thinking { text, .. }) = steps.last_mut() {
                 text.push_str(delta);
+                return;
             }
+            if delta.trim().is_empty() {
+                return;
+            }
+            steps.push(WorkStep::Thinking {
+                text: delta.to_string(),
+                expanded: false,
+            });
             return;
         }
         if delta.trim().is_empty() {
             return;
         }
-        self.blocks.push(TranscriptBlock::Thinking {
-            text: delta.to_string(),
+        self.blocks.push(TranscriptBlock::Work {
+            steps: vec![WorkStep::Thinking {
+                text: delta.to_string(),
+                expanded: false,
+            }],
             expanded: false,
+            started_at: Instant::now(),
+            worked: None,
         });
     }
 
@@ -103,6 +126,7 @@ impl Transcript {
         if trimmed.is_empty() {
             return;
         }
+        self.seal_open_work();
         self.blocks.push(TranscriptBlock::Text {
             text: trimmed.to_string(),
         });
@@ -112,6 +136,7 @@ impl Transcript {
         if message.is_empty() {
             return;
         }
+        self.seal_open_work();
         self.blocks.push(TranscriptBlock::Text {
             text: message.to_string(),
         });
@@ -122,34 +147,38 @@ impl Transcript {
             name: name.to_string(),
             running: true,
         };
-        if let Some(idx) = self.last_group_index(GroupKind::Tools) {
-            if let TranscriptBlock::Tools { items, .. } = &mut self.blocks[idx] {
-                items.push(line);
-            }
+        if let Some(idx) = self.open_work_index()
+            && let TranscriptBlock::Work { steps, .. } = &mut self.blocks[idx]
+        {
+            steps.push(WorkStep::Tool(line));
             return;
         }
-        self.blocks.push(TranscriptBlock::Tools {
-            items: vec![line],
+        self.blocks.push(TranscriptBlock::Work {
+            steps: vec![WorkStep::Tool(line)],
             expanded: false,
+            started_at: Instant::now(),
+            worked: None,
         });
     }
 
     pub fn finish_tool(&mut self, name: &str) {
-        let Some(idx) = self.last_group_index(GroupKind::Tools) else {
+        let Some(idx) = self.open_work_index() else {
             return;
         };
-        let TranscriptBlock::Tools { items, .. } = &mut self.blocks[idx] else {
+        let TranscriptBlock::Work { steps, .. } = &mut self.blocks[idx] else {
             return;
         };
-        if let Some(item) = items
-            .iter_mut()
-            .rev()
-            .find(|item| item.running && item.name == name)
-        {
+        if let Some(item) = steps.iter_mut().rev().find_map(|step| match step {
+            WorkStep::Tool(item) if item.running && item.name == name => Some(item),
+            _ => None,
+        }) {
             item.running = false;
             return;
         }
-        if let Some(item) = items.iter_mut().rev().find(|item| item.running) {
+        if let Some(item) = steps.iter_mut().rev().find_map(|step| match step {
+            WorkStep::Tool(item) if item.running => Some(item),
+            _ => None,
+        }) {
             item.running = false;
         }
     }
@@ -157,40 +186,67 @@ impl Transcript {
     /// Stop shimmer animations after the task ends, even if a ToolFinished was missed.
     pub fn finish_running_tools(&mut self) {
         for block in &mut self.blocks {
-            if let TranscriptBlock::Tools { items, .. } = block {
-                for item in items {
-                    item.running = false;
+            if let TranscriptBlock::Work { steps, .. } = block {
+                for step in steps {
+                    if let WorkStep::Tool(item) = step {
+                        item.running = false;
+                    }
                 }
             }
         }
+        self.seal_open_work();
     }
 
-    fn last_group_index(&self, kind: GroupKind) -> Option<usize> {
+    /// Seal the open work group so its header becomes "Worked for …".
+    pub fn seal_open_work(&mut self) {
+        if let Some(idx) = self.open_work_index()
+            && let TranscriptBlock::Work {
+                expanded,
+                started_at,
+                worked,
+                ..
+            } = &mut self.blocks[idx]
+        {
+            *worked = Some(started_at.elapsed());
+            *expanded = false;
+        }
+    }
+
+    fn open_work_index(&self) -> Option<usize> {
         for (idx, block) in self.blocks.iter().enumerate().rev() {
             match block {
                 TranscriptBlock::Text { text } if text.trim().is_empty() => continue,
                 TranscriptBlock::User { .. } => return None,
-                TranscriptBlock::Thinking { .. } if kind == GroupKind::Thinking => {
-                    return Some(idx);
-                }
-                TranscriptBlock::Tools { .. } if kind == GroupKind::Tools => return Some(idx),
+                TranscriptBlock::Work { worked: None, .. } => return Some(idx),
                 _ => return None,
             }
         }
         None
     }
 
+    /// Index of the open work block whose latest step is thinking (for live shimmer).
     pub fn live_thinking_index(&self) -> Option<usize> {
-        self.last_group_index(GroupKind::Thinking)
+        let idx = self.open_work_index()?;
+        let TranscriptBlock::Work { steps, .. } = &self.blocks[idx] else {
+            return None;
+        };
+        match steps.last() {
+            Some(WorkStep::Thinking { .. }) => Some(idx),
+            _ => None,
+        }
     }
 
     pub fn toggle(&mut self, index: usize) {
-        match self.blocks.get_mut(index) {
-            Some(TranscriptBlock::Thinking { expanded, .. })
-            | Some(TranscriptBlock::Tools { expanded, .. }) => {
-                *expanded = !*expanded;
-            }
-            _ => {}
+        if let Some(TranscriptBlock::Work { expanded, .. }) = self.blocks.get_mut(index) {
+            *expanded = !*expanded;
+        }
+    }
+
+    pub fn toggle_step(&mut self, block: usize, step: usize) {
+        if let Some(TranscriptBlock::Work { steps, .. }) = self.blocks.get_mut(block)
+            && let Some(WorkStep::Thinking { expanded, .. }) = steps.get_mut(step)
+        {
+            *expanded = !*expanded;
         }
     }
 
@@ -201,8 +257,16 @@ impl Transcript {
         }
         for block in self.blocks.iter().rev() {
             match block {
-                TranscriptBlock::Tools { .. } => return LiveActivity::PreparingNextMoves,
-                TranscriptBlock::Thinking { .. } => return LiveActivity::Thinking,
+                TranscriptBlock::Work { steps, worked, .. } => {
+                    if worked.is_some() {
+                        continue;
+                    }
+                    return match steps.last() {
+                        Some(WorkStep::Thinking { .. }) => LiveActivity::Thinking,
+                        Some(WorkStep::Tool(_)) => LiveActivity::PreparingNextMoves,
+                        None => LiveActivity::Thinking,
+                    };
+                }
                 TranscriptBlock::Text { text } if text.trim().is_empty() => continue,
                 TranscriptBlock::Text { .. } => return LiveActivity::Writing,
                 TranscriptBlock::User { .. } => return LiveActivity::Thinking,
@@ -213,20 +277,21 @@ impl Transcript {
 
     pub fn running_tool(&self) -> Option<&str> {
         for block in self.blocks.iter().rev() {
-            if let TranscriptBlock::Tools { items, .. } = block
-                && let Some(current) = items.iter().rev().find(|item| item.running)
+            if let TranscriptBlock::Work {
+                steps,
+                worked: None,
+                ..
+            } = block
+                && let Some(current) = steps.iter().rev().find_map(|step| match step {
+                    WorkStep::Tool(item) if item.running => Some(item.name.as_str()),
+                    _ => None,
+                })
             {
-                return Some(current.name.as_str());
+                return Some(current);
             }
         }
         None
     }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum GroupKind {
-    Thinking,
-    Tools,
 }
 
 impl Default for Transcript {
@@ -256,18 +321,65 @@ impl LiveActivity {
 }
 
 impl TranscriptBlock {
-    pub fn collapsed_label(&self) -> String {
+    pub fn collapsed_label(&self, thinking_live: bool) -> String {
         match self {
-            Self::Thinking { text, .. } => {
-                if text.trim().is_empty() {
-                    "Thinking".into()
-                } else {
-                    "Thought".into()
-                }
-            }
-            Self::Tools { items, .. } => collapsed_tools_label(items),
+            Self::Work {
+                worked: Some(duration),
+                ..
+            } => worked_for_label(*duration),
+            Self::Work {
+                steps,
+                worked: None,
+                ..
+            } => live_work_label(steps, thinking_live),
             Self::User { .. } | Self::Text { .. } => String::new(),
         }
+    }
+}
+
+pub fn worked_for_label(duration: Duration) -> String {
+    let secs = duration.as_secs().max(1);
+    if secs < 60 {
+        if secs == 1 {
+            "Worked for 1 second".into()
+        } else {
+            format!("Worked for {secs} seconds")
+        }
+    } else {
+        let mins = (secs / 60).max(1);
+        if mins == 1 {
+            "Worked for 1 minute".into()
+        } else {
+            format!("Worked for {mins} minutes")
+        }
+    }
+}
+
+fn live_work_label(steps: &[WorkStep], thinking_live: bool) -> String {
+    let tools: Vec<&ToolLine> = steps
+        .iter()
+        .filter_map(|step| match step {
+            WorkStep::Tool(item) => Some(item),
+            _ => None,
+        })
+        .collect();
+    if let Some(current) = tools.iter().rev().find(|item| item.running) {
+        return tool_activity_label(&current.name);
+    }
+    if thinking_live || tools.is_empty() {
+        let has_thinking = steps
+            .iter()
+            .any(|step| matches!(step, WorkStep::Thinking { text, .. } if !text.trim().is_empty()));
+        return if has_thinking && !thinking_live {
+            "Thought".into()
+        } else {
+            "Thinking".into()
+        };
+    }
+    match tools.len() {
+        0 => "Thinking".into(),
+        1 => tool_done_label(&tools[0].name),
+        n => format!("Used {n} tools"),
     }
 }
 
@@ -357,24 +469,21 @@ pub fn tool_icon_path(name: &str) -> &'static str {
     }
 }
 
-pub fn tools_header_icon(items: &[ToolLine]) -> &'static str {
-    if let Some(current) = items.iter().rev().find(|item| item.running) {
-        return tool_icon_path(&current.name);
+pub fn work_header_icon(steps: &[WorkStep]) -> Option<&'static str> {
+    let tools: Vec<&ToolLine> = steps
+        .iter()
+        .filter_map(|step| match step {
+            WorkStep::Tool(item) => Some(item),
+            _ => None,
+        })
+        .collect();
+    if let Some(current) = tools.iter().rev().find(|item| item.running) {
+        return Some(tool_icon_path(&current.name));
     }
-    match items.len() {
-        1 => tool_icon_path(&items[0].name),
-        _ => "icons/wrench.svg",
-    }
-}
-
-fn collapsed_tools_label(items: &[ToolLine]) -> String {
-    if let Some(current) = items.iter().rev().find(|item| item.running) {
-        return tool_activity_label(&current.name);
-    }
-    match items.len() {
-        0 => "Using tools…".into(),
-        1 => tool_done_label(&items[0].name),
-        n => format!("Used {n} tools"),
+    match tools.len() {
+        0 => None,
+        1 => Some(tool_icon_path(&tools[0].name)),
+        _ => Some("icons/wrench.svg"),
     }
 }
 
@@ -383,7 +492,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn consecutive_tools_share_a_group_until_text() {
+    fn consecutive_tools_and_thinking_share_a_group_until_text() {
         let mut transcript = Transcript::new();
         transcript.push_reasoning("plan");
         transcript.start_tool("get_accessibility_snapshot");
@@ -392,28 +501,48 @@ mod tests {
         transcript.finish_tool("ui_press");
         transcript.push_text("Done.");
         transcript.start_tool("read_file");
-        assert_eq!(transcript.blocks().len(), 4);
-        assert!(matches!(
-            transcript.blocks()[0],
-            TranscriptBlock::Thinking { .. }
-        ));
-        match &transcript.blocks()[1] {
-            TranscriptBlock::Tools { items, expanded } => {
-                assert_eq!(items.len(), 2);
+        assert_eq!(transcript.blocks().len(), 3);
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Work {
+                steps,
+                expanded,
+                worked: Some(_),
+                ..
+            } => {
+                assert_eq!(steps.len(), 3);
                 assert!(!*expanded);
-                assert_eq!(items[0].name, "get_accessibility_snapshot");
-                assert_eq!(items[1].name, "ui_press");
+                assert!(matches!(
+                    &steps[0],
+                    WorkStep::Thinking { text, .. } if text == "plan"
+                ));
+                assert!(matches!(
+                    &steps[1],
+                    WorkStep::Tool(ToolLine { name, running })
+                        if name == "get_accessibility_snapshot" && !*running
+                ));
+                assert!(matches!(
+                    &steps[2],
+                    WorkStep::Tool(ToolLine { name, running })
+                        if name == "ui_press" && !*running
+                ));
             }
             other => panic!("{other:?}"),
         }
         assert!(matches!(
-            &transcript.blocks()[2],
+            &transcript.blocks()[1],
             TranscriptBlock::Text { text } if text == "Done."
         ));
-        match &transcript.blocks()[3] {
-            TranscriptBlock::Tools { items, .. } => {
-                assert_eq!(items.len(), 1);
-                assert_eq!(items[0].name, "read_file");
+        match &transcript.blocks()[2] {
+            TranscriptBlock::Work {
+                steps,
+                worked: None,
+                ..
+            } => {
+                assert_eq!(steps.len(), 1);
+                assert!(matches!(
+                    &steps[0],
+                    WorkStep::Tool(ToolLine { name, .. }) if name == "read_file"
+                ));
             }
             other => panic!("{other:?}"),
         }
@@ -446,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn user_turn_closes_tool_and_thinking_groups() {
+    fn user_turn_closes_work_groups() {
         let mut transcript = Transcript::new();
         transcript.push_user("first");
         transcript.push_reasoning("plan");
@@ -456,23 +585,36 @@ mod tests {
         transcript.push_user("follow-up");
         transcript.push_reasoning("next");
         transcript.start_tool("ui_press");
-        assert_eq!(transcript.blocks().len(), 7);
-        assert!(matches!(
-            &transcript.blocks()[5],
-            TranscriptBlock::Thinking { text, .. } if text == "next"
-        ));
-        match &transcript.blocks()[6] {
-            TranscriptBlock::Tools { items, .. } => {
-                assert_eq!(items.len(), 1);
-                assert_eq!(items[0].name, "ui_press");
+        assert_eq!(transcript.blocks().len(), 5);
+        match &transcript.blocks()[1] {
+            TranscriptBlock::Work {
+                steps,
+                worked: Some(_),
+                ..
+            } => {
+                assert_eq!(steps.len(), 2);
+                assert!(matches!(
+                    &steps[1],
+                    WorkStep::Tool(ToolLine { name, .. }) if name == "read_file"
+                ));
             }
             other => panic!("{other:?}"),
         }
-        // Follow-up tools must not merge into the previous turn's tool group.
-        match &transcript.blocks()[2] {
-            TranscriptBlock::Tools { items, .. } => {
-                assert_eq!(items.len(), 1);
-                assert_eq!(items[0].name, "read_file");
+        match &transcript.blocks()[4] {
+            TranscriptBlock::Work {
+                steps,
+                worked: None,
+                ..
+            } => {
+                assert_eq!(steps.len(), 2);
+                assert!(matches!(
+                    &steps[0],
+                    WorkStep::Thinking { text, .. } if text == "next"
+                ));
+                assert!(matches!(
+                    &steps[1],
+                    WorkStep::Tool(ToolLine { name, .. }) if name == "ui_press"
+                ));
             }
             other => panic!("{other:?}"),
         }
@@ -484,7 +626,6 @@ mod tests {
         transcript.push_user("summarize this");
         transcript.push_text("Here is a summary.");
         assert!(transcript.has_assistant_text_since_last_user());
-        // Follow-up submit keeps transcript and appends the next user turn.
         transcript.push_user("make it shorter");
         assert_eq!(transcript.blocks().len(), 3);
         assert!(!transcript.is_empty());
@@ -504,42 +645,55 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_tools_show_latest_running_then_summary() {
+    fn collapsed_work_shows_latest_running_then_summary() {
         let mut transcript = Transcript::new();
         transcript.start_tool("get_accessibility_snapshot");
         assert_eq!(
-            transcript.blocks()[0].collapsed_label(),
+            transcript.blocks()[0].collapsed_label(false),
             "Looking at the screen…"
         );
         transcript.finish_tool("get_accessibility_snapshot");
         transcript.start_tool("ui_press");
         assert_eq!(
-            transcript.blocks()[0].collapsed_label(),
+            transcript.blocks()[0].collapsed_label(false),
             "Pressing a control…"
         );
         transcript.finish_tool("ui_press");
-        assert_eq!(transcript.blocks()[0].collapsed_label(), "Used 2 tools");
+        assert_eq!(
+            transcript.blocks()[0].collapsed_label(false),
+            "Used 2 tools"
+        );
     }
 
     #[test]
-    fn thinking_stays_separate_from_tools() {
+    fn thinking_and_tools_share_one_work_group() {
         let mut transcript = Transcript::new();
         transcript.push_reasoning("hmm");
         transcript.start_tool("read_file");
-        assert_eq!(transcript.blocks().len(), 2);
-        assert_eq!(transcript.blocks()[0].collapsed_label(), "Thought");
+        assert_eq!(transcript.blocks().len(), 1);
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Work { steps, .. } => {
+                assert_eq!(steps.len(), 2);
+            }
+            other => panic!("{other:?}"),
+        }
         transcript.toggle(0);
         match &transcript.blocks()[0] {
-            TranscriptBlock::Thinking { expanded, text } => {
+            TranscriptBlock::Work {
+                expanded, steps, ..
+            } => {
                 assert!(*expanded);
-                assert_eq!(text, "hmm");
+                assert!(matches!(
+                    &steps[0],
+                    WorkStep::Thinking { text, .. } if text == "hmm"
+                ));
             }
             other => panic!("{other:?}"),
         }
     }
 
     #[test]
-    fn finish_running_tools_clears_every_running_flag() {
+    fn finish_running_tools_clears_and_seals() {
         let mut transcript = Transcript::new();
         transcript.start_tool("read_file");
         transcript.start_tool("ui_press");
@@ -547,15 +701,29 @@ mod tests {
         transcript.finish_running_tools();
         assert!(transcript.running_tool().is_none());
         match &transcript.blocks()[0] {
-            TranscriptBlock::Tools { items, .. } => {
-                assert!(items.iter().all(|item| !item.running));
+            TranscriptBlock::Work {
+                steps,
+                worked: Some(_),
+                expanded,
+                ..
+            } => {
+                assert!(!*expanded);
+                assert!(steps.iter().all(|step| match step {
+                    WorkStep::Tool(item) => !item.running,
+                    _ => true,
+                }));
+                assert!(
+                    transcript.blocks()[0]
+                        .collapsed_label(false)
+                        .starts_with("Worked for ")
+                );
             }
             other => panic!("{other:?}"),
         }
     }
 
     #[test]
-    fn thinking_between_tools_starts_a_new_group() {
+    fn thinking_between_tools_stays_in_the_same_group() {
         let mut transcript = Transcript::new();
         transcript.push_reasoning("first");
         transcript.start_tool("get_accessibility_snapshot");
@@ -563,36 +731,43 @@ mod tests {
         transcript.push_reasoning(" more");
         transcript.start_tool("ui_press");
         transcript.finish_tool("ui_press");
-        assert_eq!(transcript.blocks().len(), 4);
+        assert_eq!(transcript.blocks().len(), 1);
         match &transcript.blocks()[0] {
-            TranscriptBlock::Thinking { text, .. } => assert_eq!(text, "first"),
-            other => panic!("{other:?}"),
-        }
-        match &transcript.blocks()[1] {
-            TranscriptBlock::Tools { items, .. } => {
-                assert_eq!(items.len(), 1);
-                assert_eq!(items[0].name, "get_accessibility_snapshot");
-            }
-            other => panic!("{other:?}"),
-        }
-        match &transcript.blocks()[2] {
-            TranscriptBlock::Thinking { text, .. } => assert_eq!(text, " more"),
-            other => panic!("{other:?}"),
-        }
-        match &transcript.blocks()[3] {
-            TranscriptBlock::Tools { items, .. } => {
-                assert_eq!(items.len(), 1);
-                assert_eq!(items[0].name, "ui_press");
-                assert_eq!(
-                    transcript.blocks()[3].collapsed_label(),
-                    "Pressed a control"
-                );
+            TranscriptBlock::Work { steps, .. } => {
+                assert_eq!(steps.len(), 4);
+                assert!(matches!(
+                    &steps[0],
+                    WorkStep::Thinking { text, .. } if text == "first"
+                ));
+                assert!(matches!(
+                    &steps[1],
+                    WorkStep::Tool(ToolLine { name, .. })
+                        if name == "get_accessibility_snapshot"
+                ));
+                assert!(matches!(
+                    &steps[2],
+                    WorkStep::Thinking { text, .. } if text == " more"
+                ));
+                assert!(matches!(
+                    &steps[3],
+                    WorkStep::Tool(ToolLine { name, .. }) if name == "ui_press"
+                ));
             }
             other => panic!("{other:?}"),
         }
         assert_eq!(transcript.live_thinking_index(), None);
         transcript.push_reasoning("next");
-        assert_eq!(transcript.live_thinking_index(), Some(4));
+        assert_eq!(transcript.live_thinking_index(), Some(0));
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Work { steps, .. } => {
+                assert_eq!(steps.len(), 5);
+                assert!(matches!(
+                    &steps[4],
+                    WorkStep::Thinking { text, .. } if text == "next"
+                ));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -601,15 +776,57 @@ mod tests {
         transcript.push_reasoning("plan");
         transcript.push_text("\n\n\n");
         transcript.start_tool("ui_press");
-        assert_eq!(transcript.blocks().len(), 2);
-        assert!(matches!(
-            transcript.blocks()[0],
-            TranscriptBlock::Thinking { .. }
-        ));
-        assert!(matches!(
-            transcript.blocks()[1],
-            TranscriptBlock::Tools { .. }
-        ));
+        assert_eq!(transcript.blocks().len(), 1);
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Work {
+                steps,
+                worked: None,
+                ..
+            } => {
+                assert_eq!(steps.len(), 2);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn sealed_work_uses_worked_for_label() {
+        let mut transcript = Transcript::new();
+        transcript.push_reasoning("plan");
+        transcript.start_tool("read_file");
+        transcript.finish_tool("read_file");
+        transcript.push_text("Done.");
+        let label = transcript.blocks()[0].collapsed_label(false);
+        assert!(label.starts_with("Worked for "));
+        assert!(label.contains("second") || label.contains("minute"));
+    }
+
+    #[test]
+    fn worked_for_label_formats_seconds_and_minutes() {
+        assert_eq!(
+            worked_for_label(Duration::from_secs(0)),
+            "Worked for 1 second"
+        );
+        assert_eq!(
+            worked_for_label(Duration::from_secs(1)),
+            "Worked for 1 second"
+        );
+        assert_eq!(
+            worked_for_label(Duration::from_secs(12)),
+            "Worked for 12 seconds"
+        );
+        assert_eq!(
+            worked_for_label(Duration::from_secs(60)),
+            "Worked for 1 minute"
+        );
+        assert_eq!(
+            worked_for_label(Duration::from_secs(179)),
+            "Worked for 2 minutes"
+        );
+        assert_eq!(
+            worked_for_label(Duration::from_secs(180)),
+            "Worked for 3 minutes"
+        );
     }
 
     #[test]
@@ -663,24 +880,43 @@ mod tests {
         let mut transcript = Transcript::new();
         transcript.start_tool("get_accessibility_snapshot");
         match &transcript.blocks()[0] {
-            TranscriptBlock::Tools { items, .. } => {
-                assert_eq!(tools_header_icon(items), "icons/monitor.svg");
+            TranscriptBlock::Work { steps, .. } => {
+                assert_eq!(work_header_icon(steps), Some("icons/monitor.svg"));
             }
             other => panic!("{other:?}"),
         }
         transcript.finish_tool("get_accessibility_snapshot");
         transcript.start_tool("ui_press");
         match &transcript.blocks()[0] {
-            TranscriptBlock::Tools { items, .. } => {
-                assert_eq!(tools_header_icon(items), "icons/pointer.svg");
+            TranscriptBlock::Work { steps, .. } => {
+                assert_eq!(work_header_icon(steps), Some("icons/pointer.svg"));
             }
             other => panic!("{other:?}"),
         }
         transcript.finish_tool("ui_press");
         match &transcript.blocks()[0] {
-            TranscriptBlock::Tools { items, .. } => {
-                assert_eq!(tools_header_icon(items), "icons/wrench.svg");
+            TranscriptBlock::Work { steps, .. } => {
+                assert_eq!(work_header_icon(steps), Some("icons/wrench.svg"));
             }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn toggle_step_expands_nested_thinking() {
+        let mut transcript = Transcript::new();
+        transcript.push_reasoning("plan");
+        transcript.start_tool("read_file");
+        transcript.toggle(0);
+        transcript.toggle_step(0, 0);
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Work { steps, .. } => match &steps[0] {
+                WorkStep::Thinking { expanded, text } => {
+                    assert!(*expanded);
+                    assert_eq!(text, "plan");
+                }
+                other => panic!("{other:?}"),
+            },
             other => panic!("{other:?}"),
         }
     }
