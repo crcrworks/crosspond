@@ -304,33 +304,37 @@ fn render_table(
     let row_count = all_rows.len();
     let border = ctx.palette.border;
     let scroll_id = ctx.next_element_id();
+    let mut cells = Vec::new();
+    for (row_index, (is_header, row_cells)) in all_rows.into_iter().enumerate() {
+        let draw_bottom = row_index + 1 < row_count;
+        for (col, cell) in row_cells.into_iter().enumerate() {
+            let align = alignments.get(col).copied().unwrap_or(Align::None);
+            cells.push(render_table_cell(
+                is_header,
+                cell,
+                align,
+                col + 1 < cols,
+                draw_bottom,
+                ctx,
+            ));
+        }
+    }
     div()
         .id(scroll_id)
+        .flex_none()
         .w_full()
         .min_w_0()
         .overflow_x_scroll()
         .child(
             div()
-                .flex()
-                .flex_col()
+                .grid()
+                .grid_cols(u16::try_from(cols).unwrap_or(u16::MAX))
                 .w_full()
                 .min_w(min_width)
                 .border_1()
                 .border_color(border)
                 .rounded_sm()
-                .children(all_rows.into_iter().enumerate().map(
-                    |(row_index, (is_header, cells))| {
-                        let alignments = alignments.to_vec();
-                        render_table_row(
-                            is_header,
-                            cells,
-                            &alignments,
-                            cols,
-                            row_index + 1 < row_count,
-                            ctx,
-                        )
-                    },
-                )),
+                .children(cells),
         )
         .into_any_element()
 }
@@ -341,42 +345,41 @@ fn pad_row(row: &[Inlines], cols: usize) -> Vec<Inlines> {
     cells
 }
 
-fn render_table_row(
+fn render_table_cell(
     is_header: bool,
-    cells: Vec<Inlines>,
-    alignments: &[Align],
-    cols: usize,
+    cell: Inlines,
+    align: Align,
+    draw_right: bool,
     draw_bottom: bool,
     ctx: &mut RenderCtx,
 ) -> AnyElement {
-    let mut row = div().flex().flex_row().w_full();
+    let mut cell_div = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w_0()
+        .px_2()
+        .py_1()
+        .whitespace_normal();
     if is_header {
-        row = row
+        cell_div = cell_div
             .bg(ctx.palette.table_header_bg)
             .font_weight(FontWeight::SEMIBOLD);
     }
-    row.children(cells.into_iter().enumerate().map(|(col, cell)| {
-        let align = alignments.get(col).copied().unwrap_or(Align::None);
-        let mut cell_div = div()
-            .flex_1()
-            .min_w(px(72.))
-            .px_2()
-            .py_1()
-            .whitespace_normal();
-        if col + 1 < cols {
-            cell_div = cell_div.border_r_1().border_color(ctx.palette.border);
-        }
-        if draw_bottom {
-            cell_div = cell_div.border_b_1().border_color(ctx.palette.border);
-        }
-        cell_div = match align {
-            Align::Center => cell_div.text_center(),
-            Align::Right => cell_div.text_right(),
-            Align::Left | Align::None => cell_div.text_left(),
-        };
-        cell_div.child(render_inlines(&cell, ctx))
-    }))
-    .into_any_element()
+    if draw_right {
+        cell_div = cell_div.border_r_1().border_color(ctx.palette.border);
+    }
+    if draw_bottom {
+        cell_div = cell_div.border_b_1().border_color(ctx.palette.border);
+    }
+    cell_div = match align {
+        Align::Center => cell_div.text_center(),
+        Align::Right => cell_div.text_right(),
+        Align::Left | Align::None => cell_div.text_left(),
+    };
+    cell_div
+        .child(render_inlines(&cell, ctx))
+        .into_any_element()
 }
 
 fn render_inlines(inlines: &Inlines, ctx: &mut RenderCtx) -> AnyElement {
