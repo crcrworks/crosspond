@@ -155,7 +155,7 @@ impl CommandWindow {
                 }
                 self.receipt = Some(receipt);
                 self.state = CommandWindowState::Completed;
-                self.pending_approval = None;
+                self.settle_live_work();
                 self.focus_prompt(window, cx);
             }
             AgentEvent::TaskFailed { task_id, message } => {
@@ -164,14 +164,14 @@ impl CommandWindow {
                 }
                 self.transcript.push_notice(&message);
                 self.state = CommandWindowState::Failed;
-                self.pending_approval = None;
+                self.settle_live_work();
             }
             AgentEvent::TaskCancelled { task_id } => {
                 if self.current_task != Some(task_id) {
                     return;
                 }
                 self.state = CommandWindowState::Cancelled;
-                self.pending_approval = None;
+                self.settle_live_work();
             }
             AgentEvent::ToolStarted { task_id, tool } => {
                 if self.current_task != Some(task_id) {
@@ -297,6 +297,12 @@ impl CommandWindow {
                 | CommandWindowState::PreparingContext
                 | CommandWindowState::WaitingApproval
         )
+    }
+
+    fn settle_live_work(&mut self) {
+        self.pending_approval = None;
+        self.transcript.finish_running_tools();
+        self.tool_starts.clear();
     }
 
     fn cancel_if_running(&mut self) {
@@ -573,7 +579,7 @@ impl gpui::Render for CommandWindow {
         let border = if dark { rgb(0x3a3a3c) } else { rgb(0xd2d2d7) };
         let text = if dark { rgb(0xf5f5f7) } else { rgb(0x1d1d1f) };
         let muted = if dark { rgb(0x8e8e93) } else { rgb(0x6e6e73) };
-        let live_thinking = (self.activity == LiveActivity::Thinking)
+        let live_thinking = (self.is_busy() && self.activity == LiveActivity::Thinking)
             .then(|| self.transcript.live_thinking_index())
             .flatten();
         let status = heartbeat_status(self.state, &self.transcript, &self.activity);

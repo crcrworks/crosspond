@@ -154,6 +154,17 @@ impl Transcript {
         }
     }
 
+    /// Stop shimmer animations after the task ends, even if a ToolFinished was missed.
+    pub fn finish_running_tools(&mut self) {
+        for block in &mut self.blocks {
+            if let TranscriptBlock::Tools { items, .. } = block {
+                for item in items {
+                    item.running = false;
+                }
+            }
+        }
+    }
+
     fn last_group_index(&self, kind: GroupKind) -> Option<usize> {
         for (idx, block) in self.blocks.iter().enumerate().rev() {
             match block {
@@ -522,6 +533,22 @@ mod tests {
             TranscriptBlock::Thinking { expanded, text } => {
                 assert!(*expanded);
                 assert_eq!(text, "hmm");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn finish_running_tools_clears_every_running_flag() {
+        let mut transcript = Transcript::new();
+        transcript.start_tool("read_file");
+        transcript.start_tool("ui_press");
+        assert!(transcript.running_tool().is_some());
+        transcript.finish_running_tools();
+        assert!(transcript.running_tool().is_none());
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Tools { items, .. } => {
+                assert!(items.iter().all(|item| !item.running));
             }
             other => panic!("{other:?}"),
         }

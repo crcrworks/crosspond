@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+use std::time::Instant;
+
 use crosspond_core::{AppContext, ContextCapsule, ContextCollector, WindowContext};
 
 pub const CROSSPOND_BUNDLE_ID: &str = "com.crosspond.app";
@@ -26,6 +29,17 @@ fn collect_capsule() -> ContextCapsule {
 
 #[cfg(target_os = "macos")]
 fn collect_macos() -> ContextCapsule {
+    let started = Instant::now();
+    let capsule = collect_macos_inner();
+    let elapsed_ms = started.elapsed().as_millis();
+    if elapsed_ms >= 100 {
+        eprintln!("crosspond: ambient collect took {elapsed_ms}ms");
+    }
+    capsule
+}
+
+#[cfg(target_os = "macos")]
+fn collect_macos_inner() -> ContextCapsule {
     let Some(app) = frontmost_app() else {
         return ContextCapsule::default();
     };
@@ -38,7 +52,9 @@ fn collect_macos() -> ContextCapsule {
         ..ContextCapsule::default()
     };
 
-    if crate::ax::prompt_and_is_trusted() {
+    // Do not prompt here: collect runs on the GPUI thread before activate, so a
+    // TCC dialog would appear while the app is still hidden and look like a freeze.
+    if crate::ax::is_trusted() {
         capsule.focused_window = crate::ax::focused_window_title(app.pid)
             .map(|title| WindowContext { title: Some(title) });
         capsule.selected_text = crate::ax::selected_text(app.pid);

@@ -112,9 +112,22 @@ pub fn toggle(cx: &mut App) {
     if !cx.has_global::<Launcher>() {
         return;
     }
-    if cx.global::<Launcher>().visible {
+    let (claimed_visible, window) = {
+        let launcher = cx.global::<Launcher>();
+        (launcher.visible, launcher.window)
+    };
+    // NSPanel hidesOnDeactivate can order the launcher out while `visible` stays
+    // true. Treating that as "already open" made Option+Space call hide() and
+    // look like a freeze.
+    let window_key = window
+        .update(cx, |_, window, _| window.is_window_active())
+        .unwrap_or(false);
+    if claimed_visible && window_key {
         hide(cx);
     } else {
+        if claimed_visible && !window_key {
+            eprintln!("crosspond: launcher marked visible but window was not key; showing");
+        }
         show(cx);
     }
 }
@@ -231,14 +244,17 @@ fn poll_once(cx: &mut App) {
         window = launcher.window;
     }
 
+    // Handle the hotkey before applying a burst of agent events. Streaming
+    // deltas re-layout the transcript on this thread and would otherwise delay
+    // Option+Space until the whole batch is drawn.
+    if matches!(hotkey, Some(HotkeyEvent::ToggleLauncher)) {
+        toggle(cx);
+    }
+
     for event in events {
         let _ = crate::settings::apply_event(&event, cx);
         let _ = window.update(cx, |view, window, cx| {
             view.apply_event(event, window, cx);
         });
-    }
-
-    if matches!(hotkey, Some(HotkeyEvent::ToggleLauncher)) {
-        toggle(cx);
     }
 }

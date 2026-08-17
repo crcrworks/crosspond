@@ -71,7 +71,7 @@ Option+Space
  History reads ~/.crosspond/tasks/ (task.json + receipt.json).
 ```
 
-Commands and events are defined in `crosspond-core`. The UI never runs model HTTP or tools on the GPUI thread. The runtime never imports GPUI. Context collection runs on the main thread and must happen before `App::activate`, otherwise Crosspond is the frontmost app.
+Commands and events are defined in `crosspond-core`. The UI never runs model HTTP or tools on the GPUI thread. The runtime never imports GPUI. Context collection runs on the main thread and must happen before `App::activate`, otherwise Crosspond is the frontmost app. AX attribute reads use a short messaging timeout, Finder selection is killed after 800ms, and collect checks `AXIsProcessTrusted` without prompting (a TCC dialog while hidden looks like a freeze).
 
 Computer tools default to the **ambient** frontmost pid from when the launcher opened. The model may pass `app` (display name or bundle id) on snapshot / screenshot / UI tools, or call `open_app` / `focus_app`, to drive another process. Snapshot, press, set-value, type, hotkey, scroll, screenshot, and click go through a host-spawned **cua-driver** MCP child (`mcp --direct` when the installed binary supports it, otherwise `mcp --no-daemon-relaunch`). Crosspond keeps its own tool names and Allow cards; cua-driver’s full MCP catalog is not exposed to the model. Window chrome (close / minimize / zoom) is omitted from the snapshot; cua-driver delivers background actions so the user’s cursor is not moved.
 
@@ -104,6 +104,6 @@ First launch with no API key shows the launcher in onboarding and opens Settings
 
 ## Hotkeys
 
-`GlobalHotkeyService` lives in `crosspond-core`. macOS registers Option + Space with `global-hotkey` on the main thread and exposes `poll()`. The GPUI app drains that poll on a short `Timer` loop. Settings-driven hotkeys come later; the trait is the extension point.
+`GlobalHotkeyService` lives in `crosspond-core`. macOS registers Option + Space with `global-hotkey` on the main thread and exposes `poll()`. The GPUI app drains that poll on a short `Timer` loop, and handles the hotkey before applying queued agent events. If the launcher was ordered out (NSPanel `hidesOnDeactivate`) while the in-memory visible flag stayed true, Option+Space shows rather than calling `App::hide()`. Settings-driven hotkeys come later; the trait is the extension point.
 
 ⌘, opens Settings. Escape cancels an in-flight request (including while waiting for approval); closes History if it is open; otherwise it hides the launcher without clearing the conversation. **New** resets the session. Approval **Cancel** rejects only that tool call.
