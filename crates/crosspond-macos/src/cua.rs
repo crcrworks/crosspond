@@ -722,23 +722,26 @@ fn mcp_args(binary: &Path) -> Vec<String> {
             )
         })
         .unwrap_or_default();
+    mcp_args_from_help(&help)
+}
+
+fn mcp_args_from_help(help: &str) -> Vec<String> {
     let mut args = vec!["mcp".to_string()];
-    if flag_listed(&help, "--direct") {
+    if flag_listed(help, "--direct") {
         args.push("--direct".into());
-        if flag_listed(&help, "--embedded") {
+        if flag_listed(help, "--embedded") {
             args.push("--embedded".into());
-            if flag_listed(&help, "--host-bundle-id") {
+            if flag_listed(help, "--host-bundle-id") {
                 args.push("--host-bundle-id".into());
                 args.push(CROSSPOND_BUNDLE_ID.into());
             }
         }
-        if flag_listed(&help, "--dangerously-bypass-approvals") {
-            args.push("--dangerously-bypass-approvals".into());
-        }
-    } else if flag_listed(&help, "--no-daemon-relaunch") {
+        // cua-driver 0.20+ rejects serve-only authorization flags on `mcp`
+        // (exit 64). Unrestricted mode is set via CUA_DRIVER_* env vars.
+    } else if flag_listed(help, "--no-daemon-relaunch") {
         args.push("--no-daemon-relaunch".into());
     }
-    if flag_listed(&help, "--no-overlay") {
+    if flag_listed(help, "--no-overlay") {
         args.push("--no-overlay".into());
     }
     args
@@ -1259,5 +1262,42 @@ mod tests {
             "  --direct    Own the runtime\n  --embedded",
             "--direct"
         ));
+    }
+
+    #[test]
+    fn mcp_args_prefer_direct_without_serve_authorization_flags() {
+        let help = "\
+mcp options:
+  --direct
+  --embedded
+  --host-bundle-id <id>
+agent authorization (serve only):
+  --dangerously-bypass-approvals
+  --no-overlay";
+        let args = mcp_args_from_help(help);
+        assert_eq!(
+            args,
+            vec![
+                "mcp",
+                "--direct",
+                "--embedded",
+                "--host-bundle-id",
+                CROSSPOND_BUNDLE_ID,
+                "--no-overlay",
+            ]
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "--dangerously-bypass-approvals")
+        );
+    }
+
+    #[test]
+    fn mcp_args_fall_back_to_no_daemon_relaunch() {
+        assert_eq!(
+            mcp_args_from_help("Usage: cua-driver mcp --no-daemon-relaunch"),
+            vec!["mcp", "--no-daemon-relaunch"]
+        );
     }
 }
