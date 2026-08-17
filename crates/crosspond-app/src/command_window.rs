@@ -916,7 +916,7 @@ fn render_task_body(
                         .child(format!("Created {}", item.name))
                 }))
         }))
-        .children(receipt.map(|receipt| {
+        .children(receipt.and_then(|receipt| {
             let pairs: Vec<(String, Option<PathBuf>)> = receipt
                 .artifacts
                 .iter()
@@ -951,60 +951,69 @@ fn render_receipt(
     artifacts: Vec<(String, Option<PathBuf>)>,
     muted: gpui::Rgba,
     dark: bool,
-) -> AnyElement {
-    div()
-        .flex()
-        .flex_col()
-        .flex_none()
-        .gap_1()
-        .pt_2()
-        .child(div().text_sm().child("✓ Done"))
-        .children((!actions.is_empty()).then(|| {
-            div()
-                .flex()
-                .flex_col()
-                .flex_none()
-                .gap_1()
-                .pt_1()
-                .child(div().text_sm().text_color(muted).child("Changed"))
-                .children(actions.into_iter().map(|line| {
-                    div()
-                        .flex_none()
-                        .text_sm()
-                        .text_color(muted)
-                        .child(format!("• {line}"))
-                }))
-        }))
-        .children((!artifacts.is_empty()).then(move || {
-            div()
-                .flex()
-                .flex_col()
-                .flex_none()
-                .gap_1()
-                .pt_1()
-                .child(div().text_sm().text_color(muted).child("Artifacts"))
-                .children(
-                    artifacts
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, (name, path))| {
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap_2()
-                                .child(div().flex_1().min_w_0().text_sm().child(name))
-                                .children(path.map(|path| {
-                                    ui::button(("show-finder", index), "Show in Finder", dark, {
-                                        move |_, _, cx| {
-                                            cx.reveal_path(&path);
-                                        }
-                                    })
-                                }))
-                        }),
-                )
-        }))
-        .into_any_element()
+) -> Option<AnyElement> {
+    if actions.is_empty() && artifacts.is_empty() {
+        return None;
+    }
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap_1()
+            .pt_2()
+            .children((!actions.is_empty()).then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .gap_1()
+                    .pt_1()
+                    .child(div().text_sm().text_color(muted).child("Changed"))
+                    .children(actions.into_iter().map(|line| {
+                        div()
+                            .flex_none()
+                            .text_sm()
+                            .text_color(muted)
+                            .child(format!("• {line}"))
+                    }))
+            }))
+            .children((!artifacts.is_empty()).then(move || {
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .gap_1()
+                    .pt_1()
+                    .child(div().text_sm().text_color(muted).child("Artifacts"))
+                    .children(
+                        artifacts
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (name, path))| {
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().flex_1().min_w_0().text_sm().child(name))
+                                    .children(path.map(|path| {
+                                        ui::button(
+                                            ("show-finder", index),
+                                            "Show in Finder",
+                                            dark,
+                                            {
+                                                move |_, _, cx| {
+                                                    cx.reveal_path(&path);
+                                                }
+                                            },
+                                        )
+                                    }))
+                            }),
+                    )
+            }))
+            .into_any_element(),
+    )
 }
 
 fn render_onboarding(
@@ -1173,7 +1182,7 @@ fn render_history_detail(
             entry.status_mark(),
             entry.title()
         )))
-        .children(entry.receipt.as_ref().map(|receipt| {
+        .children(entry.receipt.as_ref().and_then(|receipt| {
             let pairs: Vec<(String, Option<PathBuf>)> = receipt
                 .artifacts
                 .iter()
