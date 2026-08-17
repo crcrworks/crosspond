@@ -4,29 +4,30 @@
 
 | Crate | Role | May depend on |
 | --- | --- | --- |
-| `crosspond-app` | GPUI UI, process entry | core, macos, tools, GPUI |
+| `crosspond-app` | Tauri 2 host, process entry | core, macos, tools, Tauri |
+| `ui/` | SvelteKit SPA (looks; invoke/events only) | `@tauri-apps/api`; not Rust crates |
 | `crosspond-core` | runtime commands/events, agent loop, policy, receipts, context types | model, tools, knowledge, tokio, uuid |
-| `crosspond-knowledge` | Obsidian-compatible Knowledge Vault (Markdown + YAML + derived SQLite FTS) | serde, uuid, rusqlite, notify; not GPUI, not core |
+| `crosspond-knowledge` | Obsidian-compatible Knowledge Vault (Markdown + YAML + derived SQLite FTS) | serde, uuid, rusqlite, notify; not Tauri, not core |
 | `crosspond-model` | LLM provider abstraction | reqwest, serde |
 | `crosspond-tools` | filesystem, computer, web, shell/URL, calendar, knowledge-lookup tool defs; backends as traits | serde, reqwest; not macos, not knowledge |
-| `crosspond-macos` | hotkeys, Keychain, ambient context, cua-driver, EventKit | core, tools, platform crates, not GPUI |
+| `crosspond-macos` | hotkeys, Keychain, ambient context, cua-driver, EventKit | core, tools, platform crates, not Tauri |
 
-`crosspond-model` must not depend on `crosspond-core`. `crosspond-knowledge` must not depend on GPUI or `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` from tools.
+`crosspond-model` must not depend on `crosspond-core`. `crosspond-knowledge` must not depend on Tauri or `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` from tools.
 
 The Knowledge Vault path is `config.json` `vault_path` (optional). It is not hard-coded under `~/.crosspond`. Markdown files are the source of truth; Crosspond creates `_system/Schema.md`, `Index.md`, and `Log.md` when opening a vault. Search state lives in `~/.crosspond/index/<vault-id>.sqlite` and can be rebuilt from the Markdown. When a vault is configured, `StartTask` runs `KnowledgeRouter` and injects a Knowledge Brief into the system prompt. Command prompts that match a Procedure also get a follow plan (requires before uses). The model reads notes through `knowledge_*` tools (`crosspond-tools` talks to a `KnowledgeBackend` trait; `crosspond-core` adapts `IndexedVault`). Tools must not depend on `crosspond-knowledge`. Computer use stays in the existing tool backends; Procedures are guidance, not a workflow DSL. Completed meaningful tasks write Activity notes under `history/YYYY/MM/` via `ActivityRecorder` (no raw traces). `knowledge_ingest` captures a Source and applies a validated `IngestionPlan` (provenance appends and links to retrieved candidates only; hash conflicts are reported, never overwritten). After a guided success with no existing Procedure, Crosspond asks to save a Procedure; the user must Allow, and the body is generated from the receipt rather than from unrestricted model writes. Read Later saves the current page, selection, PDF, or local document as an unread Source (`knowledge_read_later`); processing uses the same ingestion plan.
 
 ## Agent data flow
 
 ```
-GPUI thread                          Tokio runtime thread
-───────────                          ────────────────────
+Tauri main thread + WebView              Tokio runtime thread
+────────────────────────────             ────────────────────
 Option+Space
         │
- collect context  (before activate)
+ collect context  (before show/focus)
         │
-    show launcher + badges
+    show launcher + badge_lines
         │
- Enter / StartTask(+capsule) ──mpsc──►  stage Finder files into scratch input/ only if selected
+ Enter / start_task(+capsule) ──mpsc──►  stage Finder files into scratch input/ only if selected
         │                      inject ambient block into system prompt
         │                      inject Knowledge Brief when vault_path is set
         │                      (procedure follow plan: requires → uses → computer tools)
@@ -71,7 +72,7 @@ Option+Space
  History reads ~/.crosspond/tasks/ (task.json + receipt.json).
 ```
 
-Commands and events are defined in `crosspond-core`. The UI never runs model HTTP or tools on the GPUI thread. The runtime never imports GPUI. Context collection runs on the main thread and must happen before `App::activate`, otherwise Crosspond is the frontmost app. AX attribute reads use a short messaging timeout, Finder selection is killed after 800ms, and collect checks `AXIsProcessTrusted` without prompting (a TCC dialog while hidden looks like a freeze).
+Commands and events are defined in `crosspond-core`. The UI never runs model HTTP or tools on the Tauri/WebView thread. The runtime never imports Tauri or Svelte. Context collection runs on the main thread and must happen before the launcher is shown and focused, otherwise Crosspond is the frontmost app. AX attribute reads use a short messaging timeout, Finder selection is killed after 800ms, and collect checks `AXIsProcessTrusted` without prompting (a TCC dialog while hidden looks like a freeze). The WebView receives `AgentEvent` JSON and `badge_lines` only — not selected text, Finder paths, or secrets.
 
 Computer tools default to the **ambient** frontmost pid from when the launcher opened. The model may pass `app` (display name or bundle id) on snapshot / screenshot / UI tools, or call `open_app` / `focus_app`, to drive another process. Snapshot, press, set-value, type, hotkey, scroll, screenshot, and click go through a host-spawned **cua-driver** MCP child (`mcp --direct` when the installed binary supports it, otherwise `mcp --no-daemon-relaunch`). Unrestricted computer-use is selected with `CUA_DRIVER_*` env vars; cua-driver 0.20+ rejects `--dangerously-bypass-approvals` on `mcp`. Crosspond keeps its own tool names and Allow cards; cua-driver’s full MCP catalog is not exposed to the model. Window chrome (close / minimize / zoom) is omitted from the snapshot; cua-driver delivers background actions so the user’s cursor is not moved.
 
@@ -91,23 +92,16 @@ The agent loop is capped at 16 steps. Tool output is capped at 100KB. Tools run 
 
 ## Window show/hide
 
-GPUI 0.2.2 has no per-window `hide()` / `show()`. The official `examples/window.rs` pattern is used:
+The launcher and Settings are separate Tauri windows. Hide/show is per-window (`WebviewWindow::hide` / `show`). Settings stays up when the launcher hides.
 
-- hide: `App::hide()` (`NSApplication hide:`)
-- show: `App::activate(true)` plus `Window::activate_window()`
+The launcher window is created once (`visible: false`) and toggled; it is not destroyed on Escape. It is frameless and transparent. Compact idle height is about 72px plus badge lines; a conversation resizes to about 560px.
 
-crates.io `gpui` 0.2.2 holds a `parking_lot` mutex across `resignKeyWindow` in `window_did_change_key_status`. AppKit delivers `windowDidResignKey` synchronously, re-enters the same function, and deadlocks the main thread (Not Responding). Crosspond uses `[patch.crates-io]` → `third_party/gpui`, which is that crates.io tree plus [zed#51035](https://github.com/zed-industries/zed/pull/51035) (drop the lock first) and macOS IME fixes for PopUp panels (report `windowLevel`, accept first responder, keep the panel on deactivate, re-activate `NSTextInputContext` when the window becomes key, after `setContentSize`, and when `currentInputContext` is nil on key-down). Do not replace this with Zed `main`.
-
-The launcher window is created once (`show: false`) and toggled; it is not destroyed on Escape.
-
-The compact idle command bar (no message sent yet, no History/onboarding overlay) hides when Crosspond is no longer the active app. An expanded conversation stays visible. Hide is skipped when Settings is also open, because `App::hide()` cannot hide only the launcher. Hide is also skipped while Japanese IME (or another in-app palette) has key without deactivating the app.
-
-`App::hide()` hides Settings as well. That is a known limitation of this GPUI version.
+The compact idle command bar (no message sent yet, no History/onboarding overlay) hides when Crosspond is no longer the active app. An expanded conversation stays visible. Hide is skipped when Settings is also open. Hide is also skipped while Japanese IME (or another in-app palette) has key without deactivating the app — WKWebView owns IME, and IME candidate windows typically keep the app active.
 
 First launch with no API key shows the launcher in onboarding and opens Settings from there. Accessibility is not requested until the user uses selected text or computer tools.
 
 ## Hotkeys
 
-`GlobalHotkeyService` lives in `crosspond-core`. macOS registers Option + Space with `global-hotkey` on the main thread and exposes `poll()`. The GPUI app drains that poll on a short `Timer` loop, and handles the hotkey before applying queued agent events. If the launcher was ordered out while the in-memory visible flag stayed true, Option+Space shows rather than calling `App::hide()`. Settings-driven hotkeys come later; the trait is the extension point.
+`GlobalHotkeyService` lives in `crosspond-core`. macOS registers Option + Space with `global-hotkey` on the main thread and exposes `poll()`. The Tauri host drains that poll on a short loop off the UI thread, then toggles the launcher on the main thread (collect, then show). If the launcher was ordered out while the in-memory visible flag stayed true, Option+Space shows rather than hiding. Settings-driven hotkeys come later; the trait is the extension point.
 
 ⌘, opens Settings. ⌘N and ⌘T reset the session (same as **New**). ⌘W hides the launcher without cancelling work or clearing the conversation. Escape cancels an in-flight request (including while waiting for approval); closes History if it is open; otherwise it hides the launcher without clearing the conversation. **New** resets the session. Approval **Cancel** rejects only that tool call. Enter submits the prompt. Shift+Enter inserts a newline; the field grows with wrapped lines (capped) and pastes keep line breaks.

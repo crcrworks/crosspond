@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use serde::Serialize;
+
 use crate::ids::TaskId;
 use crate::receipt::Receipt;
 
@@ -9,7 +11,9 @@ use super::command::ApprovalId;
 ///
 /// Phase 12 adds a `Receipt` on `TaskCompleted` and a filesystem `path` on
 /// `ArtifactCreated` so the launcher can reveal files in Finder.
-#[derive(Clone, Debug)]
+/// `path` is skipped in JSON so the WebView never receives Finder paths.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     TaskStarted {
         task_id: TaskId,
@@ -45,6 +49,7 @@ pub enum AgentEvent {
     ArtifactCreated {
         task_id: TaskId,
         display_name: String,
+        #[serde(skip)]
         path: PathBuf,
     },
     TaskCompleted {
@@ -63,4 +68,23 @@ pub enum AgentEvent {
         ok: bool,
         message: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ids::TaskId;
+
+    #[test]
+    fn artifact_path_is_not_serialized() {
+        let event = AgentEvent::ArtifactCreated {
+            task_id: TaskId::new(),
+            display_name: "notes.md".into(),
+            path: PathBuf::from("/Users/me/secret/notes.md"),
+        };
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "artifact_created");
+        assert_eq!(json["display_name"], "notes.md");
+        assert!(json.get("path").is_none());
+    }
 }

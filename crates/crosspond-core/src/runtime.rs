@@ -119,7 +119,7 @@ impl CommandSender {
     }
 }
 
-/// UI-facing event source. Drain from the GPUI thread with `try_recv`.
+/// UI-facing event source. Drain with `try_recv` or `recv`.
 pub struct EventPump {
     inner: UnboundedReceiver<AgentEvent>,
 }
@@ -127,6 +127,10 @@ pub struct EventPump {
 impl EventPump {
     pub fn try_recv(&mut self) -> Option<AgentEvent> {
         self.inner.try_recv().ok()
+    }
+
+    pub async fn recv(&mut self) -> Option<AgentEvent> {
+        self.inner.recv().await
     }
 }
 

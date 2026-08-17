@@ -1,8 +1,11 @@
+use serde::{Deserialize, Serialize};
+
 use crate::context::ContextCapsule;
 use crate::ids::TaskId;
 
 /// Identifier for a pending approval prompt.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct ApprovalId(uuid::Uuid);
 
 impl ApprovalId {

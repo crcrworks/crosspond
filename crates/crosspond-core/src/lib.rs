@@ -1,6 +1,6 @@
 //! Agent runtime types and the task loop.
 //!
-//! This crate must not depend on GPUI.
+//! This crate must not depend on Tauri.
 
 #![deny(unsafe_code)]
 

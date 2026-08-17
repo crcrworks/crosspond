@@ -1,4 +1,4 @@
-//! Obsidian-compatible Knowledge Vault. Must not depend on GPUI or `crosspond-core`.
+//! Obsidian-compatible Knowledge Vault. Must not depend on Tauri or `crosspond-core`.
 
 #![deny(unsafe_code)]
 

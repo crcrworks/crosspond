@@ -20,6 +20,9 @@ mod screenshot;
 #[cfg(target_os = "macos")]
 mod tcc;
 
+#[cfg(target_os = "macos")]
+mod window;
+
 pub use accessibility::MacOsAccessibility;
 pub use apps::MacOsApps;
 pub use calendar::MacOsCalendar;
@@ -29,6 +32,8 @@ pub use input::MacOsInput;
 pub use keychain::MacOsKeychainSecretStore;
 pub use permissions::{PermissionKind, PermissionSnapshot};
 pub use screenshot::MacOsScreenshot;
+#[cfg(target_os = "macos")]
+pub use window::make_ns_window_transparent;
 
 /// True when this process is the active macOS application.
 ///

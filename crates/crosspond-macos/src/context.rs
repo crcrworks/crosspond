@@ -52,8 +52,8 @@ fn collect_macos_inner() -> ContextCapsule {
         ..ContextCapsule::default()
     };
 
-    // Do not prompt here: collect runs on the GPUI thread before activate, so a
-    // TCC dialog would appear while the app is still hidden and look like a freeze.
+    // Do not prompt here: collect runs on the main thread before the launcher is
+    // shown, so a TCC dialog while hidden would look like a freeze.
     if crate::ax::is_trusted() {
         capsule.focused_window = crate::ax::focused_window_title(app.pid)
             .map(|title| WindowContext { title: Some(title) });

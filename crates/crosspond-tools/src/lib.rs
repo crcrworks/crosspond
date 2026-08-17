@@ -1,4 +1,4 @@
-//! Filesystem, computer, and web tools. Must not depend on GPUI, `crosspond-core`,
+//! Filesystem, computer, and web tools. Must not depend on Tauri, `crosspond-core`,
 //! or `crosspond-macos` (macos implements `AccessibilityBackend` instead).
 
 #![deny(unsafe_code)]

@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 crosspond-core.workspace = true
 crosspond-tools.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -27,6 +28,10 @@ objc2-foundation = { workspace = true, features = [
 ] }
 objc2-app-kit = { workspace = true, features = [
     "NSApplication",
+    "NSColor",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
     "NSWorkspace",
     "NSRunningApplication",
     "libc",

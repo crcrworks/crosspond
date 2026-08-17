@@ -6,19 +6,14 @@ Phase 12 adds receipts in the launcher, recent task history, and first-launch on
 
 ## Run
 
-Xcode 27 needs the Metal toolchain once:
-
-```bash
-xcodebuild -downloadComponent MetalToolchain
-```
-
-Then:
-
 ```bash
 # Computer use needs cua-driver on PATH (https://cua.ai/cua-driver).
 # Override with CUA_DRIVER_BIN if it is installed somewhere else.
-cargo run -p crosspond-app
+npm --prefix ui install
+npm --prefix ui run desktop
 ```
+
+That runs the Tauri 2 host (`crates/crosspond-app`) and the SvelteKit Vite server together. To run them separately: `npm --prefix ui run dev` then `cargo run -p crosspond-app`. `npm --prefix ui run check` and `npm --prefix ui test` cover the frontend.
 
 Then:
 
@@ -41,6 +36,8 @@ For local OpenAI-compatible servers, Base URL must include `/v1` (for example `h
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+npm --prefix ui run check
+npm --prefix ui test
 ```
 
 ## Bundle notes

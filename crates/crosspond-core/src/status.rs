@@ -1,7 +1,8 @@
 /// UI command-window state machine.
 ///
 /// Keep this as an enum. Do not replace it with a pile of booleans.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CommandWindowState {
     #[default]
     Idle,
