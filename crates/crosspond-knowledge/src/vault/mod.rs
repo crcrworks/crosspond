@@ -12,6 +12,6 @@ pub use error::VaultError;
 pub(crate) use hash::content_hash;
 pub(crate) use parser::parse_markdown;
 pub use parser::parse_wikilinks;
-pub(crate) use paths::default_relative_path;
+pub(crate) use paths::{default_relative_path, format_wikilink, format_wikilink_for_title};
 pub use repository::{FsVaultRepository, VaultRepository};
 pub use watcher::{VaultWatcher, WatchMode};

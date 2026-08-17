@@ -250,7 +250,7 @@ fn insert_note(tx: &Transaction<'_>, note: &KnowledgeNote) -> Result<(), VaultEr
     .map_err(index_err)?;
     insert_aliases(tx, &id, &note.aliases)?;
     insert_outgoing_links(tx, note, &id)?;
-    retarget_wikilinks(tx, &id, &note.title, &note.aliases)?;
+    retarget_wikilinks(tx, &id, note)?;
     Ok(())
 }
 
@@ -315,7 +315,7 @@ fn upsert_note_tx(tx: &Transaction<'_>, note: &KnowledgeNote) -> Result<(), Vaul
     .map_err(index_err)?;
     insert_aliases(tx, &id, &note.aliases)?;
     insert_outgoing_links(tx, note, &id)?;
-    retarget_wikilinks(tx, &id, &note.title, &note.aliases)?;
+    retarget_wikilinks(tx, &id, note)?;
     Ok(())
 }
 
@@ -432,19 +432,63 @@ fn resolve_wikilink(tx: &Transaction<'_>, target: &str) -> Result<String, VaultE
         )
         .optional()
         .map_err(index_err)?;
-    Ok(by_alias.unwrap_or_else(|| unresolved_target(target)))
+    if let Some(id) = by_alias {
+        return Ok(id);
+    }
+    Ok(resolve_by_path(tx, target)?.unwrap_or_else(|| unresolved_target(target)))
+}
+
+fn resolve_by_path(tx: &Transaction<'_>, target: &str) -> Result<Option<String>, VaultError> {
+    let target = target.replace('\\', "/");
+    let target = target.trim_end_matches(".md");
+    if target.is_empty() {
+        return Ok(None);
+    }
+    let exact = format!("{target}.md");
+    let stem = target.rsplit('/').next().unwrap_or(target);
+    let like = format!("%/{}", like_escape(&format!("{stem}.md")));
+    tx.query_row(
+        "SELECT id FROM notes
+         WHERE lower(path) = lower(?1)
+            OR lower(path) LIKE lower(?2) ESCAPE '\\'
+         LIMIT 1",
+        params![exact, like],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(index_err)
+}
+
+fn like_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '%' | '_' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            ch => out.push(ch),
+        }
+    }
+    out
 }
 
 fn retarget_wikilinks(
     tx: &Transaction<'_>,
     id: &str,
-    title: &str,
-    aliases: &[String],
+    note: &KnowledgeNote,
 ) -> Result<(), VaultError> {
-    let mut keys = vec![unresolved_target(title)];
-    for alias in aliases {
+    let mut keys = vec![unresolved_target(&note.title)];
+    for alias in &note.aliases {
         keys.push(unresolved_target(alias));
     }
+    if let Some(stem) = note.path.file_stem().and_then(|stem| stem.to_str()) {
+        keys.push(unresolved_target(stem));
+    }
+    let relative = path_str(&note.path);
+    keys.push(unresolved_target(relative.trim_end_matches(".md")));
+    keys.sort();
+    keys.dedup();
     for key in keys {
         tx.execute(
             "UPDATE links SET target_id = ?1

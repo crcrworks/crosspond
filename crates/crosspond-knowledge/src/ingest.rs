@@ -7,7 +7,7 @@ use crate::model::{
     Relations, SourceStatus, TrustLevel,
 };
 use crate::retrieval::search_queries;
-use crate::vault::{VaultError, content_hash};
+use crate::vault::{VaultError, content_hash, format_wikilink};
 
 const MAX_CANDIDATES: usize = 8;
 const MAX_CREATE: usize = 2;
@@ -340,7 +340,7 @@ impl<'a> IngestionEngine<'a> {
                     id: candidate.id.clone(),
                     title: candidate.title.clone(),
                     expected_hash: note.content_hash,
-                    append: provenance_append(&source.title),
+                    append: provenance_append(source),
                 });
             }
         }
@@ -351,8 +351,8 @@ impl<'a> IngestionEngine<'a> {
                     kind: NoteKind::Knowledge,
                     title: title.clone(),
                     body: format!(
-                        "# {title}\n\nDerived from [[{}]].\n\n{}\n",
-                        source.title,
+                        "# {title}\n\nDerived from {}.\n\n{}\n",
+                        format_wikilink(&source.title, &source.path),
                         first_paragraph(original_body)
                     ),
                 });
@@ -403,7 +403,10 @@ impl<'a> IngestionEngine<'a> {
         update: &UpdateNoteProposal,
     ) -> Result<(), VaultError> {
         let note = self.vault.read_indexed(update.id.as_str())?;
-        if note.body.contains(&format!("[[{}]]", plan.source_title))
+        let source = self.vault.read_indexed(plan.source_id.as_str())?;
+        let link = format_wikilink(&source.title, &source.path);
+        if note.body.contains(&link)
+            || note.body.contains(&format!("[[{}]]", plan.source_title))
             || note.body.contains(update.append.trim())
         {
             return Ok(());
@@ -540,8 +543,11 @@ fn first_paragraph(body: &str) -> String {
     out
 }
 
-fn provenance_append(source_title: &str) -> String {
-    format!("\n## Sources\n\n- [[{source_title}]]\n")
+fn provenance_append(source: &KnowledgeNote) -> String {
+    format!(
+        "\n## Sources\n\n- {}\n",
+        format_wikilink(&source.title, &source.path)
+    )
 }
 
 impl IngestionPlan {
@@ -803,6 +809,49 @@ mod tests {
         let summer = indexed.search("Summer Assignment", 4).unwrap();
         let note = indexed.read_indexed(&summer[0].id).unwrap();
         assert!(note.body.contains("[[New Laboratory Assignment]]"));
+        let _ = fs::remove_dir_all(vault);
+        let _ = fs::remove_file(sqlite);
+    }
+
+    #[test]
+    fn ingest_writes_obsidian_safe_wikilinks_for_illegal_titles() {
+        let (indexed, vault, sqlite) = lab_vault();
+        let engine = IngestionEngine::new(&indexed);
+        let plan = engine
+            .ingest(SourceCapture {
+                title: "cordiverse/paper: A Programming Paradigm".into(),
+                body: "Please check the Summer Assignment.\n".into(),
+                url: None,
+                source_kind: Some("url".into()),
+            })
+            .unwrap();
+        let source = indexed.read_indexed(&plan.source_id.to_string()).unwrap();
+        assert_eq!(
+            source.path,
+            std::path::PathBuf::from("sources/cordiverse-paper- A Programming Paradigm.md")
+        );
+        let expected = format_wikilink(&source.title, &source.path);
+        assert!(
+            plan.create_notes
+                .iter()
+                .any(|create| create.body.contains(&expected))
+                || plan
+                    .update_notes
+                    .iter()
+                    .any(|update| update.append.contains(&expected))
+        );
+        assert!(
+            !plan.create_notes.iter().any(|create| create
+                .body
+                .contains("[[cordiverse/paper: A Programming Paradigm]]"))
+                && !plan.update_notes.iter().any(|update| update
+                    .append
+                    .contains("[[cordiverse/paper: A Programming Paradigm]]"))
+        );
+        engine.apply(&plan).unwrap();
+        let index = fs::read_to_string(vault.join("Index.md")).unwrap();
+        assert!(index.contains(&expected));
+        assert!(!index.contains("[[cordiverse/paper: A Programming Paradigm]]"));
         let _ = fs::remove_dir_all(vault);
         let _ = fs::remove_file(sqlite);
     }

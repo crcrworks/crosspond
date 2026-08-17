@@ -9,7 +9,8 @@ use super::hash::content_hash;
 use super::index::{append_log, rebuild_index};
 use super::parser::parse_markdown;
 use super::paths::{
-    default_relative_path, is_indexable_markdown, is_inside, is_reserved_relative, join_inside,
+    default_relative_path, format_wikilink, is_indexable_markdown, is_inside, is_reserved_relative,
+    join_inside, sanitize_relative_path,
 };
 use super::schema::{HOME_MD, SCHEMA_MD};
 use super::writer::render_note;
@@ -63,9 +64,8 @@ impl FsVaultRepository {
         write_if_missing(&self.root.join("_system/Schema.md"), SCHEMA_MD)?;
         write_if_missing(&self.root.join("Home.md"), HOME_MD)?;
         write_if_missing(&self.root.join("Log.md"), "# Knowledge Log\n")?;
-        if !self.root.join("Index.md").exists() {
-            rebuild_index(&self.root, &[])?;
-        }
+        let notes = self.scan_notes()?;
+        rebuild_index(&self.root, &notes)?;
         Ok(())
     }
 
@@ -130,7 +130,7 @@ impl VaultRepository for FsVaultRepository {
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into());
         let relative = match new.relative_path {
-            Some(path) => path,
+            Some(path) => sanitize_relative_path(&path)?,
             None => default_relative_path(new.kind, &new.title, &now)?,
         };
         if is_reserved_relative(&relative) {
@@ -173,7 +173,10 @@ impl VaultRepository for FsVaultRepository {
         let day = stamp.get(..10).unwrap_or(&stamp);
         self.refresh_navigation(
             &format!("{day} — Note created"),
-            &["Created:".into(), format!("- [[{}]]", written.title)],
+            &[
+                "Created:".into(),
+                format!("- {}", format_wikilink(&written.title, &written.path)),
+            ],
         )?;
         Ok(written)
     }
@@ -223,7 +226,10 @@ impl VaultRepository for FsVaultRepository {
             .unwrap_or("unknown");
         self.refresh_navigation(
             &format!("{day} — Note updated"),
-            &["Updated:".into(), format!("- [[{}]]", written.title)],
+            &[
+                "Updated:".into(),
+                format!("- {}", format_wikilink(&written.title, &written.path)),
+            ],
         )?;
         Ok(written)
     }
@@ -325,6 +331,53 @@ mod tests {
             .unwrap();
         assert_eq!(note.path, PathBuf::from("resources/研究室VPN.md"));
         assert!(root.join("resources/研究室VPN.md").is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn titles_with_obsidian_illegal_chars_use_filename_wikilinks() {
+        let (repo, root) = temp_vault();
+        let title = "cordiverse/paper: A Programming Paradigm";
+        let note = repo.create_note(resource(title, &[])).unwrap();
+        assert_eq!(
+            note.path,
+            PathBuf::from("resources/cordiverse-paper- A Programming Paradigm.md")
+        );
+        assert!(root.join(&note.path).is_file());
+        let expected = format_wikilink(title, &note.path);
+        assert_eq!(
+            expected,
+            "[[cordiverse-paper- A Programming Paradigm|cordiverse/paper: A Programming Paradigm]]"
+        );
+        let index = fs::read_to_string(root.join("Index.md")).unwrap();
+        assert!(index.contains(&expected));
+        assert!(!index.contains("[[cordiverse/paper: A Programming Paradigm]]"));
+        let log = fs::read_to_string(root.join("Log.md")).unwrap();
+        assert!(log.contains(&expected));
+        fs::write(
+            root.join("Index.md"),
+            "- [[cordiverse/paper: A Programming Paradigm]]\n",
+        )
+        .unwrap();
+        drop(repo);
+        let _repo = FsVaultRepository::open(&root).unwrap();
+        let rewritten = fs::read_to_string(root.join("Index.md")).unwrap();
+        assert!(rewritten.contains(&expected));
+        assert!(!rewritten.contains("[[cordiverse/paper: A Programming Paradigm]]"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn custom_relative_path_sanitizes_illegal_filename_chars() {
+        let (repo, root) = temp_vault();
+        let mut new = resource("Safe Title", &[]);
+        new.relative_path = Some(PathBuf::from("resources/cordiverse/paper: Title.md"));
+        let note = repo.create_note(new).unwrap();
+        assert_eq!(
+            note.path,
+            PathBuf::from("resources/cordiverse/paper- Title.md")
+        );
+        assert!(root.join(&note.path).is_file());
         let _ = fs::remove_dir_all(root);
     }
 

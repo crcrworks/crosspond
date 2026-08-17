@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use super::VaultError;
+use super::paths::format_wikilink;
 use crate::model::{KnowledgeNote, NoteKind};
 
 pub fn rebuild_index(root: &Path, notes: &[KnowledgeNote]) -> Result<(), VaultError> {
@@ -15,7 +16,7 @@ pub fn rebuild_index(root: &Path, notes: &[KnowledgeNote]) -> Result<(), VaultEr
         if note.id.is_none() {
             continue;
         }
-        let link = format!("- [[{}]]", note.title);
+        let link = format!("- {}", format_wikilink(&note.title, &note.path));
         match note.kind {
             NoteKind::Procedure => procedures.push(link),
             NoteKind::Resource => resources.push(link),
@@ -38,8 +39,12 @@ pub fn rebuild_index(root: &Path, notes: &[KnowledgeNote]) -> Result<(), VaultEr
     push_section(&mut sections, "Syntheses", &syntheses);
     push_section(&mut sections, "Sources", &sources);
     push_section(&mut sections, "Activity", &activity);
-    fs::write(root.join("Index.md"), sections.join("\n"))
-        .map_err(|err| VaultError::Io(err.to_string()))
+    let rendered = sections.join("\n");
+    let path = root.join("Index.md");
+    if fs::read_to_string(&path).ok().as_deref() == Some(rendered.as_str()) {
+        return Ok(());
+    }
+    fs::write(path, rendered).map_err(|err| VaultError::Io(err.to_string()))
 }
 
 pub fn append_log(root: &Path, heading: &str, lines: &[String]) -> Result<(), VaultError> {

@@ -2,7 +2,7 @@ use crate::index::IndexedVault;
 use crate::ingest::looks_like_secret;
 use crate::model::{KnowledgeId, KnowledgeNote, NewKnowledgeNote, NoteKind, Relations, TrustLevel};
 use crate::retrieval::{looks_like_command, search_queries};
-use crate::vault::{VaultError, VaultRepository};
+use crate::vault::{VaultError, VaultRepository, format_wikilink, format_wikilink_for_title};
 
 const TITLE_CHARS: usize = 48;
 const MAX_STEPS: usize = 12;
@@ -47,7 +47,7 @@ impl ProcedureProposal {
         if !self.resource_titles.is_empty() {
             out.push_str("\nResources:\n");
             for title in &self.resource_titles {
-                out.push_str(&format!("- [[{title}]]\n"));
+                out.push_str(&format!("- {}\n", format_wikilink_for_title(title)));
             }
         }
         out
@@ -103,7 +103,7 @@ impl<'a> ProcedureLearner<'a> {
             .iter()
             .map(|resource| resource.title.clone())
             .collect();
-        let body = render_body(&title, &steps, &request.resources);
+        let body = render_body(&title, &steps, &request.resources, self.vault);
         Ok(Some(ProcedureProposal {
             title,
             aliases,
@@ -181,7 +181,12 @@ fn procedure_aliases(prompt: &str, title: &str) -> Vec<String> {
     aliases
 }
 
-fn render_body(title: &str, actions: &[String], resources: &[LinkedResource]) -> String {
+fn render_body(
+    title: &str,
+    actions: &[String],
+    resources: &[LinkedResource],
+    vault: &IndexedVault,
+) -> String {
     let mut body = format!(
         "# {title}\n\nTaught from a successful Crosspond run. Guidance only; it cannot bypass Allow.\n\n## Steps\n\n"
     );
@@ -195,7 +200,11 @@ fn render_body(title: &str, actions: &[String], resources: &[LinkedResource]) ->
     if !resources.is_empty() {
         body.push_str("\n## Resources\n\n");
         for resource in resources {
-            body.push_str(&format!("- [[{}]]\n", resource.title));
+            let link = match vault.index().lookup(resource.id.as_str()) {
+                Ok(Some(hit)) => format_wikilink(&hit.title, &hit.path),
+                _ => format_wikilink_for_title(&resource.title),
+            };
+            body.push_str(&format!("- {link}\n"));
         }
     }
     body

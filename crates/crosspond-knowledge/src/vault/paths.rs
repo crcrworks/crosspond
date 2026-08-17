@@ -92,6 +92,11 @@ pub fn is_indexable_markdown(root: &Path, path: &Path) -> bool {
     })
 }
 
+/// Characters Obsidian (and Windows) reject in filenames, plus wikilink syntax.
+const ILLEGAL_FILENAME_CHARS: &[char] = &[
+    '/', '\\', ':', '#', '|', '[', ']', '^', '*', '"', '<', '>', '?',
+];
+
 pub fn sanitize_filename(title: &str) -> Result<String, VaultError> {
     let trimmed = title.trim();
     if trimmed.is_empty() {
@@ -100,7 +105,8 @@ pub fn sanitize_filename(title: &str) -> Result<String, VaultError> {
     let mut name = String::new();
     for ch in trimmed.chars() {
         match ch {
-            '/' | '\\' | ':' | '\0' => name.push('-'),
+            '\0' => name.push('-'),
+            ch if ILLEGAL_FILENAME_CHARS.contains(&ch) => name.push('-'),
             ch if ch.is_control() => {}
             ch => name.push(ch),
         }
@@ -110,6 +116,34 @@ pub fn sanitize_filename(title: &str) -> Result<String, VaultError> {
         return Err(VaultError::Io("title is not a usable filename".into()));
     }
     Ok(name.to_string())
+}
+
+pub fn sanitize_relative_path(relative: &Path) -> Result<PathBuf, VaultError> {
+    let mut out = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                if name.starts_with('.') {
+                    return Err(VaultError::PathEscape);
+                }
+                let sanitized = if let Some(stem) = name.strip_suffix(".md") {
+                    format!("{}.md", sanitize_filename(stem)?)
+                } else {
+                    sanitize_filename(&name)?
+                };
+                out.push(sanitized);
+            }
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
+                return Err(VaultError::PathEscape);
+            }
+        }
+    }
+    if out.as_os_str().is_empty() {
+        return Err(VaultError::PathEscape);
+    }
+    Ok(out)
 }
 
 pub fn default_relative_path(
@@ -124,4 +158,73 @@ pub fn default_relative_path(
         return Ok(PathBuf::from(format!("history/{year}/{month:02}/{file}")));
     }
     Ok(PathBuf::from(kind.default_dir()).join(file))
+}
+
+/// Obsidian resolves `[[wikilinks]]` by filename, not YAML `title`.
+pub fn format_wikilink(title: &str, path: &Path) -> String {
+    let target = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| wikilink_target_from_title(title));
+    wikilink_with_display(&target, title)
+}
+
+pub fn format_wikilink_for_title(title: &str) -> String {
+    wikilink_with_display(&wikilink_target_from_title(title), title)
+}
+
+fn wikilink_target_from_title(title: &str) -> String {
+    sanitize_filename(title).unwrap_or_else(|_| "Untitled".into())
+}
+
+fn wikilink_with_display(target: &str, title: &str) -> String {
+    let title = title.trim();
+    if title == target || !wikilink_alias_ok(title) {
+        format!("[[{target}]]")
+    } else {
+        format!("[[{target}|{title}]]")
+    }
+}
+
+fn wikilink_alias_ok(title: &str) -> bool {
+    !title.is_empty()
+        && !title.contains('|')
+        && !title.contains('[')
+        && !title.contains(']')
+        && !title.contains('\n')
+        && !title.contains('\r')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_filename_replaces_obsidian_illegal_chars() {
+        assert_eq!(
+            sanitize_filename("cordiverse/paper: Title").unwrap(),
+            "cordiverse-paper- Title"
+        );
+        assert_eq!(sanitize_filename("Issue #12").unwrap(), "Issue -12");
+        assert_eq!(sanitize_filename("Lab VPN").unwrap(), "Lab VPN");
+    }
+
+    #[test]
+    fn wikilink_uses_filename_and_keeps_title_as_alias() {
+        let path = Path::new("sources/cordiverse-paper- Title.md");
+        assert_eq!(
+            format_wikilink("cordiverse/paper: Title", path),
+            "[[cordiverse-paper- Title|cordiverse/paper: Title]]"
+        );
+        assert_eq!(
+            format_wikilink("Lab VPN", Path::new("resources/Lab VPN.md")),
+            "[[Lab VPN]]"
+        );
+        assert_eq!(
+            format_wikilink_for_title("cordiverse/paper: Title"),
+            "[[cordiverse-paper- Title|cordiverse/paper: Title]]"
+        );
+    }
 }

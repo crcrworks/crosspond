@@ -19,7 +19,7 @@ Every Crosspond-managed note has a stable `id` that does not change when the fil
 
 Common fields: `id`, `type`, `title`, `aliases`, `tags`, `created`, `updated`, `trust`.
 
-Typed relations live under `relations` (`requires`, `uses`, `related`, `produced_by`, `derived_from`, `mentions`, `supersedes`). Human-facing links in the body use `[[wikilinks]]`.
+Typed relations live under `relations` (`requires`, `uses`, `related`, `produced_by`, `derived_from`, `mentions`, `supersedes`). Human-facing links in the body use `[[wikilinks]]` whose targets are filenames (Obsidian cannot open titles that contain `\`, `/`, or `:`).
 
 ## Trust
 

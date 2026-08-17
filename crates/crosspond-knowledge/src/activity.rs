@@ -6,7 +6,7 @@ use crate::index::IndexedVault;
 use crate::model::{
     KnowledgeId, KnowledgeNote, KnowledgePatch, NewKnowledgeNote, NoteKind, Relations, TrustLevel,
 };
-use crate::vault::{VaultError, VaultRepository};
+use crate::vault::{VaultError, VaultRepository, format_wikilink};
 
 const RESULT_CHARS: usize = 1500;
 const TITLE_CHARS: usize = 48;
@@ -171,7 +171,7 @@ fn render_body(vault: &IndexedVault, record: &ActivityRecord) -> String {
 
 fn wiki_item(vault: &IndexedVault, id: &KnowledgeId) -> String {
     match vault.index().lookup(id.as_str()) {
-        Ok(Some(hit)) => format!("[[{}]]", hit.title),
+        Ok(Some(hit)) => format_wikilink(&hit.title, &hit.path),
         _ => format!("`{}`", id.as_str()),
     }
 }

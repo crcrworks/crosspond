@@ -134,7 +134,7 @@ impl IndexedVault {
 mod tests {
     use super::*;
     use crate::model::{NewKnowledgeNote, NoteKind, Relations, TrustLevel};
-    use crate::vault::{FsVaultRepository, VaultRepository};
+    use crate::vault::{FsVaultRepository, VaultRepository, format_wikilink};
     use std::fs;
     use std::str::FromStr;
 
@@ -194,6 +194,33 @@ mod tests {
         assert!(by_alias.iter().any(|hit| hit.title == "Lab VPN"));
         let by_body = indexed.search("lab profile", 10).unwrap();
         assert!(by_body.iter().any(|hit| hit.title == "Lab VPN"));
+        let _ = fs::remove_dir_all(vault);
+        let _ = fs::remove_file(sqlite);
+    }
+
+    #[test]
+    fn filename_wikilinks_resolve_when_title_is_obsidian_illegal() {
+        let (vault, sqlite) = temp_paths();
+        let indexed = IndexedVault::open(&vault, &sqlite).unwrap();
+        let paper = indexed
+            .create_note(resource("cordiverse/paper: Title", &[], "# Paper\n"))
+            .unwrap();
+        let link = format_wikilink(&paper.title, &paper.path);
+        indexed
+            .create_note(resource(
+                "Related Note",
+                &[],
+                &format!("# Related\n\nSee {link}.\n"),
+            ))
+            .unwrap();
+        let snapshot = indexed.index.snapshot().unwrap();
+        let paper_id = paper.id.unwrap().to_string();
+        assert!(
+            snapshot
+                .links
+                .iter()
+                .any(|edge| { edge.relation_type == "wikilink" && edge.target_id == paper_id })
+        );
         let _ = fs::remove_dir_all(vault);
         let _ = fs::remove_file(sqlite);
     }
