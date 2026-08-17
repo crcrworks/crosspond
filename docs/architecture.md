@@ -96,7 +96,7 @@ GPUI 0.2.2 has no per-window `hide()` / `show()`. The official `examples/window.
 - hide: `App::hide()` (`NSApplication hide:`)
 - show: `App::activate(true)` plus `Window::activate_window()`
 
-crates.io `gpui` 0.2.2 holds a `parking_lot` mutex across `resignKeyWindow` in `window_did_change_key_status`. AppKit delivers `windowDidResignKey` synchronously, re-enters the same function, and deadlocks the main thread (Not Responding). Crosspond uses `[patch.crates-io]` → `third_party/gpui`, which is that crates.io tree plus [zed#51035](https://github.com/zed-industries/zed/pull/51035) (drop the lock first) and macOS IME fixes for PopUp panels (report `windowLevel`, accept first responder, keep the panel on deactivate, re-activate `NSTextInputContext` when the window becomes key). Do not replace this with Zed `main`.
+crates.io `gpui` 0.2.2 holds a `parking_lot` mutex across `resignKeyWindow` in `window_did_change_key_status`. AppKit delivers `windowDidResignKey` synchronously, re-enters the same function, and deadlocks the main thread (Not Responding). Crosspond uses `[patch.crates-io]` → `third_party/gpui`, which is that crates.io tree plus [zed#51035](https://github.com/zed-industries/zed/pull/51035) (drop the lock first) and macOS IME fixes for PopUp panels (report `windowLevel`, accept first responder, keep the panel on deactivate, re-activate `NSTextInputContext` when the window becomes key, after `setContentSize`, and when `currentInputContext` is nil on key-down). Do not replace this with Zed `main`.
 
 The launcher window is created once (`show: false`) and toggled; it is not destroyed on Escape.
 

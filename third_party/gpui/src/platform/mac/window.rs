@@ -255,6 +255,14 @@ unsafe fn build_classes() {
                     sel!(acceptsFirstResponder),
                     yes as extern "C" fn(&Object, Sel) -> BOOL,
                 );
+                // NSView discards its NSTextInputContext when it resigns first
+                // responder (setContentSize on an NSPanel does this). Activate
+                // the new context or Japanese IME stays roman-only until the
+                // next become-key (hide/show).
+                decl.add_method(
+                    sel!(becomeFirstResponder),
+                    become_first_responder as extern "C" fn(&Object, Sel) -> BOOL,
+                );
                 // Candidate windows sit at NSFloatingWindowLevel unless we
                 // report a higher level. PopUp is NSPopUpWindowLevel (101).
                 decl.add_method(
@@ -987,6 +995,7 @@ impl PlatformWindow for MacWindow {
     fn resize(&mut self, size: Size<Pixels>) {
         let this = self.0.lock();
         let window = this.native_window;
+        let view = this.native_view;
         this.executor
             .spawn(async move {
                 unsafe {
@@ -994,6 +1003,10 @@ impl PlatformWindow for MacWindow {
                         width: size.width.0 as f64,
                         height: size.height.0 as f64,
                     });
+                    // setContentSize resigns first responder on NSPanel and
+                    // discards NSTextInputContext. Re-attach in the same turn
+                    // or Japanese IME stays roman-only until hide/show.
+                    attach_text_input_client_if_ready(window, view.as_ptr() as id);
                 }
             })
             .detach();
@@ -1633,21 +1646,67 @@ extern "C" fn yes(_: &Object, _: Sel) -> BOOL {
     YES
 }
 
-/// Re-attach TSM after the window becomes key. `App::hide` / NSPanel
-/// otherwise leaves `NSTextInputContext` inactive, so Japanese IME inserts
-/// roman letters and never shows the candidate window.
+/// Re-attach TSM after the window becomes key or the panel resizes.
+/// `App::hide` / NSPanel `setContentSize` otherwise leaves
+/// `NSTextInputContext` inactive, so Japanese IME inserts roman letters
+/// and never shows the candidate window.
 unsafe fn attach_text_input_client(native_window: id, native_view: id) {
     unsafe {
         if native_window.is_null() || native_view.is_null() {
             return;
         }
-        let _: BOOL = msg_send![native_window, makeFirstResponder: native_view];
+        // Skip makeFirstResponder when we already are: becomeFirstResponder
+        // calls this, and re-entering makeFirstResponder would recurse.
+        let first_responder: id = msg_send![native_window, firstResponder];
+        if first_responder != native_view {
+            let _: BOOL = msg_send![native_window, makeFirstResponder: native_view];
+        }
         let input_context: id = msg_send![native_view, inputContext];
         if input_context.is_null() {
             return;
         }
         let _: () = msg_send![input_context, activate];
         let _: () = msg_send![input_context, invalidateCharacterCoordinates];
+    }
+}
+
+fn window_has_input_handler(window_or_view: &Object) -> bool {
+    let window_state = unsafe { get_window_state(window_or_view) };
+    window_state.lock().input_handler.is_some()
+}
+
+/// Same as [`attach_text_input_client`], but skip until GPUI has registered
+/// an IME handler. Activating TSM on the first frame hits an empty dispatch
+/// tree and aborts (`panic_cannot_unwind`).
+unsafe fn attach_text_input_client_if_ready(native_window: id, native_view: id) {
+    unsafe {
+        if native_view.is_null() {
+            return;
+        }
+        if !window_has_input_handler(&*native_view) {
+            return;
+        }
+        attach_text_input_client(native_window, native_view);
+    }
+}
+
+unsafe fn attach_text_input_client_for_view(view: &Object) {
+    unsafe {
+        if !window_has_input_handler(view) {
+            return;
+        }
+        let window: id = msg_send![view, window];
+        attach_text_input_client(window, view as *const Object as id);
+    }
+}
+
+extern "C" fn become_first_responder(this: &Object, _: Sel) -> BOOL {
+    unsafe {
+        let accepted: BOOL = msg_send![super(this, class!(NSView)), becomeFirstResponder];
+        if accepted == YES {
+            attach_text_input_client_for_view(this);
+        }
+        accepted
     }
 }
 
@@ -1745,6 +1804,17 @@ extern "C" fn handle_key_event(this: &Object, native_event: id, key_equivalent: 
             }
 
             drop(lock);
+
+            // After NSPanel resize, currentInputContext is nil even though
+            // the view still receives keys. handleEvent then inserts roman
+            // and never starts composition. Do not steal an IME palette's
+            // context when currentInputContext is already set.
+            unsafe {
+                let current: id = msg_send![class!(NSTextInputContext), currentInputContext];
+                if current.is_null() {
+                    attach_text_input_client_for_view(this);
+                }
+            }
 
             let is_composing =
                 with_input_handler(this, |input_handler| input_handler.marked_text_range())
@@ -1976,7 +2046,17 @@ extern "C" fn window_did_change_occlusion_state(this: &Object, _: Sel, _: id) {
 
 extern "C" fn window_did_resize(this: &Object, _: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
-    window_state.as_ref().lock().move_traffic_light();
+    let lock = window_state.as_ref().lock();
+    lock.move_traffic_light();
+    let native_window = lock.native_window;
+    let native_view = lock.native_view.as_ptr() as id;
+    let is_key = unsafe { native_window.isKeyWindow() == YES };
+    drop(lock);
+    if is_key {
+        unsafe {
+            attach_text_input_client_if_ready(native_window, native_view);
+        }
+    }
 }
 
 extern "C" fn window_will_enter_fullscreen(this: &Object, _: Sel, _: id) {

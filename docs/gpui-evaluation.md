@@ -16,7 +16,7 @@ UI-only crates stay isolated so a SwiftUI/AppKit replacement remains possible if
 | Version | `=0.2.2` |
 | Source | crates.io, locally patched at `third_party/gpui` |
 | Upstream git (from `.cargo_vcs_info.json`) | `69e2130295c2649963eb639fc70b4f2ee8ea1624` |
-| Local patch | Drop the `MacWindowState` lock before `resignKeyWindow` ([zed#51035](https://github.com/zed-industries/zed/pull/51035)). crates.io 0.2.2 deadlocks the main thread when a PopUp becomes key. Also: PopUp IME (`windowLevel`, `acceptsFirstResponder`, `hidesOnDeactivate = NO`, re-activate `NSTextInputContext` on become-key) so Japanese input keeps the candidate window and does not stick in roman-only after hide/show. |
+| Local patch | Drop the `MacWindowState` lock before `resignKeyWindow` ([zed#51035](https://github.com/zed-industries/zed/pull/51035)). crates.io 0.2.2 deadlocks the main thread when a PopUp becomes key. Also: PopUp IME (`windowLevel`, `acceptsFirstResponder`, `hidesOnDeactivate = NO`, re-activate `NSTextInputContext` on become-key, after `setContentSize`, and when `currentInputContext` is nil) so Japanese input keeps the candidate window and does not stick in roman-only after hide/show or the compact→conversation resize. |
 | Declared license | Apache-2.0 |
 | Docs / examples used | `https://docs.rs/gpui/0.2.2/` and the crate's `examples/` |
 
@@ -35,7 +35,7 @@ Confirmed against 0.2.2:
 Limitations:
 
 - **PopUp key-status deadlock (patched).** crates.io 0.2.2 deadlocks the main thread on `resignKeyWindow`; `third_party/gpui` applies [zed#51035](https://github.com/zed-industries/zed/pull/51035).
-- **PopUp Japanese IME (patched).** crates.io 0.2.2 NSPanel hides on IME candidate windows, reports no `windowLevel`, and does not restore first responder / `NSTextInputContext` after `App::hide()`. Roman-only typing with no candidate UI follows.
+- **PopUp Japanese IME (patched).** crates.io 0.2.2 NSPanel hides on IME candidate windows, reports no `windowLevel`, and does not restore first responder / `NSTextInputContext` after `App::hide()` or `setContentSize`. Roman-only typing with no candidate UI follows. Hide/show appeared to fix it because become-key re-activates the context.
 - **Metal toolchain.** Xcode 27 does not ship the `metal` compiler until `xcodebuild -downloadComponent MetalToolchain`. GPUI's build script fails without it.
 - **Pre-1.0.** Breaking changes between crates.io and Zed `main` are routine.
 - **`cargo run` is not an `.app` bundle.** `LSUIElement` in `resources/macos/Info.plist` does not apply until the binary is wrapped. Dock icon appears in development.

@@ -137,7 +137,20 @@ impl CommandWindow {
         window.focus(&self.input_focus_handle(cx));
     }
 
+    /// Re-attach Japanese IME after a layout change that does not resign key.
+    /// Hide/show already does this via become-key; submit and New do not.
+    /// Skip when the launcher is not key so a finishing task cannot steal focus.
+    fn restore_prompt_ime(&self, window: &mut Window, cx: &App) {
+        self.focus_prompt(window, cx);
+        if !window.is_window_active() {
+            return;
+        }
+        window.activate_window();
+        window.invalidate_character_coordinates();
+    }
+
     pub fn apply_event(&mut self, event: AgentEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let mut restore_ime = false;
         match event {
             AgentEvent::TaskStarted { task_id, prompt } => {
                 if self.current_task != Some(task_id) {
@@ -179,7 +192,7 @@ impl CommandWindow {
                 self.receipt = Some(receipt);
                 self.state = CommandWindowState::Completed;
                 self.settle_live_work();
-                self.focus_prompt(window, cx);
+                restore_ime = true;
             }
             AgentEvent::TaskFailed { task_id, message } => {
                 if self.current_task != Some(task_id) {
@@ -188,6 +201,7 @@ impl CommandWindow {
                 self.transcript.push_notice(&message);
                 self.state = CommandWindowState::Failed;
                 self.settle_live_work();
+                restore_ime = true;
             }
             AgentEvent::TaskCancelled { task_id } => {
                 if self.current_task != Some(task_id) {
@@ -195,6 +209,7 @@ impl CommandWindow {
                 }
                 self.state = CommandWindowState::Cancelled;
                 self.settle_live_work();
+                restore_ime = true;
             }
             AgentEvent::ToolStarted {
                 task_id,
@@ -262,6 +277,9 @@ impl CommandWindow {
             }
         }
         self.sync_window_size(window, cx);
+        if restore_ime {
+            self.restore_prompt_ime(window, cx);
+        }
         cx.notify();
     }
 
@@ -405,8 +423,10 @@ impl CommandWindow {
             input.set_placeholder(FOLLOW_UP_PLACEHOLDER);
             cx.notify();
         });
-        self.focus_prompt(window, cx);
+        // Resize first. Activate-then-setContentSize leaves IME roman-only
+        // because NSPanel discards NSTextInputContext on the size change.
         self.sync_window_size(window, cx);
+        self.restore_prompt_ime(window, cx);
         cx.notify();
     }
 
@@ -456,6 +476,7 @@ impl CommandWindow {
         self.reset_session(cx);
         self.sync_window_size(window, cx);
         crate::launcher::recollect_ambient(cx);
+        self.restore_prompt_ime(window, cx);
         cx.notify();
     }
 
