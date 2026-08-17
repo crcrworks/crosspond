@@ -85,7 +85,7 @@ fn main() {
                 let config = Arc::clone(&config);
                 move |window, cx| {
                     cx.new(|cx| {
-                        let view = CommandWindow::new(command_tx, config, cx);
+                        let view = CommandWindow::new(command_tx, config, window, cx);
                         let focus = view.input_focus_handle(cx);
                         window.focus(&focus);
                         view

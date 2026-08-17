@@ -8,8 +8,8 @@ use crosspond_core::{
     default_tasks_root, history_group_label, list_recent_tasks,
 };
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, KeyBinding, SharedString, Timer, Window,
-    actions, div, prelude::*, rems, rgb, size,
+    AnyElement, App, Context, Entity, FocusHandle, KeyBinding, SharedString, Subscription, Timer,
+    Window, actions, div, prelude::*, rems, rgb, size,
 };
 
 use crate::activity_label::activity_label;
@@ -68,6 +68,7 @@ pub struct CommandWindow {
     computer_approval: ComputerApprovalMode,
     tool_starts: Vec<(String, Instant)>,
     activity: LiveActivity,
+    _input_changes: Subscription,
 }
 
 struct PendingApproval {
@@ -80,13 +81,18 @@ impl CommandWindow {
     pub fn new(
         commands: CommandSender,
         config: Arc<dyn ConfigStore>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let computer_approval = config
             .load()
             .map(|loaded| loaded.computer_approval)
             .unwrap_or_default();
-        let input = cx.new(|cx| TextInput::new(ASK_PLACEHOLDER, cx));
+        let input = cx.new(|cx| TextInput::new(ASK_PLACEHOLDER, cx).multiline());
+        let _input_changes = cx.observe_in(&input, window, |this, _, window, cx| {
+            this.sync_window_size(window, cx);
+            cx.notify();
+        });
         Self {
             input,
             state: CommandWindowState::Idle,
@@ -103,6 +109,7 @@ impl CommandWindow {
             computer_approval,
             tool_starts: Vec::new(),
             activity: LiveActivity::Thinking,
+            _input_changes,
         }
     }
 
@@ -234,7 +241,7 @@ impl CommandWindow {
                 self.activity = LiveActivity::Thinking;
             }
         }
-        self.sync_window_size(window);
+        self.sync_window_size(window, cx);
         cx.notify();
     }
 
@@ -265,8 +272,8 @@ impl CommandWindow {
         self.state != CommandWindowState::Idle || !self.transcript.is_empty()
     }
 
-    pub fn sync_size_for_show(&self, window: &mut Window) {
-        self.sync_window_size(window);
+    pub fn sync_size_for_show(&self, window: &mut Window, cx: &App) {
+        self.sync_window_size(window, cx);
     }
 
     pub fn set_ambient_context(
@@ -276,7 +283,7 @@ impl CommandWindow {
         cx: &mut Context<Self>,
     ) {
         self.ambient = ambient;
-        self.sync_window_size(window);
+        self.sync_window_size(window, cx);
         cx.notify();
     }
 
@@ -286,7 +293,7 @@ impl CommandWindow {
         }
         let ready = crate::settings::has_provider_key(cx);
         self.overlay = Overlay::Onboarding { ready, hint: None };
-        self.sync_window_size(window);
+        self.sync_window_size(window, cx);
         cx.notify();
     }
 
@@ -357,7 +364,7 @@ impl CommandWindow {
             cx.notify();
         });
         self.focus_prompt(window, cx);
-        self.sync_window_size(window);
+        self.sync_window_size(window, cx);
         cx.notify();
     }
 
@@ -373,13 +380,13 @@ impl CommandWindow {
             if let Overlay::History { selected, .. } = &mut self.overlay {
                 *selected = None;
             }
-            self.sync_window_size(window);
+            self.sync_window_size(window, cx);
             cx.notify();
             return;
         }
         if matches!(self.overlay, Overlay::History { .. }) {
             self.overlay = Overlay::None;
-            self.sync_window_size(window);
+            self.sync_window_size(window, cx);
             cx.notify();
             return;
         }
@@ -393,7 +400,7 @@ impl CommandWindow {
             return;
         }
         self.reset_session(cx);
-        self.sync_window_size(window);
+        self.sync_window_size(window, cx);
         crate::launcher::recollect_ambient(cx);
         cx.notify();
     }
@@ -417,7 +424,7 @@ impl CommandWindow {
             entries,
             selected: None,
         };
-        self.sync_window_size(window);
+        self.sync_window_size(window, cx);
         cx.notify();
     }
 
@@ -450,7 +457,7 @@ impl CommandWindow {
         }
         if matches!(self.overlay, Overlay::History { .. }) {
             self.overlay = Overlay::None;
-            self.sync_window_size(window);
+            self.sync_window_size(window, cx);
             cx.notify();
             return;
         }
@@ -469,7 +476,7 @@ impl CommandWindow {
             }
             crate::settings::open(cx);
         }
-        self.sync_window_size(window);
+        self.sync_window_size(window, cx);
         cx.notify();
     }
 
@@ -495,7 +502,7 @@ impl CommandWindow {
         if let Some(pending) = self.pending_approval.take() {
             self.commands.send(RuntimeCommand::Approve(pending.id));
             self.state = CommandWindowState::Running;
-            self.sync_window_size(window);
+            self.sync_window_size(window, cx);
             cx.notify();
         }
     }
@@ -504,22 +511,26 @@ impl CommandWindow {
         if let Some(pending) = self.pending_approval.take() {
             self.commands.send(RuntimeCommand::Reject(pending.id));
             self.state = CommandWindowState::Running;
-            self.sync_window_size(window);
+            self.sync_window_size(window, cx);
             cx.notify();
         }
     }
 
-    fn sync_window_size(&self, window: &mut Window) {
+    fn sync_window_size(&self, window: &mut Window, cx: &App) {
         let current = window.viewport_size();
         let min_width = crate::launcher::WINDOW_WIDTH;
         let compact = !self.in_conversation() && matches!(self.overlay, Overlay::None);
         let min_height = if compact {
             crate::launcher::idle_height(self.ambient.badge_lines().len())
+                + self.input.read(cx).extra_height()
         } else {
             crate::launcher::RESULT_HEIGHT
         };
         if compact {
-            window.resize(size(min_width, min_height));
+            let target = size(min_width, min_height);
+            if window.viewport_size() != target {
+                window.resize(target);
+            }
             return;
         }
         if current.width < min_width || current.height < min_height {
@@ -653,6 +664,7 @@ impl gpui::Render for CommandWindow {
             show_history,
             show_stop,
             mode_label,
+            self.input.read(cx).is_expanded(),
             dark,
             entity.clone(),
         );
@@ -711,6 +723,7 @@ fn render_input_row(
     show_history: bool,
     show_stop: bool,
     mode_label: &'static str,
+    expanded: bool,
     dark: bool,
     entity: Entity<CommandWindow>,
 ) -> AnyElement {
@@ -719,6 +732,7 @@ fn render_input_row(
         .flex()
         .flex_row()
         .items_center()
+        .when(expanded, |row| row.items_end())
         .gap_3()
         .child(div().size_2().rounded_full().bg(rgb(0x30d158)))
         .when(onboarding, |row| {

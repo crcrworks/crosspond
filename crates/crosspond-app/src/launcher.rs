@@ -162,7 +162,7 @@ pub fn show(cx: &mut App) {
         } else if let Some(ambient) = ambient {
             view.set_ambient_context(ambient, window, cx);
         }
-        view.sync_size_for_show(window);
+        view.sync_size_for_show(window, cx);
         window.activate_window();
         let focus = view.input_focus_handle(cx);
         window.focus(&focus);
