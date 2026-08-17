@@ -17,8 +17,8 @@ use crate::activity_label::activity_label;
 use crate::markdown::{self, MarkdownPalette};
 use crate::text_input::TextInput;
 use crate::transcript::{
-    LiveActivity, Transcript, TranscriptBlock, WorkStep, tool_activity_label, tool_done_label,
-    tool_icon_path, work_header_icon,
+    LiveActivity, Transcript, TranscriptBlock, WorkStep, thought_label, tool_icon_path,
+    tool_row_label, work_header_icon,
 };
 use crate::ui;
 
@@ -196,12 +196,16 @@ impl CommandWindow {
                 self.state = CommandWindowState::Cancelled;
                 self.settle_live_work();
             }
-            AgentEvent::ToolStarted { task_id, tool } => {
+            AgentEvent::ToolStarted {
+                task_id,
+                tool,
+                summary,
+            } => {
                 if self.current_task != Some(task_id) {
                     return;
                 }
                 self.tool_starts.push((tool.clone(), Instant::now()));
-                self.transcript.start_tool(&tool);
+                self.transcript.start_tool(&tool, &summary);
                 self.activity = LiveActivity::Tool(tool);
             }
             AgentEvent::ArtifactCreated {
@@ -1292,60 +1296,40 @@ fn render_transcript_block(
             started_at,
         } => {
             let sealed = worked.is_some();
-            let header_live = thinking_live && !sealed;
+            let details = render_work_steps(
+                index,
+                &steps,
+                thinking_live,
+                sealed,
+                muted,
+                result_color,
+                dark,
+                entity.clone(),
+            );
+            if !sealed {
+                return div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .gap_1()
+                    .children(details)
+                    .into_any_element();
+            }
             let header = TranscriptBlock::Work {
                 steps: steps.clone(),
                 expanded,
                 started_at,
                 worked,
             }
-            .collapsed_label(header_live);
+            .collapsed_label(false);
             let icon = work_header_icon(&steps);
-            let running = !sealed
-                && (header_live
-                    || steps
-                        .iter()
-                        .any(|step| matches!(step, WorkStep::Tool(item) if item.running)));
-            let details = if expanded {
-                steps
-                    .iter()
-                    .enumerate()
-                    .map(|(row, step)| match step {
-                        WorkStep::Thinking { text, expanded } => render_nested_thinking(
-                            index,
-                            row,
-                            text,
-                            *expanded,
-                            muted,
-                            entity.clone(),
-                        ),
-                        WorkStep::Tool(item) => {
-                            let label = if item.running {
-                                tool_activity_label(&item.name)
-                            } else {
-                                tool_done_label(&item.name)
-                            };
-                            tool_detail_row(
-                                index,
-                                row,
-                                tool_icon_path(&item.name),
-                                label,
-                                item.running && !sealed,
-                                muted,
-                            )
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
             collapsible_block(
                 ("work", index),
                 if expanded { "▾" } else { "▸" },
                 icon,
-                activity_label(("work-header", index), header, running, muted),
+                activity_label(("work-header", index), header, false, muted),
                 muted,
-                details,
+                if expanded { details } else { Vec::new() },
                 entity,
             )
             .into_any_element()
@@ -1358,26 +1342,84 @@ fn render_transcript_block(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn render_work_steps(
+    index: usize,
+    steps: &[WorkStep],
+    thinking_live: bool,
+    nested: bool,
+    muted: gpui::Rgba,
+    result_color: gpui::Rgba,
+    dark: bool,
+    entity: Entity<CommandWindow>,
+) -> Vec<AnyElement> {
+    steps
+        .iter()
+        .enumerate()
+        .map(|(row, step)| match step {
+            WorkStep::Thinking {
+                text,
+                expanded,
+                started_at,
+                duration,
+            } => {
+                let live = thinking_live && duration.is_none();
+                render_nested_thinking(
+                    index,
+                    row,
+                    text,
+                    *expanded,
+                    thought_label(*duration, *started_at, live),
+                    live,
+                    nested,
+                    muted,
+                    entity.clone(),
+                )
+            }
+            WorkStep::Narration { text } => {
+                let body = markdown::render(
+                    text.trim_end(),
+                    MarkdownPalette::for_appearance(result_color, muted, dark),
+                    index.saturating_mul(1000).saturating_add(row + 500),
+                );
+                if nested {
+                    div().pl_4().w_full().child(body).into_any_element()
+                } else {
+                    body
+                }
+            }
+            WorkStep::Tool(item) => tool_detail_row(
+                index,
+                row,
+                tool_icon_path(&item.name),
+                tool_row_label(&item.name, &item.summary),
+                item.running && !nested,
+                nested,
+                muted,
+            ),
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_nested_thinking(
     block: usize,
     step: usize,
     text: &str,
     expanded: bool,
+    label: String,
+    live: bool,
+    nested: bool,
     muted: gpui::Rgba,
     entity: Entity<CommandWindow>,
 ) -> AnyElement {
     let body = text.trim().to_string();
-    let label = if body.is_empty() {
-        "Thinking".to_string()
-    } else {
-        "Thought".to_string()
-    };
-    div()
+    let row = div()
         .flex()
         .flex_col()
         .flex_none()
         .gap_1()
-        .pl_4()
+        .when(nested, |this| this.pl_4())
         .child(
             div()
                 .id((SharedString::from(format!("think-step-{block}")), step))
@@ -1409,7 +1451,12 @@ fn render_nested_thinking(
                         .text_sm()
                         .text_color(muted)
                         .whitespace_nowrap()
-                        .child(label),
+                        .child(activity_label(
+                            (SharedString::from(format!("think-label-{block}")), step),
+                            label,
+                            live,
+                            muted,
+                        )),
                 ),
         )
         .children((expanded && !body.is_empty()).then(|| {
@@ -1420,8 +1467,8 @@ fn render_nested_thinking(
                 .line_height(rems(1.35))
                 .text_color(muted)
                 .child(body)
-        }))
-        .into_any_element()
+        }));
+    row.into_any_element()
 }
 
 fn render_approval_card(
@@ -1518,6 +1565,7 @@ fn tool_detail_row(
     icon: &'static str,
     label: String,
     running: bool,
+    nested: bool,
     muted: gpui::Rgba,
 ) -> AnyElement {
     div()
@@ -1526,7 +1574,7 @@ fn tool_detail_row(
         .flex_row()
         .items_center()
         .gap_1()
-        .pl_4()
+        .when(nested, |this| this.pl_4())
         .w_full()
         .child(ui::svg_icon(icon, muted))
         .child(
@@ -1616,7 +1664,7 @@ mod tests {
             ),
             Some("Thinking".into())
         );
-        transcript.start_tool("read_file");
+        transcript.start_tool("read_file", "");
         assert_eq!(
             status(
                 CommandWindowState::Running,

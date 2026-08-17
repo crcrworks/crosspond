@@ -37,7 +37,7 @@ pub use policy::{
     AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate, evaluate_with,
     risk_for_tool,
 };
-pub use receipt::{Receipt, receipt_action_line};
+pub use receipt::{Receipt, receipt_action_line, tool_ui_summary};
 pub use runtime::{
     CommandSender, EventPump, MAX_AGENT_STEPS, MISSING_API_KEY_MESSAGE, RuntimeChannels,
     spawn_runtime, spawn_runtime_with, spawn_runtime_with_tools,

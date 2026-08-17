@@ -525,6 +525,7 @@ impl Runtime {
                             .send(AgentEvent::ToolStarted {
                                 task_id,
                                 tool: call.name.clone(),
+                                summary: crate::receipt::tool_ui_summary(&call.name, &input),
                             })
                             .is_err()
                         {

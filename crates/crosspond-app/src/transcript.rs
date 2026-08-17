@@ -1,7 +1,9 @@
 //! Collapsible work groups for the command window transcript.
 //!
-//! Thinking and tools share one group until visible assistant text appears.
-//! Sealed groups collapse under a "Worked for …" header.
+//! While a turn is still working, steps render inline. The first assistant
+//! text seals the group under a collapsed "Worked for …" header so the final
+//! answer sits below a tidy summary. If more tools follow, that text is
+//! absorbed as narration and the group opens inline again.
 
 use std::time::{Duration, Instant};
 
@@ -29,13 +31,22 @@ pub enum TranscriptBlock {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkStep {
-    Thinking { text: String, expanded: bool },
+    Thinking {
+        text: String,
+        expanded: bool,
+        started_at: Instant,
+        duration: Option<Duration>,
+    },
+    Narration {
+        text: String,
+    },
     Tool(ToolLine),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolLine {
     pub name: String,
+    pub summary: String,
     pub running: bool,
 }
 
@@ -84,31 +95,32 @@ impl Transcript {
         if delta.is_empty() {
             return;
         }
-        if let Some(idx) = self.open_work_index()
+        self.absorb_trailing_text();
+        if let Some(idx) = self.reopen_work()
             && let TranscriptBlock::Work { steps, .. } = &mut self.blocks[idx]
         {
-            if let Some(WorkStep::Thinking { text, .. }) = steps.last_mut() {
+            if let Some(WorkStep::Thinking {
+                text,
+                duration: None,
+                ..
+            }) = steps.last_mut()
+            {
                 text.push_str(delta);
                 return;
             }
             if delta.trim().is_empty() {
                 return;
             }
-            steps.push(WorkStep::Thinking {
-                text: delta.to_string(),
-                expanded: false,
-            });
+            freeze_thinking_steps(steps);
+            steps.push(thinking_step(delta.to_string()));
             return;
         }
         if delta.trim().is_empty() {
             return;
         }
         self.blocks.push(TranscriptBlock::Work {
-            steps: vec![WorkStep::Thinking {
-                text: delta.to_string(),
-                expanded: false,
-            }],
-            expanded: false,
+            steps: vec![thinking_step(delta.to_string())],
+            expanded: true,
             started_at: Instant::now(),
             worked: None,
         });
@@ -118,6 +130,7 @@ impl Transcript {
         if delta.is_empty() {
             return;
         }
+        self.freeze_open_thinking();
         if let Some(TranscriptBlock::Text { text }) = self.blocks.last_mut() {
             text.push_str(delta);
             return;
@@ -142,12 +155,15 @@ impl Transcript {
         });
     }
 
-    pub fn start_tool(&mut self, name: &str) {
+    pub fn start_tool(&mut self, name: &str, summary: &str) {
+        self.absorb_trailing_text();
+        self.freeze_open_thinking();
         let line = ToolLine {
             name: name.to_string(),
+            summary: summary.to_string(),
             running: true,
         };
-        if let Some(idx) = self.open_work_index()
+        if let Some(idx) = self.reopen_work()
             && let TranscriptBlock::Work { steps, .. } = &mut self.blocks[idx]
         {
             steps.push(WorkStep::Tool(line));
@@ -155,14 +171,14 @@ impl Transcript {
         }
         self.blocks.push(TranscriptBlock::Work {
             steps: vec![WorkStep::Tool(line)],
-            expanded: false,
+            expanded: true,
             started_at: Instant::now(),
             worked: None,
         });
     }
 
     pub fn finish_tool(&mut self, name: &str) {
-        let Some(idx) = self.open_work_index() else {
+        let Some(idx) = self.turn_work_index() else {
             return;
         };
         let TranscriptBlock::Work { steps, .. } = &mut self.blocks[idx] else {
@@ -199,6 +215,7 @@ impl Transcript {
 
     /// Seal the open work group so its header becomes "Worked for …".
     pub fn seal_open_work(&mut self) {
+        self.freeze_open_thinking();
         if let Some(idx) = self.open_work_index()
             && let TranscriptBlock::Work {
                 expanded,
@@ -212,10 +229,72 @@ impl Transcript {
         }
     }
 
+    fn absorb_trailing_text(&mut self) {
+        let Some(TranscriptBlock::Text { text }) = self.blocks.last() else {
+            return;
+        };
+        if text.trim().is_empty() {
+            self.blocks.pop();
+            return;
+        }
+        let text = match self.blocks.pop() {
+            Some(TranscriptBlock::Text { text }) => text,
+            Some(other) => {
+                self.blocks.push(other);
+                return;
+            }
+            None => return,
+        };
+        if let Some(idx) = self.reopen_work()
+            && let TranscriptBlock::Work { steps, .. } = &mut self.blocks[idx]
+        {
+            steps.push(WorkStep::Narration { text });
+            return;
+        }
+        self.blocks.push(TranscriptBlock::Work {
+            steps: vec![WorkStep::Narration { text }],
+            expanded: true,
+            started_at: Instant::now(),
+            worked: None,
+        });
+    }
+
+    /// Work in the current turn, including a group already sealed by assistant text.
+    fn turn_work_index(&self) -> Option<usize> {
+        for (idx, block) in self.blocks.iter().enumerate().rev() {
+            match block {
+                TranscriptBlock::Text { .. } => continue,
+                TranscriptBlock::User { .. } => return None,
+                TranscriptBlock::Work { .. } => return Some(idx),
+            }
+        }
+        None
+    }
+
+    fn reopen_work(&mut self) -> Option<usize> {
+        let idx = self.turn_work_index()?;
+        if let TranscriptBlock::Work {
+            worked, expanded, ..
+        } = &mut self.blocks[idx]
+        {
+            *worked = None;
+            *expanded = true;
+        }
+        Some(idx)
+    }
+
+    fn freeze_open_thinking(&mut self) {
+        if let Some(idx) = self.open_work_index()
+            && let TranscriptBlock::Work { steps, .. } = &mut self.blocks[idx]
+        {
+            freeze_thinking_steps(steps);
+        }
+    }
+
     fn open_work_index(&self) -> Option<usize> {
         for (idx, block) in self.blocks.iter().enumerate().rev() {
             match block {
-                TranscriptBlock::Text { text } if text.trim().is_empty() => continue,
+                TranscriptBlock::Text { .. } => continue,
                 TranscriptBlock::User { .. } => return None,
                 TranscriptBlock::Work { worked: None, .. } => return Some(idx),
                 _ => return None,
@@ -224,14 +303,14 @@ impl Transcript {
         None
     }
 
-    /// Index of the open work block whose latest step is thinking (for live shimmer).
+    /// Index of the open work block whose latest step is still thinking (for live shimmer).
     pub fn live_thinking_index(&self) -> Option<usize> {
         let idx = self.open_work_index()?;
         let TranscriptBlock::Work { steps, .. } = &self.blocks[idx] else {
             return None;
         };
         match steps.last() {
-            Some(WorkStep::Thinking { .. }) => Some(idx),
+            Some(WorkStep::Thinking { duration: None, .. }) => Some(idx),
             _ => None,
         }
     }
@@ -262,7 +341,10 @@ impl Transcript {
                         continue;
                     }
                     return match steps.last() {
-                        Some(WorkStep::Thinking { .. }) => LiveActivity::Thinking,
+                        Some(WorkStep::Thinking { duration: None, .. }) => LiveActivity::Thinking,
+                        Some(WorkStep::Thinking { .. }) | Some(WorkStep::Narration { .. }) => {
+                            LiveActivity::Writing
+                        }
                         Some(WorkStep::Tool(_)) => LiveActivity::PreparingNextMoves,
                         None => LiveActivity::Thinking,
                     };
@@ -338,20 +420,50 @@ impl TranscriptBlock {
 }
 
 pub fn worked_for_label(duration: Duration) -> String {
-    let secs = duration.as_secs().max(1);
+    format!("Worked for {}", compact_duration(duration))
+}
+
+pub fn compact_duration(duration: Duration) -> String {
+    let secs = duration.as_secs();
     if secs < 60 {
-        if secs == 1 {
-            "Worked for 1 second".into()
-        } else {
-            format!("Worked for {secs} seconds")
-        }
+        format!("{}s", secs.max(1))
     } else {
-        let mins = (secs / 60).max(1);
-        if mins == 1 {
-            "Worked for 1 minute".into()
+        let mins = secs / 60;
+        let rem = secs % 60;
+        if rem == 0 {
+            format!("{mins}m")
         } else {
-            format!("Worked for {mins} minutes")
+            format!("{mins}m {rem}s")
         }
+    }
+}
+
+pub fn thought_label(duration: Option<Duration>, started_at: Instant, live: bool) -> String {
+    if live {
+        return "Thinking".into();
+    }
+    let elapsed = duration.unwrap_or_else(|| started_at.elapsed());
+    format!("Thought {}", compact_duration(elapsed))
+}
+
+fn thinking_step(text: String) -> WorkStep {
+    WorkStep::Thinking {
+        text,
+        expanded: false,
+        started_at: Instant::now(),
+        duration: None,
+    }
+}
+
+fn freeze_thinking_steps(steps: &mut [WorkStep]) {
+    if let Some(WorkStep::Thinking {
+        started_at,
+        duration,
+        ..
+    }) = steps.last_mut()
+        && duration.is_none()
+    {
+        *duration = Some(started_at.elapsed());
     }
 }
 
@@ -447,6 +559,47 @@ pub fn tool_done_label(name: &str) -> String {
     }
 }
 
+pub fn tool_verb(name: &str) -> &'static str {
+    match name {
+        "web_search" | "knowledge_search" | "knowledge_find_procedure" => "Searched",
+        "read_file"
+        | "list_directory"
+        | "knowledge_read"
+        | "knowledge_neighbors"
+        | "knowledge_backlinks"
+        | "get_accessibility_snapshot"
+        | "take_screenshot"
+        | "list_apps"
+        | "calendar_events"
+        | "fetch_url" => "Explored",
+        "write_file" | "create_directory" | "knowledge_ingest" | "knowledge_propose_update" => {
+            "Edited"
+        }
+        "knowledge_read_later" => "Saved",
+        "knowledge_archive_source" => "Archived",
+        "run_command" => "Ran",
+        "open_url" | "open_app" => "Opened",
+        "focus_app" => "Focused",
+        "ui_click" => "Clicked",
+        "ui_press" => "Pressed",
+        "ui_type" => "Typed",
+        "ui_set_value" => "Filled",
+        "ui_scroll" => "Scrolled",
+        "ui_hotkey" => "Sent",
+        _ => "Ran",
+    }
+}
+
+pub fn tool_row_label(name: &str, summary: &str) -> String {
+    let verb = tool_verb(name);
+    let summary = summary.trim();
+    if summary.is_empty() {
+        verb.to_string()
+    } else {
+        format!("{verb}  {summary}")
+    }
+}
+
 pub fn tool_icon_path(name: &str) -> &'static str {
     match name {
         "read_file" => "icons/file.svg",
@@ -491,17 +644,119 @@ pub fn work_header_icon(steps: &[WorkStep]) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    fn start(transcript: &mut Transcript, name: &str) {
+        transcript.start_tool(name, "");
+    }
+
     #[test]
-    fn consecutive_tools_and_thinking_share_a_group_until_text() {
+    fn consecutive_tools_and_thinking_share_one_group() {
         let mut transcript = Transcript::new();
         transcript.push_reasoning("plan");
-        transcript.start_tool("get_accessibility_snapshot");
+        start(&mut transcript, "get_accessibility_snapshot");
         transcript.finish_tool("get_accessibility_snapshot");
-        transcript.start_tool("ui_press");
+        start(&mut transcript, "ui_press");
         transcript.finish_tool("ui_press");
         transcript.push_text("Done.");
-        transcript.start_tool("read_file");
-        assert_eq!(transcript.blocks().len(), 3);
+        start(&mut transcript, "read_file");
+        assert_eq!(transcript.blocks().len(), 1);
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Work {
+                steps,
+                expanded,
+                worked: None,
+                ..
+            } => {
+                assert_eq!(steps.len(), 5);
+                assert!(*expanded);
+                assert!(matches!(
+                    &steps[0],
+                    WorkStep::Thinking { text, .. } if text == "plan"
+                ));
+                assert!(matches!(
+                    &steps[1],
+                    WorkStep::Tool(ToolLine { name, running, .. })
+                        if name == "get_accessibility_snapshot" && !*running
+                ));
+                assert!(matches!(
+                    &steps[2],
+                    WorkStep::Tool(ToolLine { name, running, .. })
+                        if name == "ui_press" && !*running
+                ));
+                assert!(matches!(
+                    &steps[3],
+                    WorkStep::Narration { text } if text == "Done."
+                ));
+                assert!(matches!(
+                    &steps[4],
+                    WorkStep::Tool(ToolLine { name, running, .. })
+                        if name == "read_file" && *running
+                ));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn assistant_text_collapses_work_before_the_answer() {
+        let mut transcript = Transcript::new();
+        transcript.push_reasoning("plan");
+        start(&mut transcript, "read_file");
+        transcript.finish_tool("read_file");
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Work {
+                worked: None,
+                expanded,
+                ..
+            } => {
+                assert!(*expanded);
+            }
+            other => panic!("{other:?}"),
+        }
+        transcript.push_text("What was done.");
+        assert_eq!(transcript.blocks().len(), 2);
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Work {
+                expanded,
+                worked: Some(_),
+                ..
+            } => {
+                assert!(!*expanded);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            &transcript.blocks()[1],
+            TranscriptBlock::Text { text } if text == "What was done."
+        ));
+        start(&mut transcript, "run_command");
+        assert_eq!(transcript.blocks().len(), 1);
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Work {
+                steps,
+                worked: None,
+                expanded,
+                ..
+            } => {
+                assert!(*expanded);
+                assert!(matches!(&steps[2], WorkStep::Narration { .. }));
+                assert!(matches!(
+                    &steps[3],
+                    WorkStep::Tool(ToolLine { name, .. }) if name == "run_command"
+                ));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn final_text_stays_outside_when_work_seals() {
+        let mut transcript = Transcript::new();
+        transcript.push_reasoning("plan");
+        start(&mut transcript, "read_file");
+        transcript.finish_tool("read_file");
+        transcript.push_text("What was done.");
+        transcript.finish_running_tools();
+        assert_eq!(transcript.blocks().len(), 2);
         match &transcript.blocks()[0] {
             TranscriptBlock::Work {
                 steps,
@@ -509,43 +764,61 @@ mod tests {
                 worked: Some(_),
                 ..
             } => {
-                assert_eq!(steps.len(), 3);
                 assert!(!*expanded);
+                assert_eq!(steps.len(), 2);
+                assert!(matches!(&steps[0], WorkStep::Thinking { .. }));
+                assert!(matches!(&steps[1], WorkStep::Tool(_)));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            &transcript.blocks()[1],
+            TranscriptBlock::Text { text } if text == "What was done."
+        ));
+    }
+
+    #[test]
+    fn intermediate_text_is_absorbed_when_more_tools_run() {
+        let mut transcript = Transcript::new();
+        transcript.push_text("I'll help.");
+        start(&mut transcript, "list_directory");
+        transcript.finish_tool("list_directory");
+        transcript.push_text("I found 5.");
+        start(&mut transcript, "run_command");
+        transcript.finish_tool("run_command");
+        transcript.push_text("What was done.");
+        transcript.finish_running_tools();
+        assert_eq!(transcript.blocks().len(), 2);
+        match &transcript.blocks()[0] {
+            TranscriptBlock::Work {
+                steps,
+                worked: Some(_),
+                ..
+            } => {
+                assert_eq!(steps.len(), 4);
                 assert!(matches!(
                     &steps[0],
-                    WorkStep::Thinking { text, .. } if text == "plan"
+                    WorkStep::Narration { text } if text == "I'll help."
                 ));
                 assert!(matches!(
                     &steps[1],
-                    WorkStep::Tool(ToolLine { name, running })
-                        if name == "get_accessibility_snapshot" && !*running
+                    WorkStep::Tool(ToolLine { name, .. }) if name == "list_directory"
                 ));
                 assert!(matches!(
                     &steps[2],
-                    WorkStep::Tool(ToolLine { name, running })
-                        if name == "ui_press" && !*running
+                    WorkStep::Narration { text } if text == "I found 5."
+                ));
+                assert!(matches!(
+                    &steps[3],
+                    WorkStep::Tool(ToolLine { name, .. }) if name == "run_command"
                 ));
             }
             other => panic!("{other:?}"),
         }
         assert!(matches!(
             &transcript.blocks()[1],
-            TranscriptBlock::Text { text } if text == "Done."
+            TranscriptBlock::Text { text } if text == "What was done."
         ));
-        match &transcript.blocks()[2] {
-            TranscriptBlock::Work {
-                steps,
-                worked: None,
-                ..
-            } => {
-                assert_eq!(steps.len(), 1);
-                assert!(matches!(
-                    &steps[0],
-                    WorkStep::Tool(ToolLine { name, .. }) if name == "read_file"
-                ));
-            }
-            other => panic!("{other:?}"),
-        }
     }
 
     #[test]
@@ -579,12 +852,12 @@ mod tests {
         let mut transcript = Transcript::new();
         transcript.push_user("first");
         transcript.push_reasoning("plan");
-        transcript.start_tool("read_file");
+        start(&mut transcript, "read_file");
         transcript.finish_tool("read_file");
         transcript.push_text("Done.");
         transcript.push_user("follow-up");
         transcript.push_reasoning("next");
-        transcript.start_tool("ui_press");
+        start(&mut transcript, "ui_press");
         assert_eq!(transcript.blocks().len(), 5);
         match &transcript.blocks()[1] {
             TranscriptBlock::Work {
@@ -647,13 +920,13 @@ mod tests {
     #[test]
     fn collapsed_work_shows_latest_running_then_summary() {
         let mut transcript = Transcript::new();
-        transcript.start_tool("get_accessibility_snapshot");
+        start(&mut transcript, "get_accessibility_snapshot");
         assert_eq!(
             transcript.blocks()[0].collapsed_label(false),
             "Looking at the screen…"
         );
         transcript.finish_tool("get_accessibility_snapshot");
-        transcript.start_tool("ui_press");
+        start(&mut transcript, "ui_press");
         assert_eq!(
             transcript.blocks()[0].collapsed_label(false),
             "Pressing a control…"
@@ -669,11 +942,14 @@ mod tests {
     fn thinking_and_tools_share_one_work_group() {
         let mut transcript = Transcript::new();
         transcript.push_reasoning("hmm");
-        transcript.start_tool("read_file");
+        start(&mut transcript, "read_file");
         assert_eq!(transcript.blocks().len(), 1);
         match &transcript.blocks()[0] {
-            TranscriptBlock::Work { steps, .. } => {
+            TranscriptBlock::Work {
+                steps, expanded, ..
+            } => {
                 assert_eq!(steps.len(), 2);
+                assert!(*expanded);
             }
             other => panic!("{other:?}"),
         }
@@ -682,7 +958,7 @@ mod tests {
             TranscriptBlock::Work {
                 expanded, steps, ..
             } => {
-                assert!(*expanded);
+                assert!(!*expanded);
                 assert!(matches!(
                     &steps[0],
                     WorkStep::Thinking { text, .. } if text == "hmm"
@@ -695,8 +971,8 @@ mod tests {
     #[test]
     fn finish_running_tools_clears_and_seals() {
         let mut transcript = Transcript::new();
-        transcript.start_tool("read_file");
-        transcript.start_tool("ui_press");
+        start(&mut transcript, "read_file");
+        start(&mut transcript, "ui_press");
         assert!(transcript.running_tool().is_some());
         transcript.finish_running_tools();
         assert!(transcript.running_tool().is_none());
@@ -726,10 +1002,10 @@ mod tests {
     fn thinking_between_tools_stays_in_the_same_group() {
         let mut transcript = Transcript::new();
         transcript.push_reasoning("first");
-        transcript.start_tool("get_accessibility_snapshot");
+        start(&mut transcript, "get_accessibility_snapshot");
         transcript.finish_tool("get_accessibility_snapshot");
         transcript.push_reasoning(" more");
-        transcript.start_tool("ui_press");
+        start(&mut transcript, "ui_press");
         transcript.finish_tool("ui_press");
         assert_eq!(transcript.blocks().len(), 1);
         match &transcript.blocks()[0] {
@@ -737,7 +1013,7 @@ mod tests {
                 assert_eq!(steps.len(), 4);
                 assert!(matches!(
                     &steps[0],
-                    WorkStep::Thinking { text, .. } if text == "first"
+                    WorkStep::Thinking { text, duration: Some(_), .. } if text == "first"
                 ));
                 assert!(matches!(
                     &steps[1],
@@ -746,7 +1022,7 @@ mod tests {
                 ));
                 assert!(matches!(
                     &steps[2],
-                    WorkStep::Thinking { text, .. } if text == " more"
+                    WorkStep::Thinking { text, duration: Some(_), .. } if text == " more"
                 ));
                 assert!(matches!(
                     &steps[3],
@@ -763,7 +1039,7 @@ mod tests {
                 assert_eq!(steps.len(), 5);
                 assert!(matches!(
                     &steps[4],
-                    WorkStep::Thinking { text, .. } if text == "next"
+                    WorkStep::Thinking { text, duration: None, .. } if text == "next"
                 ));
             }
             other => panic!("{other:?}"),
@@ -775,7 +1051,7 @@ mod tests {
         let mut transcript = Transcript::new();
         transcript.push_reasoning("plan");
         transcript.push_text("\n\n\n");
-        transcript.start_tool("ui_press");
+        start(&mut transcript, "ui_press");
         assert_eq!(transcript.blocks().len(), 1);
         match &transcript.blocks()[0] {
             TranscriptBlock::Work {
@@ -793,40 +1069,53 @@ mod tests {
     fn sealed_work_uses_worked_for_label() {
         let mut transcript = Transcript::new();
         transcript.push_reasoning("plan");
-        transcript.start_tool("read_file");
+        start(&mut transcript, "read_file");
         transcript.finish_tool("read_file");
         transcript.push_text("Done.");
+        transcript.finish_running_tools();
         let label = transcript.blocks()[0].collapsed_label(false);
         assert!(label.starts_with("Worked for "));
-        assert!(label.contains("second") || label.contains("minute"));
+        assert!(label.ends_with('s') || label.contains('m'));
     }
 
     #[test]
     fn worked_for_label_formats_seconds_and_minutes() {
-        assert_eq!(
-            worked_for_label(Duration::from_secs(0)),
-            "Worked for 1 second"
-        );
-        assert_eq!(
-            worked_for_label(Duration::from_secs(1)),
-            "Worked for 1 second"
-        );
-        assert_eq!(
-            worked_for_label(Duration::from_secs(12)),
-            "Worked for 12 seconds"
-        );
-        assert_eq!(
-            worked_for_label(Duration::from_secs(60)),
-            "Worked for 1 minute"
-        );
+        assert_eq!(worked_for_label(Duration::from_secs(0)), "Worked for 1s");
+        assert_eq!(worked_for_label(Duration::from_secs(1)), "Worked for 1s");
+        assert_eq!(worked_for_label(Duration::from_secs(12)), "Worked for 12s");
+        assert_eq!(worked_for_label(Duration::from_secs(60)), "Worked for 1m");
         assert_eq!(
             worked_for_label(Duration::from_secs(179)),
-            "Worked for 2 minutes"
+            "Worked for 2m 59s"
+        );
+        assert_eq!(worked_for_label(Duration::from_secs(180)), "Worked for 3m");
+    }
+
+    #[test]
+    fn thought_label_is_thinking_while_live_then_duration() {
+        let started = Instant::now();
+        assert_eq!(
+            thought_label(Some(Duration::from_secs(2)), started, true),
+            "Thinking"
         );
         assert_eq!(
-            worked_for_label(Duration::from_secs(180)),
-            "Worked for 3 minutes"
+            thought_label(Some(Duration::from_secs(2)), started, false),
+            "Thought 2s"
         );
+        assert_eq!(
+            thought_label(Some(Duration::from_secs(75)), started, false),
+            "Thought 1m 15s"
+        );
+        assert!(thought_label(None, started, false).starts_with("Thought "));
+    }
+
+    #[test]
+    fn tool_row_label_puts_summary_beside_the_verb() {
+        assert_eq!(tool_verb("web_search"), "Searched");
+        assert_eq!(tool_verb("run_command"), "Ran");
+        assert_eq!(tool_verb("read_file"), "Explored");
+        assert_eq!(tool_row_label("run_command", "ls -la"), "Ran  ls -la");
+        assert_eq!(tool_row_label("ui_type", ""), "Typed");
     }
 
     #[test]
@@ -859,7 +1148,7 @@ mod tests {
         transcript.push_reasoning("plan");
         assert_eq!(transcript.live_activity(), LiveActivity::Thinking);
 
-        transcript.start_tool("get_accessibility_snapshot");
+        start(&mut transcript, "get_accessibility_snapshot");
         assert_eq!(
             transcript.live_activity(),
             LiveActivity::Tool("get_accessibility_snapshot".into())
@@ -878,7 +1167,7 @@ mod tests {
     #[test]
     fn header_icon_follows_the_latest_running_tool() {
         let mut transcript = Transcript::new();
-        transcript.start_tool("get_accessibility_snapshot");
+        start(&mut transcript, "get_accessibility_snapshot");
         match &transcript.blocks()[0] {
             TranscriptBlock::Work { steps, .. } => {
                 assert_eq!(work_header_icon(steps), Some("icons/monitor.svg"));
@@ -886,7 +1175,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
         transcript.finish_tool("get_accessibility_snapshot");
-        transcript.start_tool("ui_press");
+        start(&mut transcript, "ui_press");
         match &transcript.blocks()[0] {
             TranscriptBlock::Work { steps, .. } => {
                 assert_eq!(work_header_icon(steps), Some("icons/pointer.svg"));
@@ -906,12 +1195,11 @@ mod tests {
     fn toggle_step_expands_nested_thinking() {
         let mut transcript = Transcript::new();
         transcript.push_reasoning("plan");
-        transcript.start_tool("read_file");
-        transcript.toggle(0);
+        start(&mut transcript, "read_file");
         transcript.toggle_step(0, 0);
         match &transcript.blocks()[0] {
             TranscriptBlock::Work { steps, .. } => match &steps[0] {
-                WorkStep::Thinking { expanded, text } => {
+                WorkStep::Thinking { expanded, text, .. } => {
                     assert!(*expanded);
                     assert_eq!(text, "plan");
                 }

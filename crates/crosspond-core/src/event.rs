@@ -29,6 +29,8 @@ pub enum AgentEvent {
     ToolStarted {
         task_id: TaskId,
         tool: String,
+        /// UI-only; omit secrets, query strings, field values, and command output.
+        summary: String,
     },
     ToolFinished {
         task_id: TaskId,
