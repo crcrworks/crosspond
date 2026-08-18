@@ -40,7 +40,6 @@ use crate::secret::{SecretKey, SecretStore};
 pub const MISSING_API_KEY_MESSAGE: &str =
     "Add an API key in Settings (⌘,) before sending a request.";
 
-pub const MAX_AGENT_STEPS: usize = 16;
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn computer_approval_prompt(mode: ComputerApprovalMode) -> &'static str {
@@ -481,7 +480,8 @@ impl Runtime {
         let mut receipt_actions = Vec::new();
         let mut artifacts = Vec::new();
 
-        for _ in 0..MAX_AGENT_STEPS {
+        // Runs until a final model reply, failure, or user cancel. There is no step cap.
+        loop {
             if let Some(reset) = self.drain_control(task_id) {
                 self.finish_cancelled(
                     task_id,
@@ -732,32 +732,6 @@ impl Runtime {
                 }
             }
         }
-
-        let path = self.finish_scratch(reused_scratch, &artifacts, false);
-        self.write_meta(
-            &task_dir,
-            task_id,
-            &stored_prompt,
-            "failed",
-            path.as_deref(),
-        );
-        append_event_log(
-            &task_dir,
-            json!({ "type": "task_failed", "message": "Agent step limit exceeded" }),
-        );
-        write_session(&task_dir, &self.session);
-        self.record_activity(
-            routed_brief.as_ref(),
-            &stored_prompt,
-            ActivityStatus::Failed,
-            "Agent step limit exceeded",
-            &receipt_actions,
-            &artifacts,
-        );
-        let _ = self.events.send(AgentEvent::TaskFailed {
-            task_id,
-            message: "Agent step limit exceeded".into(),
-        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2609,7 +2583,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn step_limit_stops_infinite_tool_loop() {
+    async fn cancel_stops_unbounded_tool_loop() {
         let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(AlwaysToolProvider));
         let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
@@ -2622,16 +2596,24 @@ mod tests {
             )))
             .unwrap();
 
-        let failed = drain_until(&mut event_rx, |event| {
-            matches!(event, AgentEvent::TaskFailed { .. })
+        let mut tool_starts = 0usize;
+        drain_until(&mut event_rx, |event| {
+            if matches!(event, AgentEvent::ToolStarted { .. }) {
+                tool_starts += 1;
+            }
+            tool_starts > 16
         })
         .await;
-        match failed {
-            AgentEvent::TaskFailed { message, .. } => {
-                assert!(message.contains("step limit"));
-            }
-            other => panic!("{other:?}"),
-        }
+        command_tx.send(RuntimeCommand::Cancel(task_id)).unwrap();
+
+        let cancelled = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCancelled { .. })
+        })
+        .await;
+        assert!(matches!(
+            cancelled,
+            AgentEvent::TaskCancelled { task_id: id } if id == task_id
+        ));
         assert!(!scratch_dir(&tmp.0, task_id).exists());
 
         drop(command_tx);
