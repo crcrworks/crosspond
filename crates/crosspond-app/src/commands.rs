@@ -5,10 +5,9 @@ use crosspond_core::{
     AppConfig, ApprovalId, ComputerApprovalMode, ConversationId, ConversationView,
     MISSING_API_KEY_MESSAGE, Mention, Receipt, RuntimeCommand, SecretKey, SecretString,
     StartTaskRequest, TaskId, conversation_artifact_path, default_tasks_root, history_group_label,
-    history_title, list_recent_tasks, open_conversation as load_conversation,
-    parse_running_app_names, provider_key_is_set,
+    history_title, list_recent_tasks, open_conversation as load_conversation, provider_key_is_set,
 };
-use crosspond_macos::{PermissionKind, PermissionSnapshot};
+use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
@@ -347,11 +346,8 @@ pub fn sync_launcher_size(compact: bool, badge_lines: u32, extra_height: f64, ap
 }
 
 #[tauri::command]
-pub fn list_mention_apps(state: State<AppState>) -> Vec<String> {
-    match state.apps.list_apps() {
-        Ok(text) => parse_running_app_names(&text),
-        Err(_) => Vec::new(),
-    }
+pub fn list_mention_apps() -> Vec<String> {
+    list_running_app_names()
 }
 
 fn reveal_in_finder(path: &Path) -> Result<(), String> {

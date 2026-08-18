@@ -61,6 +61,7 @@
 	let stageQuery = $state('');
 	let appHits = $state<string[]>([]);
 	let appsLoading = $state(false);
+	let appsLoadId = 0;
 	let composing = $state(false);
 	const docked = $derived(variant === 'docked');
 	const sendReady = $derived(canSubmit && (value.trim().length > 0 || mentions.length > 0));
@@ -92,6 +93,7 @@
 	}
 
 	function closeMentions() {
+		appsLoadId += 1;
 		stage = null;
 		mentionOpen = false;
 		stageQuery = '';
@@ -146,13 +148,17 @@
 
 	async function loadApps() {
 		if (appsLoading) return;
+		const id = (appsLoadId += 1);
 		appsLoading = true;
 		try {
-			appHits = await onlistapps();
+			const names = await onlistapps();
+			if (id !== appsLoadId) return;
+			appHits = names;
 		} catch {
+			if (id !== appsLoadId) return;
 			appHits = [];
 		} finally {
-			appsLoading = false;
+			if (id === appsLoadId) appsLoading = false;
 		}
 	}
 
@@ -286,6 +292,7 @@
 
 	$effect(() => {
 		if (!mentionOpen && stage !== null) {
+			appsLoadId += 1;
 			stage = null;
 			stageQuery = '';
 			appHits = [];
