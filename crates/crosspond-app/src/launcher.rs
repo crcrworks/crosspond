@@ -17,6 +17,20 @@ pub fn idle_height(badge_lines: usize) -> f64 {
     IDLE_HEIGHT + BADGE_LINE_HEIGHT * badge_lines as f64
 }
 
+pub fn launcher_height(compact: bool, badge_lines: usize, extra_height: f64) -> f64 {
+    if compact {
+        idle_height(badge_lines) + extra_height.max(0.0)
+    } else {
+        RESULT_HEIGHT.max(idle_height(badge_lines) + extra_height)
+    }
+}
+
+/// Keep a conversation window the user already opened or resized.
+/// Streaming progress must not snap it back to the default 560px height.
+pub(crate) fn keep_user_expanded_size(compact: bool, current_height: f64) -> bool {
+    !compact && current_height > idle_height(0) + 8.0
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct LauncherShown {
     pub badges: Vec<String>,
@@ -51,17 +65,33 @@ pub fn position_launcher(window: &WebviewWindow) {
     let _ = window.set_position(LogicalPosition::new(x, TOP_MARGIN));
 }
 
+fn logical_inner_size(window: &WebviewWindow) -> Option<(f64, f64)> {
+    let physical = window.inner_size().ok()?;
+    let scale = window.scale_factor().ok()?;
+    if scale <= 0.0 {
+        return None;
+    }
+    Some((
+        f64::from(physical.width) / scale,
+        f64::from(physical.height) / scale,
+    ))
+}
+
 pub fn resize_launcher(
     window: &WebviewWindow,
     compact: bool,
     badge_lines: usize,
     extra_height: f64,
 ) {
-    let height = if compact {
-        idle_height(badge_lines) + extra_height.max(0.0)
-    } else {
-        RESULT_HEIGHT.max(idle_height(badge_lines) + extra_height)
-    };
+    let height = launcher_height(compact, badge_lines, extra_height);
+    if let Some((width, current_height)) = logical_inner_size(window) {
+        if keep_user_expanded_size(compact, current_height) {
+            return;
+        }
+        if (width - WINDOW_WIDTH).abs() < 1.0 && (current_height - height).abs() < 1.0 {
+            return;
+        }
+    }
     let _ = window.set_size(LogicalSize::new(WINDOW_WIDTH, height));
 }
 
@@ -238,7 +268,10 @@ pub fn start_hotkey_loop(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::should_hide_compact_on_blur;
+    use super::{
+        IDLE_HEIGHT, RESULT_HEIGHT, keep_user_expanded_size, launcher_height,
+        should_hide_compact_on_blur,
+    };
 
     #[test]
     fn compact_bar_hides_when_the_user_leaves_the_app() {
@@ -262,5 +295,20 @@ mod tests {
         assert!(!should_hide_compact_on_blur(
             false, false, false, false, false
         ));
+    }
+
+    #[test]
+    fn compact_height_grows_with_badge_lines() {
+        assert_eq!(launcher_height(true, 0, 0.0), IDLE_HEIGHT);
+        assert_eq!(launcher_height(true, 2, 0.0), IDLE_HEIGHT + 40.0);
+        assert_eq!(launcher_height(false, 0, 0.0), RESULT_HEIGHT);
+    }
+
+    #[test]
+    fn expanded_window_keeps_user_size_once_open() {
+        assert!(keep_user_expanded_size(false, RESULT_HEIGHT));
+        assert!(keep_user_expanded_size(false, 800.0));
+        assert!(!keep_user_expanded_size(false, IDLE_HEIGHT));
+        assert!(!keep_user_expanded_size(true, RESULT_HEIGHT));
     }
 }

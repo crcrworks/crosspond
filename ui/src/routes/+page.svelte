@@ -51,19 +51,21 @@
 			: null;
 	});
 
+	// Size follows compact/overlay/badges, not transcript `rev`.
+	let appliedCompact = true;
+
 	function resize() {
 		const compact = session.compact;
+		void setUiFlags(compact, session.composing, session.inConversation);
+		if (!compact && !appliedCompact) {
+			return;
+		}
+		appliedCompact = compact;
 		const badges = session.overlay === 'onboarding' || chatLayout ? 0 : session.badges.length;
 		void syncLauncherSize(compact, badges, extraHeight);
-		void setUiFlags(compact, session.composing, session.inConversation);
 	}
 
 	$effect(() => {
-		session.rev;
-		session.overlay;
-		session.badges;
-		session.composing;
-		extraHeight;
 		resize();
 	});
 

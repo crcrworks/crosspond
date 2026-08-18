@@ -39,12 +39,10 @@ export class LauncherSession {
 	#finishTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	get inConversation() {
-		this.rev;
 		return this.state !== 'idle' || !this.transcript.isEmpty;
 	}
 
 	get compact() {
-		this.rev;
 		return !this.inConversation && this.overlay === 'none';
 	}
 
