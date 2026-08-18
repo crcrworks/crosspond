@@ -96,7 +96,7 @@ Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`
 
 Tasks do not create a working directory on start. A scratch space under `~/.crosspond/scratch/<task-id>/` is created only when a file, download, or shell tool actually needs one (or when Finder selections are staged into `input/`). Follow-up turns in the same session reuse that scratch. Empty temporary scratches are removed when the task ends. Each submit still writes `~/.crosspond/tasks/<task-id>/` (`task.json` with `conversation_id`, UI-safe `events.jsonl`, sanitized `session.json`, `receipt.json`). Follow-up turns in the same conversation share that id. ResumeSession loads the latest sanitized session for the conversation; tool bodies, screenshot bytes, and raw tool arguments are not restored.
 
-The agent loop is capped at 16 steps. Tool output is capped at 100KB. Tools run on a blocking thread with a 30s timeout. Selected text is capped at 32,768 characters. AX snapshots cap depth, node count, and text length. Screenshot size is whatever cua-driver returns.
+The agent loop runs until the model returns a final answer or the user cancels (Escape / Stop). Tool output is capped at 100KB. Tools run on a blocking thread with a 30s timeout. Selected text is capped at 32,768 characters. AX snapshots cap depth, node count, and text length. Screenshot size is whatever cua-driver returns.
 
 ## Window show/hide
 
