@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crosspond_knowledge::{
     ActivityRecord, ActivityRecorder, ActivityStatus, IndexedVault, KnowledgeBrief,
     KnowledgeContextRequest, KnowledgeRouter, LearnRequest, LinkedResource, ProcedureLearner,
-    VaultWatcher, WatchMode, index_db_path, looks_like_read_later, parse_note_id,
+    VaultRepository, VaultWatcher, WatchMode, index_db_path, looks_like_read_later, parse_note_id,
 };
 use crosspond_model::{
     ImagePart, Message, ModelError, ModelEvent, ModelProvider, ModelRequest, ProviderBuilder, Role,
@@ -306,18 +306,18 @@ impl Runtime {
     }
 
     fn sync_knowledge_to(&mut self, config: &AppConfig) {
-        let wanted = config.effective_vault_path();
+        let Some(wanted) = config.effective_vault_path() else {
+            return;
+        };
         let current = self
             .knowledge
             .as_ref()
             .map(|vault| vault.repository().root().to_path_buf());
-        let wanted_canon = wanted
-            .as_ref()
-            .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()));
-        if wanted_canon == current {
+        let wanted_canon = wanted.canonicalize().unwrap_or_else(|_| wanted.clone());
+        if current.as_ref() == Some(&wanted_canon) {
             return;
         }
-        let (knowledge, watch) = open_vault_from_path(wanted);
+        let (knowledge, watch) = open_vault_from_path(Some(wanted));
         self.knowledge = knowledge;
         self._vault_watch = watch;
     }
@@ -1153,7 +1153,8 @@ impl Runtime {
                 | Some(RuntimeCommand::Reject(_))
                 | Some(RuntimeCommand::Cancel(_))
                 | Some(RuntimeCommand::StartTask(_))
-                | Some(RuntimeCommand::ResumeSession(_)) => {}
+                | Some(RuntimeCommand::ResumeSession(_))
+                | Some(RuntimeCommand::ReloadKnowledge) => {}
             }
         }
     }
@@ -1264,7 +1265,8 @@ impl Runtime {
                         | Some(RuntimeCommand::Cancel(_))
                         | Some(RuntimeCommand::Approve(_))
                         | Some(RuntimeCommand::Reject(_))
-                        | Some(RuntimeCommand::ResumeSession(_)) => {}
+                        | Some(RuntimeCommand::ResumeSession(_))
+                        | Some(RuntimeCommand::ReloadKnowledge) => {}
                     }
                 }
             }
