@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crosspond_core::{HotkeyEvent, provider_key_is_set};
-use crosspond_macos::application_is_active;
+use crosspond_macos::{application_is_active, yield_to_other_app};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 
@@ -174,6 +174,9 @@ pub fn hide(app: &AppHandle) {
     }
     if let Some(window) = launcher_window(app) {
         let _ = window.hide();
+    }
+    if !settings_is_open(app) && application_is_active() {
+        yield_to_other_app();
     }
     let _ = app.emit(
         "launcher-shown",

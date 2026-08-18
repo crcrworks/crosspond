@@ -42,4 +42,4 @@ npm --prefix ui test
 
 ## Bundle notes
 
-`resources/macos/Info.plist` is the minimum accessory-app manifest (`LSUIElement`). `cargo run` still shows a Dock icon because it is not wrapped in an `.app` bundle yet. Accessibility / Apple Events usage strings are in that plist for a future bundle.
+`resources/macos/Info.plist` is the minimum accessory-app manifest (`LSUIElement`). The Tauri host also sets Accessory at runtime so `cargo run` / `tauri dev` do not steal the frontmost app (tao defaults to Regular). Accessibility / Apple Events usage strings are in that plist for a future bundle.

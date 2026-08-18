@@ -78,6 +78,13 @@ pub fn run() {
             commands::sync_launcher_size,
         ])
         .setup(move |app| {
+            // tao defaults to Regular, which overrides Info.plist LSUIElement and
+            // makes Crosspond the frontmost app. Computer tools then see only us.
+            #[cfg(target_os = "macos")]
+            let _ = app
+                .handle()
+                .set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             install_menu(app.handle())?;
             events::start_event_loop(app.handle().clone(), events);
             launcher::start_hotkey_loop(app.handle().clone());

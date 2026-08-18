@@ -26,7 +26,7 @@ mod window;
 pub use accessibility::MacOsAccessibility;
 pub use apps::MacOsApps;
 pub use calendar::MacOsCalendar;
-pub use context::MacOsContextCollector;
+pub use context::{MacOsContextCollector, yield_to_other_app};
 pub use hotkey::{HotkeyError, MacOsGlobalHotkey};
 pub use input::MacOsInput;
 pub use keychain::MacOsKeychainSecretStore;

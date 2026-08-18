@@ -1191,7 +1191,7 @@ fn resolve_target(pid: Option<i32>, app_name: Option<&str>) -> Result<(i32, Stri
     let Some(app) = crate::context::frontmost_app() else {
         return Err(no_target());
     };
-    if app.bundle_id == CROSSPOND_BUNDLE_ID || app.pid == std::process::id() as i32 {
+    if crate::context::is_host_app(&app) {
         return Err(no_target());
     }
     Ok((app.pid, app.name))
