@@ -46,3 +46,14 @@ WKWebView owns Japanese IME. Compact-bar click-away still skips hide while the a
 ## Secrets
 
 Never persist API keys in `config.json`, `.env`, SQLite, logs, task history, or the Knowledge Vault. Store them in Keychain via `SecretStore`. `SecretString` must not derive `Debug`. Do not log selected text, Finder paths, Accessibility field values (especially passwords), screenshot bytes, or calendar event notes/bodies. Vault notes may only store `credential_ref` pointers, never secret values.
+
+## Cursor Cloud specific instructions
+
+Crosspond targets **macOS**, but the Cloud Agent VM is **headless Linux**. Standard dev commands live in `README.md`; the notes below only cover Linux-specific caveats. Rust `1.96.0` (with `rustfmt`/`clippy`) is pinned by `rust-toolchain.toml` and preinstalled.
+
+The portable crates — `crosspond-core`, `crosspond-model`, `crosspond-tools`, and `crosspond-knowledge` — build, lint, and test on Linux. `cargo fmt --all --check` is clean.
+
+- **Clippy caveat:** the documented `cargo clippy --workspace --all-targets -- -D warnings` is clean on macOS but fails on Linux **only inside `crosspond-macos`** stub code (`needless_return` / unused imports that don't exist on the macOS implementations). On Linux, lint the portable crates instead: `cargo clippy -p crosspond-core -p crosspond-model -p crosspond-tools -p crosspond-knowledge --all-targets -- -D warnings`.
+- **macOS-gated tests:** `crosspond-macos` runs only 2 unit tests on Linux; the rest are `#[cfg(target_os = "macos")]` (cua-driver, EventKit, Keychain, hotkeys).
+- **Running the core headlessly:** the agent engine `crosspond-app` drives (`spawn_runtime_with_tools`) is platform-independent and runnable without macOS; `crosspond-core`'s runtime tests exercise `StartTask` → model stream → tool call → receipt end-to-end and are the best way to validate core behavior on Linux.
+- **GUI (Tauri):** `crosspond-app` is a **Tauri 2 + SvelteKit** app (frontend in `ui/`). The desktop GUI does not run on this headless VM, and building it on Linux needs WebKitGTK/GTK/libsoup3 system packages plus a `ui/` npm build that are **not** part of the current VM setup — validate GUI changes on macOS. NOTE: the Linux system-dependency setup and update script for this environment predate the GPUI→Tauri migration and should be re-validated for Tauri before relying on a Linux `crosspond-app` build.
