@@ -35,6 +35,27 @@ export class Transcript {
 		return this.#blocks;
 	}
 
+	/** Immutable copy so Svelte 5 sees stream updates instead of a mutated array. */
+	snapshot(): TranscriptBlock[] {
+		return this.#blocks.map((block) => {
+			if (block.kind === 'user' || block.kind === 'text') {
+				return { kind: block.kind, text: block.text };
+			}
+			return {
+				kind: 'work',
+				expanded: block.expanded,
+				startedAt: block.startedAt,
+				workedMs: block.workedMs,
+				steps: block.steps.map((step) => {
+					if (step.kind === 'tool') {
+						return { kind: 'tool', tool: { ...step.tool } };
+					}
+					return { ...step };
+				})
+			};
+		});
+	}
+
 	clear() {
 		this.#blocks = [];
 	}

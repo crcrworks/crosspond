@@ -2,4 +2,18 @@
 	let { src }: { src: string } = $props();
 </script>
 
-<img {src} alt="" width="14" height="14" class="inline-block shrink-0" />
+<span class="icon" style:--icon="url('{src}')" aria-hidden="true"></span>
+
+<style>
+	.icon {
+		display: inline-block;
+		flex-shrink: 0;
+		width: 14px;
+		height: 14px;
+		background-color: var(--muted);
+		-webkit-mask: var(--icon) center / contain no-repeat;
+		mask: var(--icon) center / contain no-repeat;
+		-webkit-mask-source-type: alpha;
+		mask-mode: alpha;
+	}
+</style>

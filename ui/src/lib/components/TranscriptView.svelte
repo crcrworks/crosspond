@@ -40,14 +40,14 @@
 		{:else}
 			<button
 				type="button"
-				class="flex w-full cursor-pointer flex-row items-center gap-1 hover:opacity-80"
+				class="flex w-full cursor-pointer flex-row items-center justify-start gap-1 appearance-none border-0 bg-transparent p-0 text-left hover:opacity-80"
 				onclick={() => ontoggle(index)}
 			>
 				<span class="shrink-0 text-sm text-[var(--muted)]">{block.expanded ? '▾' : '▸'}</span>
 				{#if workHeaderIcon(block.steps)}
 					<Icon src={workHeaderIcon(block.steps) ?? ''} />
 				{/if}
-				<div class="min-w-0 flex-1 overflow-hidden text-sm text-[var(--muted)]">
+				<div class="min-w-0 flex-1 overflow-hidden text-left text-sm text-[var(--muted)]">
 					<ActivityLabel text={collapsedLabel(block, false)} />
 				</div>
 			</button>
@@ -72,11 +72,11 @@
 		<div class={['flex flex-col gap-1', nested && 'pl-4']}>
 			<button
 				type="button"
-				class="flex w-full cursor-pointer flex-row items-center gap-1 hover:opacity-80"
+				class="flex w-full cursor-pointer flex-row items-center justify-start gap-1 appearance-none border-0 bg-transparent p-0 text-left hover:opacity-80"
 				onclick={() => ontogglestep(blockIndex, row)}
 			>
 				<span class="shrink-0 text-sm text-[var(--muted)]">{step.expanded ? '▾' : '▸'}</span>
-				<div class="min-w-0 flex-1 overflow-hidden text-sm text-[var(--muted)]">
+				<div class="min-w-0 flex-1 overflow-hidden text-left text-sm text-[var(--muted)]">
 					<ActivityLabel
 						text={thoughtLabel(step.durationMs, step.startedAt, live)}
 						running={live}

@@ -268,4 +268,14 @@ describe('transcript', () => {
 		transcript.pushReasoning('plan');
 		expect(heartbeatStatus('running', transcript, { kind: 'thinking' })).toBeNull();
 	});
+
+	it('snapshot copies streamed text so later deltas do not mutate the view copy', () => {
+		const transcript = new Transcript();
+		transcript.pushText('Hel');
+		const first = transcript.snapshot();
+		transcript.pushText('lo');
+		expect(first[0]).toMatchObject({ kind: 'text', text: 'Hel' });
+		expect(transcript.snapshot()[0]).toMatchObject({ kind: 'text', text: 'Hello' });
+		expect(first).not.toBe(transcript.blocks());
+	});
 });

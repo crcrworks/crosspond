@@ -41,7 +41,7 @@
 	const expanded = $derived(!session.compact);
 	const blocks = $derived.by(() => {
 		session.rev;
-		return session.transcript.blocks();
+		return session.transcript.snapshot();
 	});
 	const thinkingLiveIndex = $derived.by(() => {
 		session.rev;

@@ -3,7 +3,7 @@
 	const line = $derived(text.replace(/[\n\r]/g, ' '));
 </script>
 
-<span class={['block overflow-hidden text-ellipsis whitespace-nowrap', running && 'shimmer']}>
+<span class={['block overflow-hidden text-left text-ellipsis whitespace-nowrap', running && 'shimmer']}>
 	{line}
 </span>
 
