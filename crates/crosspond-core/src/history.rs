@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -16,6 +17,8 @@ struct TaskMetaFile {
     status: String,
     #[serde(default)]
     workspace: Option<String>,
+    #[serde(default)]
+    conversation_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,6 +29,19 @@ pub struct TaskHistoryEntry {
     pub workspace: Option<String>,
     pub modified: SystemTime,
     pub receipt: Option<Receipt>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TaskRecord {
+    #[allow(dead_code)]
+    pub id: String,
+    pub conversation_id: String,
+    pub prompt: String,
+    pub status: String,
+    pub workspace: Option<String>,
+    pub modified: SystemTime,
+    pub receipt: Option<Receipt>,
+    pub dir: PathBuf,
 }
 
 impl TaskHistoryEntry {
@@ -50,12 +66,28 @@ impl TaskHistoryEntry {
 
 pub fn list_recent_tasks(root: &Path, limit: usize) -> Vec<TaskHistoryEntry> {
     let limit = if limit == 0 { DEFAULT_LIMIT } else { limit };
-    let Ok(read) = fs::read_dir(root) else {
-        return Vec::new();
-    };
-    let mut entries: Vec<TaskHistoryEntry> = read
-        .flatten()
-        .filter_map(|child| load_task_entry(&child.path()))
+    let mut groups: HashMap<String, Vec<TaskRecord>> = HashMap::new();
+    for task in load_all_tasks(root) {
+        groups
+            .entry(task.conversation_id.clone())
+            .or_default()
+            .push(task);
+    }
+    let mut entries: Vec<TaskHistoryEntry> = groups
+        .into_values()
+        .filter_map(|mut tasks| {
+            tasks.sort_by_key(|task| task.modified);
+            let first = tasks.first()?;
+            let last = tasks.last()?;
+            Some(TaskHistoryEntry {
+                id: last.conversation_id.clone(),
+                prompt: first.prompt.clone(),
+                status: last.status.clone(),
+                workspace: last.workspace.clone(),
+                modified: last.modified,
+                receipt: last.receipt.clone(),
+            })
+        })
         .collect();
     entries.sort_by_key(|entry| std::cmp::Reverse(entry.modified));
     entries.truncate(limit);
@@ -91,7 +123,25 @@ pub fn history_group_label(modified: SystemTime, now: SystemTime) -> &'static st
     }
 }
 
-fn load_task_entry(dir: &Path) -> Option<TaskHistoryEntry> {
+pub(crate) fn load_all_tasks(root: &Path) -> Vec<TaskRecord> {
+    let Ok(read) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    read.flatten()
+        .filter_map(|child| load_task_record(&child.path()))
+        .collect()
+}
+
+pub(crate) fn tasks_for_conversation(root: &Path, conversation_id: &str) -> Vec<TaskRecord> {
+    let mut tasks: Vec<TaskRecord> = load_all_tasks(root)
+        .into_iter()
+        .filter(|task| task.conversation_id == conversation_id)
+        .collect();
+    tasks.sort_by_key(|task| task.modified);
+    tasks
+}
+
+fn load_task_record(dir: &Path) -> Option<TaskRecord> {
     if !dir.is_dir() {
         return None;
     }
@@ -107,17 +157,23 @@ fn load_task_entry(dir: &Path) -> Option<TaskHistoryEntry> {
     let receipt = fs::read_to_string(dir.join("receipt.json"))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok());
-    Some(TaskHistoryEntry {
+    let conversation_id = meta
+        .conversation_id
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| meta.id.clone());
+    Some(TaskRecord {
+        conversation_id,
         id: meta.id,
         prompt: meta.prompt,
         status: meta.status,
         workspace: meta.workspace,
         modified,
         receipt,
+        dir: dir.to_path_buf(),
     })
 }
 
-fn artifact_path(workspace: Option<&str>, name: &str) -> Option<PathBuf> {
+pub(crate) fn artifact_path(workspace: Option<&str>, name: &str) -> Option<PathBuf> {
     let workspace = PathBuf::from(workspace?);
     let relative = Path::new(name);
     if name.is_empty() || relative.is_absolute() {
@@ -135,7 +191,7 @@ fn artifact_path(workspace: Option<&str>, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::TaskId;
+    use crate::ids::{ConversationId, TaskId};
     use crate::receipt::{write_receipt, write_task_meta};
 
     #[test]
@@ -149,6 +205,7 @@ mod tests {
             "older prompt",
             "completed",
             None,
+            ConversationId::new(),
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
         write_task_meta(
@@ -157,6 +214,7 @@ mod tests {
             "newer prompt",
             "failed",
             Some(Path::new("/tmp/ws")),
+            ConversationId::new(),
         );
         let _ = write_receipt(
             &root.join(newer.to_string()),
@@ -170,12 +228,84 @@ mod tests {
 
         let listed = list_recent_tasks(&root, 10);
         assert_eq!(listed.len(), 2);
-        assert_eq!(listed[0].id, newer.to_string());
         assert_eq!(listed[0].title(), "newer prompt");
         assert_eq!(listed[0].status_mark(), "✕");
         assert_eq!(listed[0].receipt.as_ref().unwrap().artifacts, ["a.txt"]);
-        assert_eq!(listed[1].id, older.to_string());
+        assert_eq!(listed[1].title(), "older prompt");
         assert_eq!(listed[1].status_mark(), "✓");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn groups_follow_ups_by_conversation() {
+        let root =
+            std::env::temp_dir().join(format!("crosspond-history-group-{}", uuid::Uuid::new_v4()));
+        let conversation = ConversationId::new();
+        let first = TaskId::new();
+        let second = TaskId::new();
+        write_task_meta(
+            &root.join(first.to_string()),
+            first,
+            "first prompt",
+            "completed",
+            None,
+            conversation,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_task_meta(
+            &root.join(second.to_string()),
+            second,
+            "follow-up",
+            "failed",
+            Some(Path::new("/tmp/ws")),
+            conversation,
+        );
+        let _ = write_receipt(
+            &root.join(second.to_string()),
+            &Receipt {
+                task_id: second.to_string(),
+                summary: "later".into(),
+                actions: Vec::new(),
+                artifacts: vec!["b.txt".into()],
+            },
+        );
+        let listed = list_recent_tasks(&root, 10);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, conversation.to_string());
+        assert_eq!(listed[0].title(), "first prompt");
+        assert_eq!(listed[0].status, "failed");
+        assert_eq!(listed[0].receipt.as_ref().unwrap().artifacts, ["b.txt"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_tasks_without_conversation_id_stay_separate() {
+        let root =
+            std::env::temp_dir().join(format!("crosspond-history-legacy-{}", uuid::Uuid::new_v4()));
+        let first = TaskId::new();
+        let second = TaskId::new();
+        let write_legacy = |id: TaskId, prompt: &str| {
+            let dir = root.join(id.to_string());
+            fs::create_dir_all(&dir).unwrap();
+            let json = serde_json::json!({
+                "id": id.to_string(),
+                "prompt": prompt,
+                "status": "completed",
+                "workspace": null,
+            });
+            fs::write(
+                dir.join("task.json"),
+                serde_json::to_string_pretty(&json).unwrap(),
+            )
+            .unwrap();
+        };
+        write_legacy(first, "alpha");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_legacy(second, "beta");
+        let listed = list_recent_tasks(&root, 10);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].id, second.to_string());
+        assert_eq!(listed[1].id, first.to_string());
         let _ = fs::remove_dir_all(root);
     }
 

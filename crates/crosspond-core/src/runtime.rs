@@ -22,12 +22,13 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use crate::command::{ApprovalId, RuntimeCommand, StartTaskRequest};
 use crate::config::ConfigStore;
 use crate::context::{ContextCapsule, StagedInput, stage_selected_files};
+use crate::conversation::{load_session_messages, write_session};
 use crate::event::AgentEvent;
 use crate::history::history_title;
-use crate::ids::TaskId;
+use crate::ids::{ConversationId, TaskId};
 use crate::policy::{AgentAsk, ComputerApprovalMode, PolicyDecision, evaluate_with, risk_for_tool};
 use crate::receipt::{
-    Receipt, append_event_log, receipt_action_line, write_receipt, write_task_meta,
+    Receipt, append_event_log, receipt_action_line, tool_ui_summary, write_receipt, write_task_meta,
 };
 use crate::scratch::{FsScratchSpaceManager, ScratchSpaceManager, default_tasks_root};
 use crate::secret::{SecretKey, SecretStore};
@@ -200,6 +201,7 @@ pub fn spawn_runtime_with(
                 tools,
                 tasks_root,
                 session: Vec::new(),
+                conversation_id: None,
                 session_scratch: None,
                 session_context: ContextCapsule::default(),
                 staged_inputs: Vec::new(),
@@ -228,6 +230,7 @@ struct Runtime {
     tools: Arc<ToolRegistry>,
     tasks_root: PathBuf,
     session: Vec<Message>,
+    conversation_id: Option<ConversationId>,
     session_scratch: Option<ScratchSpace>,
     session_context: ContextCapsule,
     staged_inputs: Vec<StagedInput>,
@@ -265,10 +268,12 @@ async fn run_loop(mut runtime: Runtime) {
             }
             RuntimeCommand::ResetSession => {
                 runtime.session.clear();
+                runtime.conversation_id = None;
                 runtime.session_scratch = None;
                 runtime.session_context = ContextCapsule::default();
                 runtime.staged_inputs.clear();
             }
+            RuntimeCommand::ResumeSession(id) => runtime.resume_session(id),
             RuntimeCommand::TestConnection => runtime.spawn_test_connection(),
             RuntimeCommand::Cancel(_) | RuntimeCommand::Approve(_) | RuntimeCommand::Reject(_) => {}
         }
@@ -329,28 +334,34 @@ impl Runtime {
 
         let reused_scratch = self.session_scratch.is_some();
         let task_dir = self.tasks_root.join(task_id.to_string());
-        write_task_meta(&task_dir, task_id, &request.prompt, "running", None);
-        append_event_log(&task_dir, json!({ "type": "task_started" }));
-
         if self.session.is_empty() {
-            self.session_context = request.context.clone();
-            if !self.session_context.selected_files.is_empty() {
-                match self.ensure_scratch(task_id, ScratchReason::FileProcessing) {
-                    Ok(scratch) => {
-                        self.staged_inputs = stage_selected_files(
-                            &scratch.input,
-                            &self.session_context.selected_files,
-                        );
-                    }
-                    Err(message) => {
-                        let _ = self
-                            .events
-                            .send(AgentEvent::TaskFailed { task_id, message });
-                        return;
+            self.conversation_id = Some(request.conversation_id);
+            self.session =
+                load_session_messages(&self.tasks_root, &request.conversation_id.to_string());
+            if self.session.is_empty() {
+                self.session_context = request.context.clone();
+                if !self.session_context.selected_files.is_empty() {
+                    match self.ensure_scratch(task_id, ScratchReason::FileProcessing) {
+                        Ok(scratch) => {
+                            self.staged_inputs = stage_selected_files(
+                                &scratch.input,
+                                &self.session_context.selected_files,
+                            );
+                        }
+                        Err(message) => {
+                            let _ = self
+                                .events
+                                .send(AgentEvent::TaskFailed { task_id, message });
+                            return;
+                        }
                     }
                 }
             }
+        } else if self.conversation_id.is_none() {
+            self.conversation_id = Some(request.conversation_id);
         }
+        self.write_meta(&task_dir, task_id, &request.prompt, "running", None);
+        append_event_log(&task_dir, json!({ "type": "task_started" }));
         append_event_log(&task_dir, self.session_context.log_value());
         let _ = self.events.send(AgentEvent::ContextCollected { task_id });
 
@@ -376,12 +387,23 @@ impl Runtime {
                     artifacts: Vec::new(),
                 };
                 let _ = write_receipt(&task_dir, &receipt);
-                write_task_meta(
+                append_event_log(
+                    &task_dir,
+                    json!({ "type": "assistant_text", "text": summary }),
+                );
+                self.write_meta(
                     &task_dir,
                     task_id,
                     &request.prompt,
                     "completed",
                     path.as_deref(),
+                );
+                write_session(
+                    &task_dir,
+                    &[
+                        Message::user(request.prompt.clone()),
+                        Message::assistant(summary.clone()),
+                    ],
                 );
                 append_event_log(&task_dir, json!({ "type": "task_completed" }));
                 let _ = self.events.send(AgentEvent::TaskCompleted {
@@ -456,13 +478,18 @@ impl Runtime {
                 }
                 StepOutcome::Failed(message) => {
                     let path = self.finish_scratch(reused_scratch, &artifacts, false);
-                    write_task_meta(
+                    self.write_meta(
                         &task_dir,
                         task_id,
                         &request.prompt,
                         "failed",
                         path.as_deref(),
                     );
+                    append_event_log(
+                        &task_dir,
+                        json!({ "type": "task_failed", "message": message }),
+                    );
+                    write_session(&task_dir, &self.session);
                     let _ = self
                         .events
                         .send(AgentEvent::TaskFailed { task_id, message });
@@ -470,8 +497,11 @@ impl Runtime {
                 }
                 StepOutcome::ToolCalls {
                     assistant_text,
+                    reasoning,
+                    reasoning_ms,
                     calls,
                 } => {
+                    persist_step_progress(&task_dir, &reasoning, reasoning_ms, &assistant_text);
                     messages.push(Message::assistant_tool_calls(assistant_text, calls.clone()));
                     for call in calls {
                         if let Some(reset) = self.drain_control(task_id) {
@@ -525,12 +555,21 @@ impl Runtime {
                             }
                             ApprovalOutcome::Allowed => {}
                         }
+                        let summary = tool_ui_summary(&call.name, &input);
+                        append_event_log(
+                            &task_dir,
+                            json!({
+                                "type": "tool_started",
+                                "tool": call.name,
+                                "summary": summary,
+                            }),
+                        );
                         if self
                             .events
                             .send(AgentEvent::ToolStarted {
                                 task_id,
                                 tool: call.name.clone(),
-                                summary: crate::receipt::tool_ui_summary(&call.name, &input),
+                                summary,
                             })
                             .is_err()
                         {
@@ -585,7 +624,12 @@ impl Runtime {
                         messages.push(Message::tool_with_images(call.id, text, images));
                     }
                 }
-                StepOutcome::Final(summary) => {
+                StepOutcome::Final {
+                    text: summary,
+                    reasoning,
+                    reasoning_ms,
+                } => {
+                    persist_step_progress(&task_dir, &reasoning, reasoning_ms, &summary);
                     messages.push(Message::assistant(summary.clone()));
                     self.session = messages
                         .into_iter()
@@ -632,13 +676,14 @@ impl Runtime {
                         &receipt.artifacts,
                     );
                     let _ = write_receipt(&task_dir, &receipt);
-                    write_task_meta(
+                    self.write_meta(
                         &task_dir,
                         task_id,
                         &request.prompt,
                         "completed",
                         path.as_deref(),
                     );
+                    write_session(&task_dir, &self.session);
                     append_event_log(&task_dir, json!({ "type": "task_completed" }));
                     let _ = self.events.send(AgentEvent::TaskCompleted {
                         task_id,
@@ -651,13 +696,18 @@ impl Runtime {
         }
 
         let path = self.finish_scratch(reused_scratch, &artifacts, false);
-        write_task_meta(
+        self.write_meta(
             &task_dir,
             task_id,
             &request.prompt,
             "failed",
             path.as_deref(),
         );
+        append_event_log(
+            &task_dir,
+            json!({ "type": "task_failed", "message": "Agent step limit exceeded" }),
+        );
+        write_session(&task_dir, &self.session);
         self.record_activity(
             routed_brief.as_ref(),
             &request.prompt,
@@ -685,7 +735,9 @@ impl Runtime {
         actions: &[String],
     ) {
         let path = self.finish_scratch(reused_scratch, artifacts, reset);
-        write_task_meta(task_dir, task_id, prompt, "cancelled", path.as_deref());
+        self.write_meta(task_dir, task_id, prompt, "cancelled", path.as_deref());
+        append_event_log(task_dir, json!({ "type": "task_cancelled" }));
+        write_session(task_dir, &self.session);
         self.record_activity(
             brief,
             prompt,
@@ -853,6 +905,7 @@ impl Runtime {
             .map(|space| space.root.clone());
         if reset {
             self.session.clear();
+            self.conversation_id = None;
             self.session_scratch = None;
             self.session_context = ContextCapsule::default();
             self.staged_inputs.clear();
@@ -997,7 +1050,8 @@ impl Runtime {
                 Some(RuntimeCommand::Approve(_))
                 | Some(RuntimeCommand::Reject(_))
                 | Some(RuntimeCommand::Cancel(_))
-                | Some(RuntimeCommand::StartTask(_)) => {}
+                | Some(RuntimeCommand::StartTask(_))
+                | Some(RuntimeCommand::ResumeSession(_)) => {}
             }
         }
     }
@@ -1023,6 +1077,8 @@ impl Runtime {
         );
 
         let mut assembled = String::new();
+        let mut reasoning = String::new();
+        let mut reasoning_started: Option<Instant> = None;
         let mut tool_calls = Vec::new();
         let mut cancelled = false;
         let mut reset = false;
@@ -1039,6 +1095,10 @@ impl Runtime {
                                 }
                             }
                             ModelEvent::ReasoningDelta(text) => {
+                                if reasoning_started.is_none() {
+                                    reasoning_started = Some(Instant::now());
+                                }
+                                reasoning.push_str(&text);
                                 if self.events.send(AgentEvent::ReasoningDelta { task_id, text }).is_err() {
                                     return StepOutcome::Cancelled { reset: false };
                                 }
@@ -1050,13 +1110,21 @@ impl Runtime {
                         Ok(()) if !tool_calls.is_empty() => {
                             return StepOutcome::ToolCalls {
                                 assistant_text: assembled,
+                                reasoning,
+                                reasoning_ms: reasoning_started.map(|started| started.elapsed().as_millis() as u64),
                                 calls: tool_calls,
                             };
                         }
                         Ok(()) if assembled.trim().is_empty() => {
                             return StepOutcome::Failed(ModelError::EmptyResponse.user_message());
                         }
-                        Ok(()) => return StepOutcome::Final(assembled),
+                        Ok(()) => {
+                            return StepOutcome::Final {
+                                text: assembled,
+                                reasoning,
+                                reasoning_ms: reasoning_started.map(|started| started.elapsed().as_millis() as u64),
+                            };
+                        }
                         Err(err) => return StepOutcome::Failed(err.user_message()),
                     }
                 }
@@ -1069,6 +1137,10 @@ impl Runtime {
                             }
                         }
                         Some(ModelEvent::ReasoningDelta(text)) => {
+                            if reasoning_started.is_none() {
+                                reasoning_started = Some(Instant::now());
+                            }
+                            reasoning.push_str(&text);
                             if self.events.send(AgentEvent::ReasoningDelta { task_id, text }).is_err() {
                                 return StepOutcome::Cancelled { reset: false };
                             }
@@ -1089,7 +1161,8 @@ impl Runtime {
                         Some(RuntimeCommand::StartTask(_))
                         | Some(RuntimeCommand::Cancel(_))
                         | Some(RuntimeCommand::Approve(_))
-                        | Some(RuntimeCommand::Reject(_)) => {}
+                        | Some(RuntimeCommand::Reject(_))
+                        | Some(RuntimeCommand::ResumeSession(_)) => {}
                     }
                 }
             }
@@ -1100,12 +1173,72 @@ impl Runtime {
             }
         }
     }
+
+    fn resume_session(&mut self, id: ConversationId) {
+        self.session_scratch = None;
+        self.session_context = ContextCapsule::default();
+        self.staged_inputs.clear();
+        self.conversation_id = Some(id);
+        self.session = load_session_messages(&self.tasks_root, &id.to_string());
+    }
+
+    fn write_meta(
+        &self,
+        task_dir: &Path,
+        task_id: TaskId,
+        prompt: &str,
+        status: &str,
+        workspace: Option<&Path>,
+    ) {
+        write_task_meta(
+            task_dir,
+            task_id,
+            prompt,
+            status,
+            workspace,
+            self.conversation_id.unwrap_or_default(),
+        );
+    }
+}
+
+fn persist_step_progress(
+    task_dir: &Path,
+    reasoning: &str,
+    reasoning_ms: Option<u64>,
+    assistant_text: &str,
+) {
+    if !reasoning.trim().is_empty() {
+        append_event_log(
+            task_dir,
+            json!({
+                "type": "reasoning",
+                "text": reasoning,
+                "duration_ms": reasoning_ms,
+            }),
+        );
+    }
+    let trimmed = assistant_text.trim_start();
+    if !trimmed.is_empty() {
+        append_event_log(
+            task_dir,
+            json!({
+                "type": "assistant_text",
+                "text": trimmed,
+            }),
+        );
+    }
 }
 
 enum StepOutcome {
-    Final(String),
+    Final {
+        text: String,
+        reasoning: String,
+        reasoning_ms: Option<u64>,
+    },
     ToolCalls {
         assistant_text: String,
+        reasoning: String,
+        reasoning_ms: Option<u64>,
         calls: Vec<ToolCall>,
     },
     Failed(String),
@@ -1217,7 +1350,7 @@ mod tests {
     use crate::command::StartTaskRequest;
     use crate::config::memory::MemoryConfigStore;
     use crate::context::ContextCapsule;
-    use crate::ids::TaskId;
+    use crate::ids::{ConversationId, TaskId};
     use crate::policy::ComputerApprovalMode;
     use crate::scratch::FsScratchSpaceManager;
     use crate::secret::SecretString;
@@ -1267,6 +1400,7 @@ mod tests {
             tools: Arc::new(tools),
             tasks_root,
             session: Vec::new(),
+            conversation_id: None,
             session_scratch: None,
             session_context: ContextCapsule::default(),
             staged_inputs: Vec::new(),
@@ -1953,6 +2087,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resume_session_reloads_sanitized_history() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let build: ProviderBuilder = {
+            let captured = Arc::clone(&captured);
+            Arc::new(move |_, _, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&captured),
+                })
+            })
+        };
+
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), ToolRegistry::new());
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let conversation = ConversationId::new();
+        let first = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                conversation_id: conversation,
+                ..StartTaskRequest::new(first, "hello")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        let session = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(first.to_string())
+                .join("session.json"),
+        )
+        .unwrap();
+        assert!(session.contains("hello"));
+        assert!(!session.contains("hunter2"));
+
+        command_tx.send(RuntimeCommand::ResetSession).unwrap();
+        command_tx
+            .send(RuntimeCommand::ResumeSession(conversation))
+            .unwrap();
+
+        let second = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                conversation_id: conversation,
+                ..StartTaskRequest::new(second, "again")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        let recorded = requests.lock().expect("lock").clone();
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[1][1].content, "hello");
+        assert_eq!(recorded[1][2].role, Role::Assistant);
+        assert_eq!(recorded[1][3].content, "again");
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
     async fn tool_loop_writes_scratch_file() {
         let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(ScriptedProvider::new()));
         let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
@@ -2177,8 +2380,6 @@ mod tests {
         let task_id = TaskId::new();
         command_tx
             .send(RuntimeCommand::StartTask(StartTaskRequest {
-                task_id,
-                prompt: "summarize this".into(),
                 context: ContextCapsule {
                     frontmost_app: Some(crate::context::AppContext {
                         name: "Finder".into(),
@@ -2189,6 +2390,7 @@ mod tests {
                     selected_files: vec![source.clone()],
                     ..ContextCapsule::default()
                 },
+                ..StartTaskRequest::new(task_id, "summarize this")
             }))
             .unwrap();
 
@@ -2239,8 +2441,6 @@ mod tests {
         let task_id = TaskId::new();
         command_tx
             .send(RuntimeCommand::StartTask(StartTaskRequest {
-                task_id,
-                prompt: "Press Continue".into(),
                 context: ContextCapsule {
                     frontmost_app: Some(crate::context::AppContext {
                         name: "Safari".into(),
@@ -2249,6 +2449,7 @@ mod tests {
                     }),
                     ..ContextCapsule::default()
                 },
+                ..StartTaskRequest::new(task_id, "Press Continue")
             }))
             .unwrap();
 

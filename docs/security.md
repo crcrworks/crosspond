@@ -9,7 +9,7 @@ API keys go to macOS Keychain via `SecretStore`. They must not appear in:
 - SQLite
 - logs
 - task history
-- `events.jsonl` / `receipt.json`
+- `events.jsonl` / `session.json` / `receipt.json`
 - `Debug` output (`SecretString` must not derive `Debug`)
 
 The Keychain items use service `com.crosspond.app`:
@@ -19,13 +19,13 @@ The Keychain items use service `com.crosspond.app`:
 
 Provider HTTP errors shown in the UI are short status-based messages. Raw provider JSON is not dumped to the user or to logs.
 
-Selected text is sent to the model when present, but it must not appear in `events.jsonl`, receipts, or `ContextCapsule`’s `Debug` impl. Clipboard is never collected.
+Selected text is sent to the model when present, but it must not appear in `events.jsonl`, `session.json`, receipts, or `ContextCapsule`’s `Debug` impl. Clipboard is never collected.
 
-Screenshot bytes are sent to the model for vision, but must not appear in `events.jsonl`, receipts, logs, or `Debug` output. Only tool name / success metadata is recorded.
+Screenshot bytes are sent to the model for vision, but must not appear in `events.jsonl`, `session.json`, receipts, logs, or `Debug` output. Only tool name / success metadata is recorded.
 
 Do not log Accessibility field values. Password fields (`AXSecureTextField`) are shown as `••••` in snapshots and omitted from approval copy.
 
-Calendar event notes/bodies may be returned to the model from `calendar_events`, but must not appear in `events.jsonl`, receipts, or logs — only counts / success metadata.
+Calendar event notes/bodies may be returned to the model from `calendar_events`, but must not appear in `events.jsonl`, `session.json`, receipts, or logs — only counts / success metadata.
 
 ## Tool policy
 
@@ -40,7 +40,7 @@ Calendar event notes/bodies may be returned to the model from `calendar_events`,
 | `open_url` with public http(s) (SSRF-checked) | auto |
 | Destructive | approval |
 
-The launcher shows an Allow / Cancel card for tools that require approval. **Allow** runs that one call (`allow_external` for an external path, or the computer / shell / URL action). **Cancel** returns a rejection to the model and the loop continues. Escape / Stop cancels the whole task; Escape also closes History if it is open. A chip next to the prompt cycles UI-action approval: **Auto**, **AI**, **Manual**. **History** lists recent tasks from `~/.crosspond/tasks/` (prompt + receipt only — not a chat transcript).
+The launcher shows an Allow / Cancel card for tools that require approval. **Allow** runs that one call (`allow_external` for an external path, or the computer / shell / URL action). **Cancel** returns a rejection to the model and the loop continues. Escape / Stop cancels the whole task; Escape also closes History if it is open. A chip next to the prompt cycles UI-action approval: **Auto**, **AI**, **Manual**. **History** lists recent conversations from `~/.crosspond/tasks/` and opens the same transcript as the live chat. Follow-ups resume from sanitized `session.json` (user/assistant text and tool names only — not tool bodies, images, typed text, or URL query strings).
 
 Scratch membership is not `path.starts_with(scratch)`. Classify through `resolve_path` / `classify_write_path`, which handle `..`, symlinks, and canonicalization by walking parents of the resolved path.
 
@@ -50,7 +50,7 @@ AX node ids are valid only for the latest snapshot. Stale ids error instead of a
 
 Approval copy for `ui_click` may include coordinates and the app name; it must not include the screenshot image.
 
-`fetch_url` and public `open_url` only allow `http`/`https` and reject localhost, private, link-local, and cloud-metadata addresses (including after redirects for fetch). Page bodies and URL query strings must not appear in receipts, `events.jsonl`, or logs.
+`fetch_url` and public `open_url` only allow `http`/`https` and reject localhost, private, link-local, and cloud-metadata addresses (including after redirects for fetch). Page bodies and URL query strings must not appear in receipts, `events.jsonl`, `session.json`, or logs.
 
 `run_command` runs with cwd set to the session scratch space (created lazily if needed). `sudo` and empty commands are refused. stdout/stderr are truncated like other tool output and must not be written into receipts beyond success metadata.
 

@@ -50,7 +50,10 @@ Option+Space
         │                        Agent + ask_user → ApprovalRequired
         │                        Auto (and Agent + ask_user false) skip the card
         │                      run_command / open_url (non-http) → Allow
-        │                      write receipt.json under ~/.crosspond/tasks/<task-id>/
+        │                      write ~/.crosspond/tasks/<task-id>/
+        │                        (task.json with conversation_id,
+        │                         UI-safe events.jsonl, sanitized session.json,
+        │                         receipt.json)
         │                      write history/YYYY/MM/*.md Activity when a procedure
         │                        ran or the receipt has actions/artifacts
         │                      Save this as a Procedure? (Allow) after a guided
@@ -69,7 +72,9 @@ Option+Space
         ▼
  Command window / Settings
  First launch (no API key): onboarding, then Settings. No Accessibility prompt.
- History reads ~/.crosspond/tasks/ (task.json + receipt.json).
+ History reads ~/.crosspond/tasks/ grouped by conversation_id
+ (task.json + events.jsonl + session.json + receipt.json).
+ Opening a conversation hydrates the transcript and ResumeSession.
 ```
 
 Commands and events are defined in `crosspond-core`. The UI never runs model HTTP or tools on the Tauri/WebView thread. The runtime never imports Tauri or Svelte. Context collection runs on the main thread and must happen before the launcher is shown and focused, otherwise Crosspond is the frontmost app. The Tauri host sets `NSApplicationActivationPolicyAccessory` at launch (`LSUIElement` in Info.plist; tao otherwise forces Regular). Snapshot/screenshot targeting skips Crosspond and falls back to the menu-bar owner or the frontmost on-screen window of another app. AX attribute reads use a short messaging timeout, Finder selection is killed after 800ms, and collect checks `AXIsProcessTrusted` without prompting (a TCC dialog while hidden looks like a freeze). The WebView receives `AgentEvent` JSON and `badge_lines` only — not selected text, Finder paths, or secrets. Mid-turn `AssistantDelta` stays in the transcript as user-visible commentary; thinking and tool rows collapse into a work header. That commentary must not include selected text, passwords, calendar notes, or field values.
@@ -84,9 +89,9 @@ Computer tools default to the **ambient** frontmost pid from when the launcher o
 
 Node ids are integers for the latest Accessibility snapshot generation. A new snapshot or a successful UI action invalidates old ids.
 
-Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External reads/writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode. **History** lists recent tasks. **New** sends `ResetSession`, which drops follow-up history, ambient context, and any session scratch handle. Hiding the launcher keeps any in-flight task running and preserves the conversation so the next show can continue chatting. Past receipts remain under `~/.crosspond/tasks/`. Legacy `~/.crosspond/workspaces/` directories are left untouched.
+Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External reads/writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode. **History** lists recent conversations. Opening one restores the transcript and a sanitized model history so a follow-up continues that thread. **New** sends `ResetSession`, which drops follow-up history, ambient context, and any session scratch handle. Hiding the launcher keeps any in-flight task running and preserves the conversation so the next show can continue chatting. Past conversations remain under `~/.crosspond/tasks/`. Legacy `~/.crosspond/workspaces/` directories are left untouched.
 
-Tasks do not create a working directory on start. A scratch space under `~/.crosspond/scratch/<task-id>/` is created only when a file, download, or shell tool actually needs one (or when Finder selections are staged into `input/`). Follow-up turns in the same session reuse that scratch. Empty temporary scratches are removed when the task ends. Each submit still writes `~/.crosspond/tasks/<task-id>/` (`task.json`, `events.jsonl`, `receipt.json`).
+Tasks do not create a working directory on start. A scratch space under `~/.crosspond/scratch/<task-id>/` is created only when a file, download, or shell tool actually needs one (or when Finder selections are staged into `input/`). Follow-up turns in the same session reuse that scratch. Empty temporary scratches are removed when the task ends. Each submit still writes `~/.crosspond/tasks/<task-id>/` (`task.json` with `conversation_id`, UI-safe `events.jsonl`, sanitized `session.json`, `receipt.json`). Follow-up turns in the same conversation share that id. ResumeSession loads the latest sanitized session for the conversation; tool bodies, screenshot bytes, and raw tool arguments are not restored.
 
 The agent loop is capped at 16 steps. Tool output is capped at 100KB. Tools run on a blocking thread with a 30s timeout. Selected text is capped at 32,768 characters. AX snapshots cap depth, node count, and text length. Screenshot size is whatever cua-driver returns.
 

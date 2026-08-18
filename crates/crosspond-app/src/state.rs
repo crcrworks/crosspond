@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crosspond_core::{
-    CommandSender, ConfigStore, ContextCapsule, ContextCollector, GlobalHotkeyService, SecretStore,
-    TaskId,
+    CommandSender, ConfigStore, ContextCapsule, ContextCollector, ConversationId,
+    GlobalHotkeyService, SecretStore, TaskId,
 };
 
 pub struct AppState {
@@ -20,6 +20,7 @@ pub struct AppState {
 pub struct InnerState {
     pub ambient: ContextCapsule,
     pub current_task: Option<TaskId>,
+    pub conversation_id: Option<ConversationId>,
     pub artifacts: Vec<(String, PathBuf)>,
     pub visible: bool,
     pub in_conversation: bool,
@@ -47,6 +48,7 @@ impl AppState {
             inner: Mutex::new(InnerState {
                 ambient: ContextCapsule::default(),
                 current_task: None,
+                conversation_id: None,
                 artifacts: Vec::new(),
                 visible: false,
                 in_conversation: false,

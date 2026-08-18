@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::context::ContextCapsule;
-use crate::ids::TaskId;
+use crate::ids::{ConversationId, TaskId};
 
 /// Identifier for a pending approval prompt.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -29,6 +29,8 @@ pub enum RuntimeCommand {
     Cancel(TaskId),
     /// Drop in-memory follow-up history. Sent when the user starts a new conversation (New).
     ResetSession,
+    /// Load a past conversation so the next StartTask can follow up.
+    ResumeSession(ConversationId),
     /// Verify the current provider settings without starting a task.
     TestConnection,
 }
@@ -38,6 +40,7 @@ pub struct StartTaskRequest {
     pub task_id: TaskId,
     pub prompt: String,
     pub context: ContextCapsule,
+    pub conversation_id: ConversationId,
 }
 
 impl StartTaskRequest {
@@ -46,6 +49,7 @@ impl StartTaskRequest {
             task_id,
             prompt: prompt.into(),
             context: ContextCapsule::default(),
+            conversation_id: ConversationId::new(),
         }
     }
 }

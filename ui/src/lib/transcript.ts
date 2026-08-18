@@ -36,27 +36,15 @@ export class Transcript {
 
 	/** Immutable copy so Svelte 5 sees stream updates instead of a mutated array. */
 	snapshot(): TranscriptBlock[] {
-		return this.#blocks.map((block) => {
-			if (block.kind === 'user' || block.kind === 'text') {
-				return { kind: block.kind, text: block.text };
-			}
-			return {
-				kind: 'work',
-				expanded: block.expanded,
-				startedAt: block.startedAt,
-				workedMs: block.workedMs,
-				steps: block.steps.map((step) => {
-					if (step.kind === 'tool') {
-						return { kind: 'tool', tool: { ...step.tool } };
-					}
-					return { ...step };
-				})
-			};
-		});
+		return this.#blocks.map((block) => cloneBlock(block));
 	}
 
 	clear() {
 		this.#blocks = [];
+	}
+
+	restore(blocks: TranscriptBlock[]) {
+		this.#blocks = blocks.map((block) => cloneBlock(block));
 	}
 
 	get isEmpty() {
@@ -277,6 +265,24 @@ export class Transcript {
 		}
 		return null;
 	}
+}
+
+function cloneBlock(block: TranscriptBlock): TranscriptBlock {
+	if (block.kind === 'user' || block.kind === 'text') {
+		return { kind: block.kind, text: block.text };
+	}
+	return {
+		kind: 'work',
+		expanded: block.expanded,
+		startedAt: block.startedAt,
+		workedMs: block.workedMs,
+		steps: block.steps.map((step) => {
+			if (step.kind === 'tool') {
+				return { kind: 'tool', tool: { ...step.tool } };
+			}
+			return { ...step };
+		})
+	};
 }
 
 function thinkingStep(text: string): WorkStep {
