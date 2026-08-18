@@ -13,6 +13,7 @@ mod history;
 mod hotkey;
 mod ids;
 mod knowledge;
+mod mention;
 mod policy;
 mod receipt;
 mod runtime;
@@ -30,13 +31,14 @@ pub use conversation::{
     ConversationView, TranscriptBlock, conversation_artifact_path, open_conversation,
 };
 pub use crosspond_knowledge::{
-    FsVaultRepository, IndexedVault, KnowledgeId, KnowledgeNote, NoteKind, SearchHit, SearchIndex,
-    VaultError, VaultRepository, index_db_path,
+    FsVaultRepository, IndexedVault, KnowledgeId, KnowledgeNote, MentionNote, NoteKind, SearchHit,
+    SearchIndex, VaultError, VaultRepository, index_db_path,
 };
 pub use event::AgentEvent;
 pub use history::{TaskHistoryEntry, history_group_label, history_title, list_recent_tasks};
 pub use hotkey::{GlobalHotkeyService, HotkeyEvent};
 pub use ids::{ConversationId, TaskId};
+pub use mention::{Mention, display_prompt, parse_running_app_names, vault_pin_ids};
 pub use policy::{
     AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate, evaluate_with,
     risk_for_tool,

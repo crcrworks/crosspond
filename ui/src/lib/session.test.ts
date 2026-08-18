@@ -47,7 +47,9 @@ describe('LauncherSession completion', () => {
 		expect(session.inConversation).toBe(true);
 		expect(session.placeholder).toBe('Ask a follow-up...');
 		expect(session.transcript.blocks()[0]).toMatchObject({ kind: 'user', text: 'Press Continue' });
+		session.mentions = [{ kind: 'screen' }];
 		session.beginTask('task-2', 'conv-1', 'and then stop');
+		expect(session.mentions).toEqual([]);
 		expect(session.transcript.blocks()).toHaveLength(3);
 		expect(session.transcript.blocks()[2]).toMatchObject({
 			kind: 'user',

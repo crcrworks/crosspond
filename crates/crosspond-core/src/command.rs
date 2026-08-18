@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::ContextCapsule;
 use crate::ids::{ConversationId, TaskId};
+use crate::mention::Mention;
 
 /// Identifier for a pending approval prompt.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -41,6 +42,7 @@ pub struct StartTaskRequest {
     pub prompt: String,
     pub context: ContextCapsule,
     pub conversation_id: ConversationId,
+    pub mentions: Vec<Mention>,
 }
 
 impl StartTaskRequest {
@@ -50,6 +52,7 @@ impl StartTaskRequest {
             prompt: prompt.into(),
             context: ContextCapsule::default(),
             conversation_id: ConversationId::new(),
+            mentions: Vec::new(),
         }
     }
 }
