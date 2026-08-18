@@ -62,6 +62,10 @@ export function cycleComputerApproval() {
 	return invoke<ComputerApproval>('cycle_computer_approval');
 }
 
+export function setComputerApproval(mode: ComputerApproval) {
+	return invoke<ComputerApproval>('set_computer_approval', { mode });
+}
+
 export function permissions() {
 	return invoke<SettingsView['permissions']>('permissions');
 }

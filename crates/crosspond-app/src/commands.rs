@@ -230,6 +230,17 @@ pub fn cycle_computer_approval(state: State<AppState>) -> Result<ComputerApprova
 }
 
 #[tauri::command]
+pub fn set_computer_approval(
+    mode: ComputerApprovalMode,
+    state: State<AppState>,
+) -> Result<ComputerApprovalMode, String> {
+    let mut config = state.config.load().unwrap_or_default();
+    config.computer_approval = mode;
+    state.config.save(&config).map_err(|err| err.to_string())?;
+    Ok(config.computer_approval)
+}
+
+#[tauri::command]
 pub fn permissions() -> PermissionSnapshot {
     PermissionSnapshot::current()
 }

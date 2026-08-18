@@ -53,8 +53,40 @@ kbd {
 	padding: 12px 16px;
 }
 
+.prompt-slot {
+	display: flex;
+	min-width: 0;
+	flex-shrink: 0;
+}
+
+.prompt-slot.seamless {
+	align-items: center;
+	padding: 8px 16px 14px;
+}
+
+.prompt-slot.seamless.fill {
+	flex: 1;
+	min-height: 0;
+}
+
+.prompt-slot.docked {
+	position: relative;
+	z-index: 2;
+	padding: 8px 12px 12px;
+}
+
+.launcher.dock-prompt .prompt-slot {
+	order: 3;
+}
+
+.launcher.dock-prompt .transcript-pane {
+	order: 2;
+}
+
 .prompt {
 	display: flex;
+	position: relative;
+	z-index: 2;
 	min-width: 0;
 	flex: 1;
 	align-items: flex-start;
@@ -66,8 +98,27 @@ kbd {
 	cursor: text;
 }
 
+.prompt.seamless {
+	align-items: center;
+	border-color: transparent;
+	background: transparent;
+	padding: 4px 0;
+}
+
+.prompt.docked {
+	align-items: center;
+}
+
+.prompt-slot.seamless.fill .prompt {
+	height: 100%;
+}
+
 .prompt:focus-within {
 	border-color: var(--prompt-border-focus);
+}
+
+.prompt.seamless:focus-within {
+	border-color: transparent;
 }
 
 .prompt-main {
@@ -79,26 +130,134 @@ kbd {
 	cursor: text;
 }
 
-.prompt-mode {
+.prompt.seamless .prompt-main {
+	align-items: center;
+}
+
+.prompt-tools {
+	display: flex;
 	flex-shrink: 0;
+	align-items: center;
+	gap: 6px;
 	margin-top: 1px;
+}
+
+.prompt.seamless .prompt-tools {
+	margin-top: 0;
+}
+
+.prompt-mode-wrap {
+	position: relative;
+	flex-shrink: 0;
+}
+
+.prompt-mode {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
 	border: 0;
-	border-radius: 4px;
+	border-radius: 6px;
 	background: transparent;
-	padding: 2px 6px;
+	padding: 2px 4px 2px 6px;
 	font: inherit;
-	font-size: 11px;
-	font-weight: 600;
-	letter-spacing: 0.04em;
+	font-size: 12px;
+	font-weight: 500;
 	line-height: 1.4;
-	text-transform: uppercase;
 	color: var(--muted);
 	cursor: pointer;
 }
 
-.prompt-mode:hover {
+.prompt-mode:hover,
+.prompt-mode[aria-expanded='true'] {
 	background: var(--tone-muted-bg);
 	color: var(--text);
+}
+
+.prompt-mode :global(.chevron) {
+	width: 12px;
+	height: 12px;
+	transform: none;
+}
+
+.prompt-mode[aria-expanded='true'] :global(.chevron) {
+	transform: rotate(180deg);
+}
+
+.prompt-menu {
+	position: absolute;
+	right: 0;
+	z-index: 5;
+	min-width: 112px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--surface);
+	padding: 4px;
+}
+
+.prompt-menu.down {
+	top: calc(100% + 6px);
+}
+
+.prompt-menu.up {
+	bottom: calc(100% + 6px);
+}
+
+.prompt-option {
+	display: block;
+	width: 100%;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	padding: 6px 8px;
+	font: inherit;
+	font-size: 12px;
+	line-height: 1.4;
+	text-align: left;
+	color: var(--muted);
+	cursor: pointer;
+}
+
+.prompt-option.active,
+.prompt-option:hover {
+	background: var(--tone-muted-bg);
+}
+
+.prompt-option.selected {
+	color: var(--text);
+}
+
+.prompt-action {
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border: 0;
+	border-radius: 6px;
+	background: var(--button-primary);
+	cursor: pointer;
+}
+
+.prompt-action:hover {
+	background: var(--button-primary-hover);
+}
+
+.prompt-action:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+.prompt-action:disabled:hover {
+	background: var(--button-primary);
+}
+
+.prompt-action.stop {
+	background: var(--tone-red-bg);
+}
+
+.prompt-action.stop:hover {
+	background: var(--tone-red-bg);
 }
 
 .prompt textarea {
@@ -121,6 +280,10 @@ kbd {
 
 .prompt .icon {
 	margin-top: 2px;
+}
+
+.prompt.seamless .icon {
+	margin-top: 0;
 }
 
 .chat-header {
