@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
 	Transcript,
 	collapsedLabel,
+	firstUserTitle,
 	heartbeatStatus,
 	thoughtLabel,
-	workHeaderIcon,
+	workHeaderVisual,
 	workedForLabel
 } from './transcript';
-import { toolIconPath, toolRowLabel as row } from './tools';
+import { taskStatusVisual, toolIconPath, toolRowLabel as row, toolVisual } from './tools';
 
 function start(transcript: Transcript, name: string) {
 	transcript.startTool(name, '');
@@ -218,6 +219,17 @@ describe('transcript', () => {
 		expect(thoughtLabel(null, started, false).startsWith('Thought ')).toBe(true);
 	});
 
+	it('first user title truncates the opening prompt', () => {
+		const transcript = new Transcript();
+		expect(firstUserTitle(transcript.blocks())).toBeNull();
+		transcript.pushUser('hello');
+		expect(firstUserTitle(transcript.blocks())).toBe('hello');
+		transcript.clear();
+		transcript.pushUser('a'.repeat(40));
+		expect(firstUserTitle(transcript.blocks())?.endsWith('…')).toBe(true);
+		expect(firstUserTitle(transcript.blocks())?.length).toBe(29);
+	});
+
 	it('tool row label uses the tool name', () => {
 		expect(row('knowledge_search', 'cursor origin')).toBe('knowledge_search  cursor origin');
 		expect(row('ui_type', '')).toBe('ui_type');
@@ -227,6 +239,27 @@ describe('transcript', () => {
 		expect(toolIconPath('read_file')).toBe('/icons/file.svg');
 		expect(toolIconPath('ui_click')).toBe('/icons/pointer.svg');
 		expect(toolIconPath('unknown_tool')).toBe('/icons/wrench.svg');
+		expect(toolVisual('read_file')).toEqual({ icon: '/icons/file.svg', tone: 'yellow' });
+		expect(toolVisual('ui_click')).toEqual({ icon: '/icons/pointer.svg', tone: 'blue' });
+		expect(toolVisual('calendar_events')).toEqual({
+			icon: '/icons/calendar.svg',
+			tone: 'yellow'
+		});
+		expect(toolVisual('knowledge_search')).toEqual({
+			icon: '/icons/search.svg',
+			tone: 'green'
+		});
+		expect(toolVisual('run_command')).toEqual({ icon: '/icons/terminal.svg', tone: 'red' });
+		expect(toolVisual('web_search')).toEqual({ icon: '/icons/globe.svg', tone: 'blue' });
+		expect(toolVisual('unknown_tool')).toEqual({ icon: '/icons/wrench.svg', tone: 'muted' });
+	});
+
+	it('task status maps to a pastel badge', () => {
+		expect(taskStatusVisual('completed')).toEqual({ label: 'Done', tone: 'green' });
+		expect(taskStatusVisual('failed')).toEqual({ label: 'Failed', tone: 'red' });
+		expect(taskStatusVisual('cancelled')).toEqual({ label: 'Cancelled', tone: 'muted' });
+		expect(taskStatusVisual('running')).toEqual({ label: 'Interrupted', tone: 'yellow' });
+		expect(taskStatusVisual('other')).toEqual({ label: 'Unknown', tone: 'muted' });
 	});
 
 	it('live activity follows the agent phase', () => {
@@ -250,14 +283,23 @@ describe('transcript', () => {
 		start(transcript, 'get_accessibility_snapshot');
 		const first = transcript.blocks()[0];
 		if (first.kind !== 'work') throw new Error('expected work');
-		expect(workHeaderIcon(first.steps)).toBe('/icons/monitor.svg');
+		expect(workHeaderVisual(first.steps)).toEqual({
+			icon: '/icons/monitor.svg',
+			tone: 'blue'
+		});
 		transcript.finishTool('get_accessibility_snapshot');
 		start(transcript, 'ui_press');
 		const second = transcript.blocks()[0];
 		if (second.kind !== 'work') throw new Error('expected work');
-		expect(workHeaderIcon(second.steps)).toBe('/icons/pointer.svg');
+		expect(workHeaderVisual(second.steps)).toEqual({
+			icon: '/icons/pointer.svg',
+			tone: 'blue'
+		});
 		transcript.finishTool('ui_press');
-		expect(workHeaderIcon(second.steps)).toBe('/icons/wrench.svg');
+		expect(workHeaderVisual(second.steps)).toEqual({
+			icon: '/icons/wrench.svg',
+			tone: 'muted'
+		});
 	});
 
 	it('toggle step expands nested thinking', () => {

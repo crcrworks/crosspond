@@ -133,51 +133,77 @@ export function toolRowLabel(name: string, summary: string): string {
 	return trimmed.length === 0 ? name : `${name}  ${trimmed}`;
 }
 
-export function toolIconPath(name: string): string {
+export type ToolTone = 'blue' | 'green' | 'yellow' | 'red' | 'muted';
+
+export type ToolVisual = {
+	icon: string;
+	tone: ToolTone;
+};
+
+export function toolVisual(name: string): ToolVisual {
 	switch (name) {
 		case 'read_file':
-			return '/icons/file.svg';
+			return { icon: '/icons/file.svg', tone: 'yellow' };
 		case 'write_file':
-			return '/icons/pencil.svg';
+			return { icon: '/icons/pencil.svg', tone: 'yellow' };
 		case 'list_directory':
 		case 'create_directory':
-			return '/icons/folder.svg';
+			return { icon: '/icons/folder.svg', tone: 'yellow' };
 		case 'list_apps':
 		case 'open_app':
 		case 'focus_app':
 		case 'get_accessibility_snapshot':
 		case 'take_screenshot':
-			return '/icons/monitor.svg';
+			return { icon: '/icons/monitor.svg', tone: 'blue' };
 		case 'ui_press':
 		case 'ui_click':
 		case 'ui_type':
 		case 'ui_hotkey':
 		case 'ui_scroll':
-			return '/icons/pointer.svg';
+			return { icon: '/icons/pointer.svg', tone: 'blue' };
 		case 'ui_set_value':
-			return '/icons/text.svg';
+			return { icon: '/icons/text.svg', tone: 'blue' };
 		case 'calendar_events':
-			return '/icons/file.svg';
+			return { icon: '/icons/calendar.svg', tone: 'yellow' };
 		case 'knowledge_search':
 		case 'knowledge_find_procedure':
-			return '/icons/search.svg';
+			return { icon: '/icons/search.svg', tone: 'green' };
 		case 'knowledge_read':
 		case 'knowledge_neighbors':
 		case 'knowledge_backlinks':
-			return '/icons/file.svg';
+			return { icon: '/icons/file.svg', tone: 'green' };
 		case 'knowledge_ingest':
 		case 'knowledge_propose_update':
 		case 'knowledge_read_later':
 		case 'knowledge_archive_source':
-			return '/icons/pencil.svg';
+			return { icon: '/icons/pencil.svg', tone: 'green' };
 		case 'run_command':
+			return { icon: '/icons/terminal.svg', tone: 'red' };
 		case 'open_url':
-			return '/icons/wrench.svg';
 		case 'web_search':
 		case 'fetch_url':
-			return '/icons/search.svg';
+			return { icon: '/icons/globe.svg', tone: 'blue' };
 		default:
-			return '/icons/wrench.svg';
+			return { icon: '/icons/wrench.svg', tone: 'muted' };
+	}
+}
+
+export function toolIconPath(name: string): string {
+	return toolVisual(name).icon;
+}
+
+export function taskStatusVisual(status: string): { label: string; tone: ToolTone } {
+	switch (status) {
+		case 'completed':
+			return { label: 'Done', tone: 'green' };
+		case 'failed':
+			return { label: 'Failed', tone: 'red' };
+		case 'cancelled':
+			return { label: 'Cancelled', tone: 'muted' };
+		case 'running':
+			return { label: 'Interrupted', tone: 'yellow' };
+		default:
+			return { label: 'Unknown', tone: 'muted' };
 	}
 }
 

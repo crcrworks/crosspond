@@ -1,4 +1,4 @@
-import { toolActivityLabel, toolDoneLabel, toolIconPath } from './tools';
+import { toolActivityLabel, toolDoneLabel, toolVisual, type ToolTone } from './tools';
 
 export type ToolLine = {
 	name: string;
@@ -306,6 +306,16 @@ function freezeThinkingSteps(steps: WorkStep[]) {
 	}
 }
 
+export function firstUserTitle(blocks: TranscriptBlock[], limit = 28): string | null {
+	const user = blocks.find((block): block is Extract<TranscriptBlock, { kind: 'user' }> => {
+		return block.kind === 'user';
+	});
+	if (!user) return null;
+	const line = user.text.trim().split('\n')[0] ?? '';
+	if (line.length === 0) return null;
+	return line.length > limit ? `${[...line].slice(0, limit).join('')}…` : line;
+}
+
 export function compactDuration(durationMs: number): string {
 	const secs = Math.floor(durationMs / 1000);
 	if (secs < 60) return `${Math.max(1, secs)}s`;
@@ -361,13 +371,18 @@ function liveWorkLabel(steps: WorkStep[], thinkingLive: boolean): string {
 	return `Used ${tools.length} tools`;
 }
 
-export function workHeaderIcon(steps: WorkStep[]): string | null {
+export type WorkHeaderVisual = {
+	icon: string;
+	tone: ToolTone;
+};
+
+export function workHeaderVisual(steps: WorkStep[]): WorkHeaderVisual | null {
 	const tools = steps.filter((step): step is Extract<WorkStep, { kind: 'tool' }> => step.kind === 'tool');
 	const current = [...tools].reverse().find((item) => item.tool.running);
-	if (current) return toolIconPath(current.tool.name);
+	if (current) return toolVisual(current.tool.name);
 	if (tools.length === 0) return null;
-	if (tools.length === 1) return toolIconPath(tools[0].tool.name);
-	return '/icons/wrench.svg';
+	if (tools.length === 1) return toolVisual(tools[0].tool.name);
+	return { icon: '/icons/wrench.svg', tone: 'muted' };
 }
 
 export function heartbeatStatus(

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { listen } from '@tauri-apps/api/event';
 	import { loadSettings, openSystemSettings, saveConfig, saveSecret, testConnection } from '$lib/api';
+	import Badge from '$lib/components/Badge.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import type { AgentEvent, SettingsView } from '$lib/types';
 	import { onMount } from 'svelte';
@@ -65,12 +66,14 @@
 
 <div class="h-full overflow-y-auto px-6 py-4 text-[var(--text)]" style:background="var(--bg)">
 	<div class="flex flex-col gap-4">
-		<div class="pt-2 text-sm font-semibold text-[var(--muted)]">General</div>
+		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
+			General
+		</div>
 		<div class="flex flex-col gap-1">
 			<div class="text-sm text-[var(--muted)]">Launch Crosspond</div>
-			<div>Option + Space</div>
+			<div><kbd>Option</kbd> + <kbd>Space</kbd></div>
 		</div>
-		<div class="pt-2 text-sm font-semibold text-[var(--muted)]">AI</div>
+		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">AI</div>
 		<div class="flex flex-col gap-1">
 			<div class="text-sm text-[var(--muted)]">Provider</div>
 			<div>OpenAI Compatible</div>
@@ -79,7 +82,7 @@
 			<span class="text-sm text-[var(--muted)]">Base URL</span>
 			<input
 				bind:value={baseUrl}
-				class="rounded-sm border px-2 py-1"
+				class="rounded-md border px-2 py-1"
 				style:border-color="var(--border)"
 				style:background="var(--bg)"
 			/>
@@ -89,7 +92,7 @@
 			<span class="text-sm text-[var(--muted)]">Model</span>
 			<input
 				bind:value={model}
-				class="rounded-sm border px-2 py-1"
+				class="rounded-md border px-2 py-1"
 				style:border-color="var(--border)"
 				style:background="var(--bg)"
 			/>
@@ -102,12 +105,14 @@
 				placeholder={settings?.provider_key_stored
 					? '••••••••  stored in Keychain'
 					: 'Required — stored in Keychain'}
-				class="rounded-sm border px-2 py-1"
+				class="rounded-md border px-2 py-1"
 				style:border-color="var(--border)"
 				style:background="var(--bg)"
 			/>
 		</label>
-		<div class="pt-2 text-sm font-semibold text-[var(--muted)]">Search</div>
+		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
+			Search
+		</div>
 		<label class="flex flex-col gap-1">
 			<span class="text-sm text-[var(--muted)]">Exa API Key</span>
 			<input
@@ -116,7 +121,7 @@
 				placeholder={settings?.exa_key_stored
 					? '••••••••  stored in Keychain'
 					: 'Optional — for web_search'}
-				class="rounded-sm border px-2 py-1"
+				class="rounded-md border px-2 py-1"
 				style:border-color="var(--border)"
 				style:background="var(--bg)"
 			/>
@@ -124,7 +129,9 @@
 		<div class="text-sm text-[var(--muted)]">
 			Required for web_search. Free credits at https://dashboard.exa.ai/api-keys
 		</div>
-		<div class="pt-2 text-sm font-semibold text-[var(--muted)]">Permissions</div>
+		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
+			Permissions
+		</div>
 		<div class="text-sm text-[var(--muted)]">
 			Chat works without these. Enable them when you want selected text, screenshots, or calendar
 			reads.
@@ -135,12 +142,13 @@
 				['Screen Recording', settings.permissions.screen_recording, 'screen_recording'],
 				['Calendars', settings.permissions.calendars, 'calendars']
 			] as row (row[2])}
-				<div class="flex flex-col gap-1">
+				<div class="surface flex flex-col gap-2">
 					<div class="flex flex-row items-center gap-2">
-						<div class="text-sm text-[var(--muted)]">{row[0]}</div>
-						<div class="text-sm" style:color={row[1] ? 'var(--ok)' : 'var(--muted)'}>
-							{row[1] ? 'Enabled' : 'Not enabled'}
-						</div>
+						<div class="text-sm">{row[0]}</div>
+						<Badge
+							label={row[1] ? 'Enabled' : 'Not enabled'}
+							tone={row[1] ? 'green' : 'muted'}
+						/>
 					</div>
 					<Button
 						label="Open System Settings"
@@ -151,7 +159,7 @@
 			{/each}
 		{/if}
 		<div class="flex flex-row gap-2">
-			<Button label="Save" onclick={() => void onSave()} />
+			<Button label="Save" onclick={() => void onSave()} variant="primary" />
 			<Button label="Test Connection" onclick={() => void onTest()} />
 		</div>
 		{#if saveStatus}

@@ -20,12 +20,15 @@
 	import ActivityLabel from '$lib/components/ActivityLabel.svelte';
 	import ApprovalCard from '$lib/components/ApprovalCard.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import ConversationHeader from '$lib/components/ConversationHeader.svelte';
+	import Icon from '$lib/components/Icon.svelte';
 	import HistoryPanel from '$lib/components/HistoryPanel.svelte';
 	import Onboarding from '$lib/components/Onboarding.svelte';
 	import ReceiptCard from '$lib/components/ReceiptCard.svelte';
 	import TranscriptView from '$lib/components/TranscriptView.svelte';
 	import { LauncherSession } from '$lib/session.svelte';
 	import { approvalLabel } from '$lib/tools';
+	import { firstUserTitle } from '$lib/transcript';
 	import type { AgentEvent, LauncherShown } from '$lib/types';
 	import { onMount } from 'svelte';
 
@@ -38,7 +41,6 @@
 	const chatLayout = $derived(
 		session.inConversation && session.overlay === 'none'
 	);
-	const showInput = $derived(session.overlay !== 'onboarding');
 	const expanded = $derived(!session.compact);
 	const blocks = $derived.by(() => {
 		session.rev;
@@ -50,6 +52,14 @@
 			? session.transcript.liveThinkingIndex()
 			: null;
 	});
+	const showHeader = $derived(session.overlay !== 'onboarding');
+	const liveTitle = $derived.by(() => {
+		session.rev;
+		return firstUserTitle(session.transcript.blocks());
+	});
+	const historyTabs = $derived(
+		session.history.filter((item) => item.id !== session.currentTask)
+	);
 
 	// Size follows compact/overlay/badges, not transcript `rev`.
 	let appliedCompact = true;
@@ -84,12 +94,21 @@
 			session.computerApproval = boot.computer_approval;
 			session.applyShown(boot.badges, boot.needs_onboarding, !boot.needs_onboarding, boot.visible);
 			if (boot.needs_onboarding) session.enterOnboarding(!boot.needs_onboarding);
+			void refreshHistory();
 			unlistenEvent = await listen<AgentEvent>('agent-event', (event) => {
 				session.applyEvent(event.payload);
+				if (
+					event.payload.type === 'task_completed' ||
+					event.payload.type === 'task_failed' ||
+					event.payload.type === 'task_cancelled'
+				) {
+					void refreshHistory();
+				}
 			});
 			unlistenShown = await listen<LauncherShown>('launcher-shown', (event) => {
 				const shown = event.payload;
 				session.applyShown(shown.badges, shown.onboarding, shown.ready, shown.visible);
+				void refreshHistory();
 				if (shown.visible) queueMicrotask(() => textarea?.focus());
 			});
 			queueMicrotask(() => textarea?.focus());
@@ -123,10 +142,15 @@
 		}
 	}
 
+	async function refreshHistory() {
+		session.history = await listHistory();
+	}
+
 	async function onNew() {
 		if (session.overlay === 'onboarding') return;
 		session.resetLocal();
 		await resetSession();
+		await refreshHistory();
 		textarea?.focus();
 	}
 
@@ -140,7 +164,7 @@
 		}
 		session.history = await listHistory();
 		session.overlay = 'history';
-		session.historySelected = null;
+		session.historySelected = session.history.length > 0 ? 0 : null;
 		session.bump();
 	}
 
@@ -149,13 +173,9 @@
 			await cancel();
 			return;
 		}
-		if (session.overlay === 'history' && session.historySelected !== null) {
-			session.historySelected = null;
-			session.bump();
-			return;
-		}
 		if (session.overlay === 'history') {
 			session.overlay = 'none';
+			session.historySelected = null;
 			session.bump();
 			return;
 		}
@@ -218,139 +238,155 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex h-full w-full items-start justify-center p-0">
+<div class="launcher">
+	{#if showHeader}
+		<ConversationHeader
+			liveTitle={session.inConversation ? (liveTitle ?? 'Chat') : null}
+			liveActive={session.overlay === 'none' && session.inConversation}
+			entries={historyTabs}
+			selectedId={session.overlay === 'history' && session.historySelected !== null
+				? session.history[session.historySelected]?.id ?? null
+				: null}
+			onnew={() => void onNew()}
+			onlive={() => {
+				session.overlay = 'none';
+				session.historySelected = null;
+				session.bump();
+			}}
+			onselect={(id) => {
+				const index = session.history.findIndex((item) => item.id === id);
+				if (index < 0) return;
+				session.overlay = 'history';
+				session.historySelected = index;
+				session.bump();
+			}}
+		/>
+	{/if}
 	<div
-		class="flex w-full flex-col overflow-hidden rounded-xl border text-[var(--text)] shadow-lg"
-		style:background="var(--bg)"
-		style:border-color="var(--border)"
-		style:min-height={expanded ? '100%' : 'auto'}
-		style:height={expanded ? '100%' : 'auto'}
+		class="flex shrink-0 flex-row items-center gap-3 px-4 py-3"
+		class:items-end={expanded}
+		data-tauri-drag-region
 	>
-		<div
-			class="flex shrink-0 flex-row items-center gap-3 px-4 py-3"
-			class:items-end={expanded}
-			data-tauri-drag-region
-		>
-			<div class="size-2 shrink-0 rounded-full bg-[var(--ok)]"></div>
-			{#if session.overlay === 'onboarding'}
-				<div class="min-w-0 flex-1 text-sm">Welcome to Crosspond</div>
-			{:else}
-				<textarea
-					bind:this={textarea}
-					bind:value={session.input}
-					placeholder={session.placeholder}
-					rows="1"
-					class="min-w-0 flex-1 resize-none bg-transparent text-sm outline-none"
-					onkeydown={onPromptKey}
-					oninput={onInput}
-					oncompositionstart={() => (session.composing = true)}
-					oncompositionend={() => (session.composing = false)}
-				></textarea>
-				<Button
-					label={approvalLabel(session.computerApproval)}
-					onclick={async () => {
+		{#if session.overlay === 'onboarding'}
+			<div class="min-w-0 flex-1 text-sm">Welcome to Crosspond</div>
+		{:else}
+			<div class="prompt">
+				<label class="prompt-main">
+					<Icon src="/icons/search.svg" />
+					<textarea
+						bind:this={textarea}
+						bind:value={session.input}
+						placeholder={session.placeholder}
+						aria-label={session.placeholder}
+						rows="1"
+						onkeydown={onPromptKey}
+						oninput={onInput}
+						oncompositionstart={() => (session.composing = true)}
+						oncompositionend={() => (session.composing = false)}
+					></textarea>
+				</label>
+				<button
+					type="button"
+					class="prompt-mode"
+					onclick={async (event) => {
+						event.preventDefault();
 						session.computerApproval = await cycleComputerApproval();
 					}}
-				/>
-			{/if}
-			{#if session.inConversation && session.overlay !== 'onboarding'}
-				<Button label="New" onclick={() => void onNew()} />
-			{/if}
-			{#if showInput}
-				<Button
-					label="History"
-					onclick={() => void onHistory()}
-				/>
-			{/if}
-			{#if session.busy}
-				<Button label="Stop" onclick={() => void cancel()} />
-			{/if}
-		</div>
-		{#if session.overlay !== 'onboarding' && !chatLayout && session.badges.length > 0}
-			<div class="px-4 pb-2 text-xs text-[var(--muted)]">
-				{#each session.badges as line (line)}
-					<div>{line}</div>
-				{/each}
+				>
+					{approvalLabel(session.computerApproval)}
+				</button>
 			</div>
 		{/if}
-		{#if expanded}
-			<div
-				bind:this={scroller}
-				class="min-h-0 flex-1 overflow-y-auto px-4 pb-4"
-				onscroll={() => {
-					if (!scroller) return;
-					const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-					stickToBottom = distance < 64;
-				}}
-			>
-				{#if session.overlay === 'onboarding'}
-					<Onboarding
-						ready={session.onboardingReady}
-						hint={session.onboardingHint}
-						onsettings={() => void openSettings()}
-						oncontinue={() => void continueOnboarding()}
-						ondone={() => void hideLauncher()}
-					/>
-				{:else if session.overlay === 'history'}
-					<HistoryPanel
-						entries={session.history}
-						selected={session.historySelected}
-						onselect={(index) => (session.historySelected = index)}
-						onback={() => (session.historySelected = null)}
-						onreveal={(taskId, name) => void revealHistoryArtifact(taskId, name)}
-					/>
-				{:else}
-					<TranscriptView
-						{blocks}
-						{thinkingLiveIndex}
-						ontoggle={(index) => {
-							session.transcript.toggle(index);
-							session.bump();
-						}}
-						ontogglestep={(block, step) => {
-							session.transcript.toggleStep(block, step);
-							session.bump();
-						}}
-					/>
-					{#if session.receipt}
-						<ReceiptCard
-							receipt={session.receipt}
-							names={session.artifacts}
-							onreveal={(name) => void revealArtifact(name)}
-						/>
-					{/if}
-					{#if session.heartbeat}
-						<div class="w-full overflow-hidden pt-2 text-sm">
-							<ActivityLabel text={session.heartbeat} running />
-						</div>
-					{/if}
-					{#if session.offerSettings}
-						<div class="pt-2">
-							<Button label="Open Settings" onclick={() => void openSettings()} />
-						</div>
-					{/if}
-					{#if session.pendingApproval}
-						<ApprovalCard
-							title={session.pendingApproval.title}
-							description={session.pendingApproval.description}
-							onallow={() => {
-								const id = session.pendingApproval?.id;
-								session.pendingApproval = null;
-								session.state = 'running';
-								session.bump();
-								if (id) void approve(id);
-							}}
-							oncancel={() => {
-								const id = session.pendingApproval?.id;
-								session.pendingApproval = null;
-								session.state = 'running';
-								session.bump();
-								if (id) void reject(id);
-							}}
-						/>
-					{/if}
-				{/if}
-			</div>
+		{#if session.busy}
+			<Button label="Stop" onclick={() => void cancel()} variant="danger" />
 		{/if}
 	</div>
+	{#if session.overlay !== 'onboarding' && !chatLayout && session.badges.length > 0}
+		<div class="px-4 pb-2 text-xs text-[var(--muted)]">
+			{#each session.badges as line (line)}
+				<div>{line}</div>
+			{/each}
+		</div>
+	{/if}
+	{#if expanded}
+		<div
+			bind:this={scroller}
+			class="min-h-0 flex-1 overflow-y-auto px-4 pb-4"
+			onscroll={() => {
+				if (!scroller) return;
+				const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+				stickToBottom = distance < 64;
+			}}
+		>
+			{#if session.overlay === 'onboarding'}
+				<Onboarding
+					ready={session.onboardingReady}
+					hint={session.onboardingHint}
+					onsettings={() => void openSettings()}
+					oncontinue={() => void continueOnboarding()}
+					ondone={() => void hideLauncher()}
+				/>
+			{:else if session.overlay === 'history'}
+				<HistoryPanel
+					entries={session.history}
+					selected={session.historySelected}
+					showBack={false}
+					onselect={(index) => (session.historySelected = index)}
+					onback={() => (session.historySelected = null)}
+					onreveal={(taskId, name) => void revealHistoryArtifact(taskId, name)}
+				/>
+			{:else}
+				<TranscriptView
+					{blocks}
+					{thinkingLiveIndex}
+					ontoggle={(index) => {
+						session.transcript.toggle(index);
+						session.bump();
+					}}
+					ontogglestep={(block, step) => {
+						session.transcript.toggleStep(block, step);
+						session.bump();
+					}}
+				/>
+				{#if session.receipt}
+					<ReceiptCard
+						receipt={session.receipt}
+						names={session.artifacts}
+						onreveal={(name) => void revealArtifact(name)}
+					/>
+				{/if}
+				{#if session.heartbeat}
+					<div class="w-full overflow-hidden pt-2 text-sm">
+						<ActivityLabel text={session.heartbeat} running />
+					</div>
+				{/if}
+				{#if session.offerSettings}
+					<div class="pt-2">
+						<Button label="Open Settings" onclick={() => void openSettings()} />
+					</div>
+				{/if}
+				{#if session.pendingApproval}
+					<ApprovalCard
+						title={session.pendingApproval.title}
+						description={session.pendingApproval.description}
+						onallow={() => {
+							const id = session.pendingApproval?.id;
+							session.pendingApproval = null;
+							session.state = 'running';
+							session.bump();
+							if (id) void approve(id);
+						}}
+						oncancel={() => {
+							const id = session.pendingApproval?.id;
+							session.pendingApproval = null;
+							session.state = 'running';
+							session.bump();
+							if (id) void reject(id);
+						}}
+					/>
+				{/if}
+			{/if}
+		</div>
+	{/if}
 </div>
+

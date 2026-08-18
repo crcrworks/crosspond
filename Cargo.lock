@@ -641,6 +641,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-event-kit",
  "objc2-foundation",
+ "objc2-quartz-core",
  "security-framework",
  "security-framework-sys",
  "serde",
@@ -2368,6 +2369,7 @@ dependencies = [
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-quartz-core",
 ]
 
 [[package]]

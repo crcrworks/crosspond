@@ -19,8 +19,8 @@
 {#if ready}
 	<div class="flex flex-col gap-3 pt-2">
 		<div class="text-sm">Crosspond is ready.</div>
-		<div class="text-sm text-[var(--muted)]">Press Option + Space anywhere.</div>
-		<Button label="Done" onclick={ondone} />
+		<div class="text-sm text-[var(--muted)]">Press <kbd>Option</kbd> + <kbd>Space</kbd> anywhere.</div>
+		<Button label="Done" onclick={ondone} variant="primary" />
 	</div>
 {:else}
 	<div class="flex flex-col gap-3 pt-2">
@@ -33,7 +33,7 @@
 		{/if}
 		<div class="flex flex-row gap-2">
 			<Button label="Open Settings" onclick={onsettings} />
-			<Button label="Continue" onclick={oncontinue} />
+			<Button label="Continue" onclick={oncontinue} variant="primary" />
 		</div>
 	</div>
 {/if}

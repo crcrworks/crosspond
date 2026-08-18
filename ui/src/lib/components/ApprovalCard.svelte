@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Badge from './Badge.svelte';
 	import Button from './Button.svelte';
 
 	let {
@@ -14,14 +15,15 @@
 	} = $props();
 </script>
 
-<div class="flex flex-col gap-2 pt-2">
+<div class="surface mt-2 flex flex-col gap-2">
+	<Badge label="Needs allow" tone="yellow" />
 	<div class="text-sm">Crosspond wants to:</div>
 	<div class="text-sm">{title}</div>
 	{#if description}
 		<div class="text-sm text-[var(--muted)]">{description}</div>
 	{/if}
 	<div class="flex flex-row gap-2">
-		<Button label="Allow" onclick={onallow} />
+		<Button label="Allow" onclick={onallow} variant="primary" />
 		<Button label="Cancel" onclick={oncancel} />
 	</div>
 </div>

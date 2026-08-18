@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { taskStatusVisual } from '$lib/tools';
 	import type { HistoryItem } from '$lib/types';
+	import Badge from './Badge.svelte';
 	import Button from './Button.svelte';
 	import ReceiptCard from './ReceiptCard.svelte';
 
@@ -8,22 +10,30 @@
 		selected,
 		onselect,
 		onback,
-		onreveal
+		onreveal,
+		showBack = true
 	}: {
 		entries: HistoryItem[];
 		selected: number | null;
 		onselect: (index: number) => void;
 		onback: () => void;
 		onreveal: (taskId: string, name: string) => void;
+		showBack?: boolean;
 	} = $props();
 
 	const detail = $derived(selected !== null ? entries[selected] : null);
 </script>
 
 {#if detail}
+	{@const status = taskStatusVisual(detail.status)}
 	<div class="flex w-full flex-col gap-2 pt-1">
-		<Button label="Back" onclick={onback} />
-		<div class="text-sm text-[var(--muted)]">{detail.status_mark} {detail.title}</div>
+		{#if showBack}
+			<Button label="Back" onclick={onback} />
+		{/if}
+		<div class="flex flex-row items-center gap-2">
+			<Badge label={status.label} tone={status.tone} />
+			<div class="min-w-0 truncate text-sm">{detail.title}</div>
+		</div>
 		{#if detail.receipt}
 			<ReceiptCard
 				receipt={detail.receipt}
@@ -47,15 +57,17 @@
 {:else}
 	<div class="flex w-full flex-col">
 		{#each entries as entry, index (entry.id)}
+			{@const status = taskStatusVisual(entry.status)}
 			{#if index === 0 || entry.group !== entries[index - 1].group}
 				<div class="pt-2 text-xs text-[var(--muted)]">{entry.group}</div>
 			{/if}
 			<button
 				type="button"
-				class="cursor-pointer py-1 text-left text-sm hover:opacity-80"
+				class="flex cursor-pointer flex-row items-center gap-2 py-1 text-left hover:opacity-80"
 				onclick={() => onselect(index)}
 			>
-				{entry.status_mark} {entry.title}
+				<Badge label={status.label} tone={status.tone} />
+				<div class="min-w-0 flex-1 truncate text-sm">{entry.title}</div>
 			</button>
 		{/each}
 	</div>

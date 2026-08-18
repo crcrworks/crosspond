@@ -2,15 +2,15 @@
 	import {
 		collapsedLabel,
 		thoughtLabel,
-		workHeaderIcon,
+		workHeaderVisual,
 		type TranscriptBlock,
 		type WorkStep
 	} from '$lib/transcript';
-	import { toolRowLabel } from '$lib/tools';
+	import { toolRowLabel, toolVisual } from '$lib/tools';
 	import ActivityLabel from './ActivityLabel.svelte';
 	import Chevron from './Chevron.svelte';
-	import Icon from './Icon.svelte';
 	import Markdown from './Markdown.svelte';
+	import ToolChip from './ToolChip.svelte';
 
 	let {
 		blocks,
@@ -27,39 +27,40 @@
 
 <div class="flex flex-col gap-2">
 	{#each blocks as block, index (index)}
-	{#if block.kind === 'user'}
-		<div class="w-full py-1 text-sm leading-[1.35] break-words text-[var(--muted)]">{block.text}</div>
-	{:else if block.kind === 'text'}
-		<Markdown source={block.text} />
-	{:else}
-		<div class="flex flex-col gap-2">
-			<button
-				type="button"
-				class="group flex w-full cursor-pointer flex-row items-center justify-start gap-1 appearance-none border-0 bg-transparent p-0 text-left"
-				onclick={() => ontoggle(index)}
-			>
-				{#if workHeaderIcon(block.steps)}
-					<Icon src={workHeaderIcon(block.steps) ?? ''} />
-				{/if}
-				<div
-					class="min-w-0 overflow-hidden text-left text-sm text-[var(--muted)] group-hover:opacity-80"
+		{#if block.kind === 'user'}
+			<div class="w-full py-1 text-sm leading-[1.35] break-words text-[var(--muted)]">{block.text}</div>
+		{:else if block.kind === 'text'}
+			<Markdown source={block.text} />
+		{:else}
+			{@const header = workHeaderVisual(block.steps)}
+			<div class="flex flex-col gap-2">
+				<button
+					type="button"
+					class="group flex w-full cursor-pointer flex-row items-center justify-start gap-1.5 appearance-none border-0 bg-transparent p-0 text-left"
+					onclick={() => ontoggle(index)}
 				>
-					<ActivityLabel
-						text={collapsedLabel(block, thinkingLiveIndex === index)}
-						running={block.workedMs === null}
-					/>
-				</div>
-				<Chevron expanded={block.expanded} />
-			</button>
-			{#if block.expanded}
-				<div class="flex flex-col gap-2">
-					{#each block.steps as step, row (row)}
-						{@render workStep(index, row, step, thinkingLiveIndex === index, true)}
-					{/each}
-				</div>
-			{/if}
-		</div>
-	{/if}
+					{#if header}
+						<ToolChip src={header.icon} tone={header.tone} running={block.workedMs === null} />
+					{/if}
+					<div
+						class="min-w-0 overflow-hidden text-left text-sm text-[var(--muted)] group-hover:opacity-80"
+					>
+						<ActivityLabel
+							text={collapsedLabel(block, thinkingLiveIndex === index)}
+							running={block.workedMs === null}
+						/>
+					</div>
+					<Chevron expanded={block.expanded} />
+				</button>
+				{#if block.expanded}
+					<div class="flex flex-col gap-2">
+						{#each block.steps as step, row (row)}
+							{@render workStep(index, row, step, thinkingLiveIndex === index, true)}
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
 	{/each}
 </div>
 
@@ -93,8 +94,9 @@
 			{/if}
 		</div>
 	{:else}
-		<div class={['flex w-full flex-row items-center gap-1', nested && 'pl-4']}>
-			<Icon src={workHeaderIcon([step]) ?? '/icons/wrench.svg'} />
+		{@const visual = toolVisual(step.tool.name)}
+		<div class={['flex w-full flex-row items-center gap-1.5', nested && 'pl-4']}>
+			<ToolChip src={visual.icon} tone={visual.tone} running={step.tool.running} />
 			<div class="min-w-0 flex-1 overflow-hidden text-sm text-[var(--muted)]">
 				<ActivityLabel
 					text={toolRowLabel(step.tool.name, step.tool.summary)}

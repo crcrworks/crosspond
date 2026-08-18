@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWi
 use crate::state::AppState;
 
 pub const WINDOW_WIDTH: f64 = 640.0;
-pub const IDLE_HEIGHT: f64 = 72.0;
+pub const IDLE_HEIGHT: f64 = 108.0;
 pub const RESULT_HEIGHT: f64 = 560.0;
 const BADGE_LINE_HEIGHT: f64 = 20.0;
 const TOP_MARGIN: f64 = 96.0;
