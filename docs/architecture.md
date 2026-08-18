@@ -38,7 +38,8 @@ Option+Space
         │                      knowledge_ingest / knowledge_propose_update
         │                      knowledge_read_later / knowledge_archive_source
         │                        (validated plan; hash conflicts; no secrets)
-        │                      fs tools (scratch auto when needed; external after Allow)
+        │                      fs tools (scratch auto when needed; external after Allow,
+        │                        or Auto)
         │                      list_apps / open_app / focus_app
         │                      get_accessibility_snapshot / take_screenshot
         │                        (optional app= retarget; else ambient pid)
@@ -49,7 +50,9 @@ Option+Space
         │                        Manual → ApprovalRequired
         │                        Agent + ask_user → ApprovalRequired
         │                        Auto (and Agent + ask_user false) skip the card
-        │                      run_command / open_url (non-http) → Allow
+        │                      run_command / open_url (non-http)
+        │                        Manual / Agent → Allow card
+        │                        Auto skip the card
         │                      write ~/.crosspond/tasks/<task-id>/
         │                        (task.json with conversation_id,
         │                         UI-safe events.jsonl, sanitized session.json,
@@ -89,7 +92,7 @@ Computer tools default to the **ambient** frontmost pid from when the launcher o
 
 Node ids are integers for the latest Accessibility snapshot generation. A new snapshot or a successful UI action invalidates old ids.
 
-Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask every UI action), `auto` (run UI actions without asking), or `agent` (the model sets `ask_user` per call; omitted/`true` asks, `false` runs). External reads/writes, shell, and destructive tools still require Allow regardless of this setting. The launcher input row cycles the mode. **History** lists recent conversations. Opening one restores the transcript and a sanitized model history so a follow-up continues that thread. **New** sends `ResetSession`, which drops follow-up history, ambient context, and any session scratch handle. Hiding the launcher keeps any in-flight task running and preserves the conversation so the next show can continue chatting. Past conversations remain under `~/.crosspond/tasks/`. Legacy `~/.crosspond/workspaces/` directories are left untouched.
+Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `computer_approval` is `manual` (ask before UI actions, shell, external files, and non-http URLs), `auto` (run every tool without asking), or `agent` (the model sets `ask_user` per computer-action call; omitted/`true` asks, `false` runs; shell, external files, and non-http URLs still require Allow). The launcher input row cycles the mode. **History** lists recent conversations. Opening one restores the transcript and a sanitized model history so a follow-up continues that thread. **New** sends `ResetSession`, which drops follow-up history, ambient context, and any session scratch handle. Hiding the launcher keeps any in-flight task running and preserves the conversation so the next show can continue chatting. Past conversations remain under `~/.crosspond/tasks/`. Legacy `~/.crosspond/workspaces/` directories are left untouched.
 
 Tasks do not create a working directory on start. A scratch space under `~/.crosspond/scratch/<task-id>/` is created only when a file, download, or shell tool actually needs one (or when Finder selections are staged into `input/`). Follow-up turns in the same session reuse that scratch. Empty temporary scratches are removed when the task ends. Each submit still writes `~/.crosspond/tasks/<task-id>/` (`task.json` with `conversation_id`, UI-safe `events.jsonl`, sanitized `session.json`, `receipt.json`). Follow-up turns in the same conversation share that id. ResumeSession loads the latest sanitized session for the conversation; tool bodies, screenshot bytes, and raw tool arguments are not restored.
 

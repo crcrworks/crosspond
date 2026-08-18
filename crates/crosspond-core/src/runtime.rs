@@ -26,7 +26,9 @@ use crate::conversation::{load_session_messages, write_session};
 use crate::event::AgentEvent;
 use crate::history::history_title;
 use crate::ids::{ConversationId, TaskId};
-use crate::policy::{AgentAsk, ComputerApprovalMode, PolicyDecision, evaluate_with, risk_for_tool};
+use crate::policy::{
+    AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate_with, risk_for_tool,
+};
 use crate::receipt::{
     Receipt, append_event_log, receipt_action_line, tool_ui_summary, write_receipt, write_task_meta,
 };
@@ -43,13 +45,13 @@ pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 fn computer_approval_prompt(mode: ComputerApprovalMode) -> &'static str {
     match mode {
         ComputerApprovalMode::Auto => {
-            "Computer actions (press, set value, click) run without asking the user."
+            "All tools run without asking the user, including computer actions, shell, external files, and non-http URLs."
         }
         ComputerApprovalMode::Agent => {
-            "For computer actions, set ask_user true when the action is irreversible, submits a form, sends a message, logs in, purchases, deletes, or you are unsure. Set ask_user false for routine navigation the user clearly requested. Omit ask_user only if you want the user asked."
+            "For computer actions, set ask_user true when the action is irreversible, submits a form, sends a message, logs in, purchases, deletes, or you are unsure. Set ask_user false for routine navigation the user clearly requested. Omit ask_user only if you want the user asked. Shell, external files, and non-http URLs still require Allow."
         }
         ComputerApprovalMode::Manual => {
-            "Computer actions (press, set value, click) require the user's approval."
+            "Computer actions (press, set value, click), shell, external files, and non-http URLs require the user's approval."
         }
     }
 }
@@ -76,6 +78,12 @@ Put generated artifacts in output/ unless the user explicitly requests another d
     } else {
         ""
     };
+    let shell_route = match computer_approval {
+        ComputerApprovalMode::Auto => {
+            "- Shell or non-http URL schemes → run_command / open_url (runs without asking).\n"
+        }
+        _ => "- Shell or non-http URL schemes → run_command / open_url (user must Allow).\n",
+    };
     let mut prompt = format!(
         "You are Crosspond, a computer agent running on the user's Mac.\n\n\
 Your job is to complete the user's request using the available tools.\n\n\
@@ -90,7 +98,7 @@ Routing:\n\
 - Labeled UI controls → get_accessibility_snapshot (pass app= if not the ambient frontmost app), then ui_press. Prefer ui_press over ui_click.\n\
 - Unlabeled UI → take_screenshot then ui_click with exact image pixels (origin top-left). Use stated width×height; do not normalize to 1000×1000 or use screen coordinates.\n\
 - Typing / shortcuts / scrolling → ui_type, ui_hotkey, ui_scroll after a snapshot of the target app.\n\
-- Shell or non-http URL schemes → run_command / open_url (user must Allow).\n\
+{shell_route}\
 ui_click returns a fresh post-click screenshot. Verify before another click; do not retry against an older image.\n\
 Click coordinates and node ids are only valid for the latest snapshot/screenshot.\n\
 {}\n\n\
@@ -980,12 +988,18 @@ impl Runtime {
             .load()
             .map(|config| config.computer_approval)
             .unwrap_or_default();
-        if evaluate_with(
-            risk_for_tool(&call.name, scope, input),
-            computer_approval,
-            AgentAsk::from_tool_input(input),
-        ) != PolicyDecision::RequireApproval
+        let risk = risk_for_tool(&call.name, scope, input);
+        if evaluate_with(risk, computer_approval, AgentAsk::from_tool_input(input))
+            != PolicyDecision::RequireApproval
         {
+            if computer_approval == ComputerApprovalMode::Auto
+                && matches!(
+                    risk,
+                    RiskLevel::ExternalWrite | RiskLevel::Shell | RiskLevel::Destructive
+                )
+            {
+                context.allow_external = true;
+            }
             return ApprovalOutcome::Allowed;
         }
         let approval_id = ApprovalId::new();
@@ -1343,7 +1357,9 @@ mod tests {
     use std::time::Duration;
 
     use crosspond_model::{EchoProvider, ModelError, ModelProvider, Role};
-    use crosspond_tools::{AccessibilityBackend, AppBackend, ToolError, computer_registry};
+    use crosspond_tools::{
+        AccessibilityBackend, AppBackend, ToolError, computer_registry, register_shell_tools,
+    };
     use tokio::sync::mpsc;
 
     use super::*;
@@ -1498,6 +1514,23 @@ mod tests {
         assert!(!prompt.contains("Relevant Knowledge"));
         assert!(prompt.contains("Before tool calls, send a brief user-visible note"));
         assert!(prompt.contains("Format the user-visible reply in Markdown"));
+        assert!(prompt.contains("user must Allow"));
+        assert!(prompt.contains("require the user's approval"));
+    }
+
+    #[test]
+    fn auto_system_prompt_runs_tools_without_asking() {
+        let prompt = system_prompt(
+            None,
+            &ContextCapsule::default(),
+            &[],
+            ComputerApprovalMode::Auto,
+            false,
+            "",
+        );
+        assert!(prompt.contains("runs without asking"));
+        assert!(prompt.contains("All tools run without asking"));
+        assert!(!prompt.contains("user must Allow"));
     }
 
     fn lab_indexed_vault() -> (IndexedVault, PathBuf, PathBuf) {
@@ -2528,6 +2561,227 @@ mod tests {
         assert_eq!(*pressed.lock().expect("lock"), vec!["4".to_string()]);
         assert!(!scratch_dir(&tmp.0, task_id).exists());
         assert!(!tmp.0.join("scratch").exists());
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    fn shell_and_fs_registry() -> ToolRegistry {
+        let mut registry = filesystem_registry();
+        register_shell_tools(&mut registry);
+        registry
+    }
+
+    struct NamedToolThenDoneProvider {
+        name: String,
+        arguments: String,
+        done: String,
+        turn: Mutex<u8>,
+    }
+
+    impl NamedToolThenDoneProvider {
+        fn new(name: &str, arguments: String, done: &str) -> Self {
+            Self {
+                name: name.into(),
+                arguments,
+                done: done.into(),
+                turn: Mutex::new(0),
+            }
+        }
+    }
+
+    impl ModelProvider for NamedToolThenDoneProvider {
+        fn stream(
+            &self,
+            _request: ModelRequest,
+            events: UnboundedSender<ModelEvent>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ModelError>> + Send>>
+        {
+            let mut turn = self.turn.lock().expect("lock");
+            *turn += 1;
+            let turn = *turn;
+            let name = self.name.clone();
+            let arguments = self.arguments.clone();
+            let done = self.done.clone();
+            Box::pin(async move {
+                if turn == 1 {
+                    let _ = events.send(ModelEvent::ToolCall(ToolCall {
+                        id: "call_named".into(),
+                        name,
+                        arguments,
+                    }));
+                } else {
+                    let _ = events.send(ModelEvent::TextDelta(done));
+                }
+                Ok(())
+            })
+        }
+
+        fn test_connection(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ModelError>> + Send>>
+        {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_run_command_skips_approval() {
+        let marker =
+            std::env::temp_dir().join(format!("crosspond-auto-cmd-{}.txt", uuid::Uuid::new_v4()));
+        let arguments = serde_json::json!({
+            "command": format!("printf 'auto-ok\\n' > '{}'", marker.display()),
+        })
+        .to_string();
+        let build: ProviderBuilder = {
+            let arguments = arguments.clone();
+            Arc::new(move |_, _, _| {
+                Arc::new(NamedToolThenDoneProvider::new(
+                    "run_command",
+                    arguments.clone(),
+                    "Ran the command",
+                ))
+            })
+        };
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), shell_and_fs_registry());
+        runtime
+            .config
+            .save(&crate::config::AppConfig {
+                computer_approval: crate::policy::ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "run a command",
+            )))
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "auto mode must not prompt for run_command"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        let written = std::fs::read_to_string(&marker);
+        let _ = std::fs::remove_file(&marker);
+        assert_eq!(written.unwrap(), "auto-ok\n");
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_run_command_requires_approval() {
+        let marker =
+            std::env::temp_dir().join(format!("crosspond-manual-cmd-{}.txt", uuid::Uuid::new_v4()));
+        let arguments = serde_json::json!({
+            "command": format!("printf 'manual-ok\\n' > '{}'", marker.display()),
+        })
+        .to_string();
+        let build: ProviderBuilder = {
+            let arguments = arguments.clone();
+            Arc::new(move |_, _, _| {
+                Arc::new(NamedToolThenDoneProvider::new(
+                    "run_command",
+                    arguments.clone(),
+                    "Command was not run",
+                ))
+            })
+        };
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), shell_and_fs_registry());
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "run a command",
+            )))
+            .unwrap();
+
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(!marker.exists());
+        let _ = std::fs::remove_file(&marker);
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auto_external_write_skips_approval() {
+        let target =
+            std::env::temp_dir().join(format!("crosspond-auto-write-{}.txt", uuid::Uuid::new_v4()));
+        let arguments = serde_json::json!({
+            "path": target.to_string_lossy(),
+            "content": "auto-write",
+        })
+        .to_string();
+        let build: ProviderBuilder = {
+            let arguments = arguments.clone();
+            Arc::new(move |_, _, _| {
+                Arc::new(NamedToolThenDoneProvider::new(
+                    "write_file",
+                    arguments.clone(),
+                    "Wrote the file",
+                ))
+            })
+        };
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        runtime
+            .config
+            .save(&crate::config::AppConfig {
+                computer_approval: crate::policy::ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "write outside",
+            )))
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "auto mode must not prompt for external write"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        let written = std::fs::read_to_string(&target);
+        let _ = std::fs::remove_file(&target);
+        assert_eq!(written.unwrap(), "auto-write");
 
         drop(command_tx);
         join.await.unwrap();
