@@ -12,9 +12,17 @@ const MAX_ACTIVITY: usize = 3;
 const SNIPPET_CHARS: usize = 160;
 const STALE_VERIFIED_DAYS: i64 = 30;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct KnowledgeContextRequest {
     pub prompt: String,
+}
+
+impl KnowledgeContextRequest {
+    pub fn new(prompt: impl Into<String>) -> Self {
+        Self {
+            prompt: prompt.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -438,9 +446,7 @@ mod tests {
     fn command_prompt_finds_lab_procedure_before_acting() {
         let (indexed, vault, sqlite) = lab_vault();
         let brief = KnowledgeRouter::new(&indexed)
-            .route(&KnowledgeContextRequest {
-                prompt: "研究室の課題確認して".into(),
-            })
+            .route(&KnowledgeContextRequest::new("研究室の課題確認して"))
             .unwrap();
         assert_eq!(brief.procedures[0].title, "Check Lab Assignment");
         let follow = brief
@@ -478,9 +484,7 @@ mod tests {
     fn question_prefers_resource_over_procedure() {
         let (indexed, vault, sqlite) = lab_vault();
         let brief = KnowledgeRouter::new(&indexed)
-            .route(&KnowledgeContextRequest {
-                prompt: "研究室のVPNって何?".into(),
-            })
+            .route(&KnowledgeContextRequest::new("研究室のVPNって何?"))
             .unwrap();
         assert!(brief.resources.iter().any(|item| item.title == "Lab VPN"));
         assert!(
@@ -524,9 +528,7 @@ mod tests {
             ))
             .unwrap();
         let brief = KnowledgeRouter::new(&indexed)
-            .route(&KnowledgeContextRequest {
-                prompt: "経費精算やって".into(),
-            })
+            .route(&KnowledgeContextRequest::new("経費精算やって"))
             .unwrap();
         let follow = brief.follow.as_ref().expect("procedure follow");
         assert_eq!(follow.procedure.title, "Submit Expense Report");

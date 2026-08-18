@@ -3,11 +3,11 @@ use std::process::Command;
 
 use crosspond_core::{
     AppConfig, ApprovalId, ComputerApprovalMode, ConversationId, ConversationView,
-    MISSING_API_KEY_MESSAGE, Receipt, RuntimeCommand, SecretKey, SecretString, StartTaskRequest,
-    TaskId, conversation_artifact_path, default_tasks_root, history_group_label, history_title,
-    list_recent_tasks, open_conversation as load_conversation, provider_key_is_set,
+    MISSING_API_KEY_MESSAGE, Mention, Receipt, RuntimeCommand, SecretKey, SecretString,
+    StartTaskRequest, TaskId, conversation_artifact_path, default_tasks_root, history_group_label,
+    history_title, list_recent_tasks, open_conversation as load_conversation, provider_key_is_set,
 };
-use crosspond_macos::{PermissionKind, PermissionSnapshot};
+use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
@@ -68,11 +68,13 @@ pub struct StartTaskResult {
 #[tauri::command]
 pub fn start_task(
     prompt: String,
+    mentions: Option<Vec<Mention>>,
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<StartTaskResult, String> {
     let prompt = prompt.trim().to_string();
-    if prompt.is_empty() {
+    let mentions = mentions.unwrap_or_default();
+    if prompt.is_empty() && mentions.is_empty() {
         return Err("prompt is empty".into());
     }
     if !provider_key_is_set(&*state.secrets) {
@@ -98,6 +100,7 @@ pub fn start_task(
             prompt,
             context,
             conversation_id,
+            mentions,
         }));
     Ok(StartTaskResult {
         task_id: task_id.to_string(),
@@ -340,6 +343,11 @@ pub fn set_ui_flags(compact: bool, composing: bool, in_conversation: bool, state
 #[tauri::command]
 pub fn sync_launcher_size(compact: bool, badge_lines: u32, extra_height: f64, app: AppHandle) {
     launcher::request_resize(&app, compact, badge_lines as usize, extra_height);
+}
+
+#[tauri::command]
+pub fn list_mention_apps() -> Vec<String> {
+    list_running_app_names()
 }
 
 fn reveal_in_finder(path: &Path) -> Result<(), String> {

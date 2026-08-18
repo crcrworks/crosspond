@@ -96,6 +96,21 @@ fn is_ignored_surface(bundle_id: &str, name: &str) -> bool {
     )
 }
 
+/// Fast running-app names for the composer `@app` picker.
+///
+/// Uses `NSWorkspace` only. Do not call cua-driver here: spawning or RPC on
+/// the Tauri main thread freezes the launcher.
+pub fn list_running_app_names() -> Vec<String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        list_running_app_names_macos()
+    }
+}
+
 /// Give key back to the app the user was in. Call after hiding the launcher
 /// while Settings is closed so the next Option+Space is not "this is us".
 pub fn yield_to_other_app() {
@@ -181,6 +196,39 @@ fn last_if_alive() -> Option<AppContext> {
         return None;
     }
     Some(app)
+}
+
+#[cfg(target_os = "macos")]
+fn list_running_app_names_macos() -> Vec<String> {
+    use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
+
+    let workspace = NSWorkspace::sharedWorkspace();
+    let apps = workspace.runningApplications();
+    let mut names = Vec::new();
+    for index in 0..apps.count() {
+        let running = apps.objectAtIndex(index);
+        if running.isTerminated()
+            || running.activationPolicy() != NSApplicationActivationPolicy::Regular
+        {
+            continue;
+        }
+        let Some(app) = app_from_running(Some(&running)) else {
+            continue;
+        };
+        if !should_list_running_app(&app) {
+            continue;
+        }
+        if names.iter().any(|existing| existing == &app.name) {
+            continue;
+        }
+        names.push(app.name);
+    }
+    names.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+    names
+}
+
+fn should_list_running_app(app: &AppContext) -> bool {
+    !is_host_app(app) && !is_ignored_surface(&app.bundle_id, &app.name)
 }
 
 #[cfg(target_os = "macos")]
@@ -311,5 +359,26 @@ mod tests {
         assert!(!is_host_identity(42, "com.apple.Safari", 9));
         assert!(is_ignored_surface("com.apple.dock", "Dock"));
         assert!(!is_ignored_surface("com.apple.Safari", "Safari"));
+        assert!(should_list_running_app(&AppContext {
+            name: "Safari".into(),
+            bundle_id: "com.apple.Safari".into(),
+            pid: 12,
+        }));
+        assert!(!should_list_running_app(&AppContext {
+            name: "Crosspond".into(),
+            bundle_id: CROSSPOND_BUNDLE_ID.into(),
+            pid: 9,
+        }));
+        assert!(!should_list_running_app(&AppContext {
+            name: "Dock".into(),
+            bundle_id: "com.apple.dock".into(),
+            pid: 1,
+        }));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn list_running_app_names_is_empty_off_macos() {
+        assert!(list_running_app_names().is_empty());
     }
 }

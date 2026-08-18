@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::ContextCapsule;
 use crate::ids::{ConversationId, TaskId};
+use crate::mention::Mention;
 
 /// Identifier for a pending approval prompt.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -22,6 +23,7 @@ impl Default for ApprovalId {
 
 /// UI → runtime.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)] // StartTask carries context + mentions; keep match sites unboxed.
 pub enum RuntimeCommand {
     StartTask(StartTaskRequest),
     Approve(ApprovalId),
@@ -41,6 +43,7 @@ pub struct StartTaskRequest {
     pub prompt: String,
     pub context: ContextCapsule,
     pub conversation_id: ConversationId,
+    pub mentions: Vec<Mention>,
 }
 
 impl StartTaskRequest {
@@ -50,6 +53,7 @@ impl StartTaskRequest {
             prompt: prompt.into(),
             context: ContextCapsule::default(),
             conversation_id: ConversationId::new(),
+            mentions: Vec::new(),
         }
     }
 }

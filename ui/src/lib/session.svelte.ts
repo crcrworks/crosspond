@@ -6,6 +6,7 @@ import type {
 	Receipt,
 	WindowState
 } from './types';
+import type { Mention } from './mentions';
 import {
 	Transcript,
 	failedOffersSettings,
@@ -22,6 +23,7 @@ export class LauncherSession {
 	rev = $state(0);
 	state = $state<WindowState>('idle');
 	input = $state('');
+	mentions = $state<Mention[]>([]);
 	placeholder = $state(ASK);
 	overlay = $state<'none' | 'onboarding' | 'history'>('none');
 	onboardingReady = $state(false);
@@ -83,6 +85,7 @@ export class LauncherSession {
 		this.transcript.clear();
 		this.state = 'idle';
 		this.input = '';
+		this.mentions = [];
 		this.placeholder = ASK;
 		this.overlay = 'none';
 		this.onboardingHint = null;
@@ -194,6 +197,7 @@ export class LauncherSession {
 		this.activity = { kind: 'thinking' };
 		this.state = 'preparing_context';
 		this.input = '';
+		this.mentions = [];
 		this.placeholder = FOLLOW_UP;
 		this.failedMessage = null;
 		this.bump();
@@ -214,6 +218,7 @@ export class LauncherSession {
 		this.historySelected = null;
 		this.placeholder = FOLLOW_UP;
 		this.input = '';
+		this.mentions = [];
 		this.failedMessage = null;
 		if (view.status === 'failed') {
 			this.state = 'failed';
