@@ -2,7 +2,7 @@
 
 Command bar for your computer agent. macOS only.
 
-Phase 12 adds receipts in the launcher, recent task history, and first-launch onboarding on top of the Phase 11 Whole-Mac agent: retarget any app (`list_apps` / `open_app`), keyboard and scroll, approved `run_command` / `open_url`, EventKit `calendar_events`, and approved external file reads — plus earlier BYOK chat, workspace tools, ambient context, Accessibility, and screenshot/click.
+Phase 12 adds receipts in the launcher, recent task history, and first-launch onboarding on top of the Phase 11 Whole-Mac agent: retarget any app (`list_apps` / `open_app`), keyboard and scroll, `run_command` / `open_url` (Allow in Manual/AI; Auto runs them), EventKit `calendar_events`, and external file reads — plus earlier BYOK chat, workspace tools, ambient context, Accessibility, and screenshot/click.
 
 ## Run
 
@@ -22,7 +22,7 @@ Then:
 3. Grant Accessibility, Screen Recording, or Calendars later from Settings → Permissions, or when a tool needs them. Finder selection may also prompt for Automation.
 4. Select text in another app, or files in Finder — or leave Safari / Helium in front.
 5. Press **Option + Space**. A badge should show the app and “Selected text: N chars” or “N selected files”.
-6. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions show an **Allow** / **Cancel** card first (unless Auto). After a task, the summary stays in the conversation and artifacts get **Show in Finder**; **History** opens a past conversation so you can follow up.
+6. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions, shell, and external files show an **Allow** / **Cancel** card first unless the chip is **Auto**. After a task, the summary stays in the conversation and artifacts get **Show in Finder**; **History** opens a past conversation so you can follow up.
 
 **Escape** or **Stop** cancels the whole task while it is running. Approval **Cancel** rejects only that action. Hiding the window keeps work running and keeps the conversation; press **New** to start fresh.
 

@@ -17,15 +17,16 @@ pub enum PolicyDecision {
     RequireApproval,
 }
 
-/// How computer actions (`ui_press`, `ui_set_value`, `ui_click`) are gated.
+/// How tool approvals are gated (launcher chip: Auto / AI / Manual).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComputerApprovalMode {
-    /// Run UI actions without asking.
+    /// Run every tool without asking, including shell, external files, and UI.
     Auto,
-    /// The model sets `ask_user` per call.
+    /// The model sets `ask_user` per computer-action call. Shell and external
+    /// paths still require Allow.
     Agent,
-    /// Ask before every UI action.
+    /// Ask before every UI action, shell command, and external path.
     #[default]
     Manual,
 }
@@ -85,9 +86,12 @@ pub fn evaluate_with(
                 AgentAsk::Yes | AgentAsk::Unspecified => PolicyDecision::RequireApproval,
             },
         },
-        RiskLevel::ExternalWrite | RiskLevel::Shell | RiskLevel::Destructive => {
-            PolicyDecision::RequireApproval
-        }
+        RiskLevel::ExternalWrite | RiskLevel::Shell | RiskLevel::Destructive => match computer {
+            ComputerApprovalMode::Auto => PolicyDecision::Allow,
+            ComputerApprovalMode::Agent | ComputerApprovalMode::Manual => {
+                PolicyDecision::RequireApproval
+            }
+        },
     }
 }
 
@@ -374,19 +378,27 @@ mod tests {
     }
 
     #[test]
-    fn auto_computer_actions_skip_approval() {
+    fn auto_runs_every_tool_without_asking() {
+        for risk in [
+            RiskLevel::ComputerAction,
+            RiskLevel::ExternalWrite,
+            RiskLevel::Shell,
+            RiskLevel::Destructive,
+        ] {
+            assert_eq!(
+                evaluate_with(risk, ComputerApprovalMode::Auto, AgentAsk::Unspecified),
+                PolicyDecision::Allow,
+                "{risk:?}"
+            );
+        }
         assert_eq!(
-            evaluate_with(
-                RiskLevel::ComputerAction,
-                ComputerApprovalMode::Auto,
-                AgentAsk::Unspecified
-            ),
-            PolicyDecision::Allow
+            evaluate_with(RiskLevel::Shell, ComputerApprovalMode::Manual, AgentAsk::No),
+            PolicyDecision::RequireApproval
         );
         assert_eq!(
             evaluate_with(
                 RiskLevel::ExternalWrite,
-                ComputerApprovalMode::Auto,
+                ComputerApprovalMode::Agent,
                 AgentAsk::No
             ),
             PolicyDecision::RequireApproval
