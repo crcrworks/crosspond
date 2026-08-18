@@ -7,14 +7,13 @@
 		mentionFromKind,
 		mentionTrigger,
 		type Mention,
-		type MentionCatalogItem,
-		type VaultMentionHit
+		type MentionCatalogItem
 	} from '$lib/mentions';
 	import type { ComputerApproval } from '$lib/types';
 	import Chevron from './Chevron.svelte';
 	import Icon from './Icon.svelte';
 
-	type QueryStage = 'kinds' | 'vault' | 'app';
+	type PickerStage = 'kinds' | 'app';
 
 	let {
 		variant = 'seamless',
@@ -33,7 +32,6 @@
 		ongrow,
 		oncompositionstart,
 		oncompositionend,
-		onsearchvault,
 		onlistapps
 	}: {
 		variant?: 'seamless' | 'docked';
@@ -52,17 +50,15 @@
 		ongrow: (extra: number) => void;
 		oncompositionstart: () => void;
 		oncompositionend: () => void;
-		onsearchvault: (query: string) => Promise<VaultMentionHit[]>;
 		onlistapps: () => Promise<string[]>;
 	} = $props();
 
 	let root: HTMLDivElement | undefined = $state();
 	let activeIndex = $state(0);
 	let mentionIndex = $state(0);
-	let stage = $state<QueryStage | null>(null);
+	let stage = $state<PickerStage | null>(null);
 	let triggerStart = $state(0);
 	let stageQuery = $state('');
-	let vaultHits = $state<VaultMentionHit[]>([]);
 	let appHits = $state<string[]>([]);
 	let composing = $state(false);
 	const docked = $derived(variant === 'docked');
@@ -71,9 +67,7 @@
 	const filteredApps = $derived(
 		appHits.filter((name) => name.toLowerCase().includes(stageQuery.trim().toLowerCase()))
 	);
-	const mentionCount = $derived(
-		stage === 'kinds' ? kindItems.length : stage === 'vault' ? vaultHits.length : filteredApps.length
-	);
+	const mentionCount = $derived(stage === 'kinds' ? kindItems.length : filteredApps.length);
 
 	function captureRoot(node: HTMLDivElement) {
 		root = node;
@@ -100,7 +94,6 @@
 		stage = null;
 		mentionOpen = false;
 		stageQuery = '';
-		vaultHits = [];
 		appHits = [];
 	}
 
@@ -115,7 +108,7 @@
 
 	function syncTriggerFromValue() {
 		if (composing) return;
-		if (stage === 'vault' || stage === 'app') return;
+		if (stage === 'app') return;
 		const cursor = textarea?.selectionStart ?? value.length;
 		const trigger = mentionTrigger(value, cursor);
 		if (!trigger) {
@@ -150,22 +143,20 @@
 	}
 
 	function selectKind(item: MentionCatalogItem) {
-		if (item.needsQuery) {
+		if (item.needsPicker) {
 			replaceTrigger('');
-			stage = item.kind === 'vault' ? 'vault' : 'app';
+			stage = 'app';
 			stageQuery = '';
 			mentionIndex = 0;
 			mentionOpen = true;
 			menuOpen = false;
-			if (item.kind === 'app') {
-				void onlistapps()
-					.then((names) => {
-						appHits = names;
-					})
-					.catch(() => {
-						appHits = [];
-					});
-			}
+			void onlistapps()
+				.then((names) => {
+					appHits = names;
+				})
+				.catch(() => {
+					appHits = [];
+				});
 			return;
 		}
 		addMention(mentionFromKind(item.kind));
@@ -175,15 +166,6 @@
 		if (stage === 'kinds') {
 			const item = kindItems[mentionIndex];
 			if (item) selectKind(item);
-			return;
-		}
-		if (stage === 'vault') {
-			const hit = vaultHits[mentionIndex];
-			if (hit) {
-				addMention({ kind: 'vault', note_id: hit.id, title: hit.title });
-			} else if (stageQuery.trim()) {
-				addMention({ kind: 'vault', title: stageQuery.trim() });
-			}
 			return;
 		}
 		if (stage === 'app') {
@@ -226,7 +208,7 @@
 
 	function onPromptInput() {
 		resize();
-		if (stage === 'vault' || stage === 'app') {
+		if (stage === 'app') {
 			const cursor = textarea?.selectionStart ?? value.length;
 			stageQuery = value.slice(triggerStart, cursor);
 			return;
@@ -298,31 +280,8 @@
 		if (!mentionOpen && stage !== null) {
 			stage = null;
 			stageQuery = '';
-			vaultHits = [];
 			appHits = [];
 		}
-	});
-
-	$effect(() => {
-		if (stage !== 'vault') return;
-		const query = stageQuery;
-		let cancelled = false;
-		const timer = setTimeout(() => {
-			void onsearchvault(query)
-				.then((hits) => {
-					if (!cancelled) {
-						vaultHits = hits;
-						mentionIndex = 0;
-					}
-				})
-				.catch(() => {
-					if (!cancelled) vaultHits = [];
-				});
-		}, 120);
-		return () => {
-			cancelled = true;
-			clearTimeout(timer);
-		};
 	});
 </script>
 
@@ -436,23 +395,6 @@
 				{/each}
 				{#if kindItems.length === 0}
 					<div class="mention-empty">No matches</div>
-				{/if}
-			{:else if stage === 'vault'}
-				{#each vaultHits as hit, index (hit.id)}
-					<button
-						type="button"
-						class={['prompt-option', 'mention-option', { active: index === mentionIndex }]}
-						role="option"
-						aria-selected={index === mentionIndex}
-						onpointerenter={() => (mentionIndex = index)}
-						onclick={() => addMention({ kind: 'vault', note_id: hit.id, title: hit.title })}
-					>
-						<span class="mention-token">{hit.title}</span>
-						<span class="mention-desc">{hit.kind}</span>
-					</button>
-				{/each}
-				{#if vaultHits.length === 0}
-					<div class="mention-empty">No vault notes</div>
 				{/if}
 			{:else if stage === 'app'}
 				{#each filteredApps as name, index (name)}

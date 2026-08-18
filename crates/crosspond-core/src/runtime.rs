@@ -115,34 +115,6 @@ When the task is complete, respond concisely with what was accomplished and rele
     prompt
 }
 
-fn resolve_vault_mentions(mentions: &mut [Mention], vault: &IndexedVault) {
-    for mention in mentions {
-        let Mention::Vault { note_id, title } = mention else {
-            continue;
-        };
-        if note_id.as_ref().is_some_and(|id| !id.is_empty()) {
-            continue;
-        }
-        let Some(query) = title
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        let Ok(hits) = vault.mention_search(query, 8) else {
-            continue;
-        };
-        let hit = hits
-            .iter()
-            .find(|hit| hit.title.eq_ignore_ascii_case(query))
-            .or_else(|| hits.first());
-        if let Some(hit) = hit {
-            *note_id = Some(hit.id.clone());
-        }
-    }
-}
-
 /// UI-facing command sink. Keeps Tokio types out of `crosspond-app`.
 #[derive(Clone)]
 pub struct CommandSender {
@@ -332,7 +304,7 @@ impl Runtime {
         });
     }
 
-    async fn start_task(&mut self, mut request: StartTaskRequest) {
+    async fn start_task(&mut self, request: StartTaskRequest) {
         let task_id = request.task_id;
         let stored_prompt = mention::display_prompt(&request.prompt, &request.mentions);
         if self
@@ -450,15 +422,9 @@ impl Runtime {
             }
         }
 
-        if let Some(vault) = &self.knowledge {
-            resolve_vault_mentions(&mut request.mentions, vault);
-        }
         let routed_brief = self.knowledge.as_ref().and_then(|vault| {
             KnowledgeRouter::new(vault)
-                .route(&KnowledgeContextRequest {
-                    prompt: request.prompt.clone(),
-                    pin_ids: mention::vault_pin_ids(&request.mentions),
-                })
+                .route(&KnowledgeContextRequest::new(request.prompt.clone()))
                 .ok()
                 .filter(|brief| !brief.is_empty())
         });
@@ -2136,15 +2102,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vault_mention_pins_note_in_brief() {
-        let (indexed, vault, sqlite) = lab_indexed_vault();
-        let vpn_id = indexed
-            .search("Lab VPN", 4)
-            .unwrap()
-            .into_iter()
-            .find(|hit| hit.title == "Lab VPN")
-            .expect("vpn")
-            .id;
+    async fn query_mention_instructs_knowledge_search() {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
@@ -2155,18 +2113,14 @@ mod tests {
                 })
             })
         };
-        let (mut runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
-        runtime.knowledge = Some(Arc::new(indexed));
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
 
         let task_id = TaskId::new();
         command_tx
             .send(RuntimeCommand::StartTask(StartTaskRequest {
-                mentions: vec![Mention::Vault {
-                    note_id: None,
-                    title: Some("Lab VPN".into()),
-                }],
+                mentions: vec![Mention::Query],
                 ..StartTaskRequest::new(task_id, "what's for lunch")
             }))
             .unwrap();
@@ -2179,16 +2133,14 @@ mod tests {
             let captured = requests.lock().expect("lock");
             captured[0][0].content.clone()
         };
-        assert!(system.contains("Pinned"));
-        assert!(system.contains("Lab VPN"));
-        assert!(system.contains(&vpn_id));
         assert!(system.contains("User mentions"));
+        assert!(system.contains("knowledge_search"));
+        assert!(system.contains("knowledge_read"));
+        assert!(!system.contains("Pinned"));
 
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;
-        let _ = std::fs::remove_dir_all(vault);
-        let _ = std::fs::remove_file(sqlite);
     }
 
     fn scratch_dir(tmp: &Path, task_id: TaskId) -> PathBuf {

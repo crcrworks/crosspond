@@ -3,7 +3,6 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use serde::Serialize;
 
 use super::graph::IndexedLink;
 use super::{SCHEMA_VERSION, SearchHit, SearchIndex, index_note_id, path_str};
@@ -59,13 +58,6 @@ pub struct SnapshotNote {
     pub title: String,
     pub kind: String,
     pub content_hash: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct MentionNote {
-    pub id: String,
-    pub title: String,
-    pub kind: String,
 }
 
 impl SearchIndex {
@@ -184,53 +176,6 @@ impl SearchIndex {
             if let Some(hit) = hit_from_row(id, title, kind, path, 4) {
                 hits.push(hit);
             }
-        }
-        Ok(hits)
-    }
-
-    /// Title-only hits for the composer `@vault` picker. Never includes bodies
-    /// or filesystem paths.
-    pub fn mention_search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<MentionNote>, VaultError> {
-        let limit = limit.clamp(1, 20);
-        let hits = if query.trim().is_empty() {
-            self.recent_mention_notes(limit)?
-        } else {
-            self.search(query, limit)?
-                .into_iter()
-                .filter(|hit| hit.kind != NoteKind::Activity)
-                .map(mention_from_hit)
-                .collect()
-        };
-        Ok(hits)
-    }
-
-    fn recent_mention_notes(&self, limit: usize) -> Result<Vec<MentionNote>, VaultError> {
-        let conn = lock(&self.conn)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, title, kind FROM notes
-                 WHERE kind != 'activity'
-                 ORDER BY mtime DESC
-                 LIMIT ?1",
-            )
-            .map_err(index_err)?;
-        let rows = stmt
-            .query_map(params![limit as i64], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(index_err)?;
-        let mut hits = Vec::new();
-        for row in rows {
-            let (id, title, kind) = row.map_err(index_err)?;
-            hits.push(MentionNote { id, title, kind });
         }
         Ok(hits)
     }
@@ -623,12 +568,4 @@ pub(crate) fn hit_from_row(
         path: PathBuf::from(path),
         rank,
     })
-}
-
-fn mention_from_hit(hit: SearchHit) -> MentionNote {
-    MentionNote {
-        id: hit.id,
-        title: hit.title,
-        kind: hit.kind.as_str().into(),
-    }
 }

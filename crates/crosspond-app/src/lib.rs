@@ -80,7 +80,6 @@ pub fn run() {
             commands::reveal_history_artifact,
             commands::set_ui_flags,
             commands::sync_launcher_size,
-            commands::search_vault_mentions,
             commands::list_mention_apps,
         ])
         .setup(move |app| {

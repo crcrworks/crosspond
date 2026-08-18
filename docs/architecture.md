@@ -29,10 +29,10 @@ Option+Space
         │
  Enter / start_task(+capsule, mentions) ──mpsc──►  stage Finder files into scratch input/ only if selected
         │                      inject ambient block into system prompt
-        │                      honor @vault/@save/@later/@screen/@app/@files/@calendar/@web
+        │                      honor @query/@save/@later/@screen/@app/@files/@calendar/@web
         │                      @screen captures ambient pid before the model runs
+        │                      @query tells the model to knowledge_search then knowledge_read
         │                      inject Knowledge Brief when vault_path is set
-        │                      pinned @vault ids are must-read in the brief
         │                      (procedure follow plan: requires → uses → computer tools)
         │                      OpenAI-compatible stream (text + images)
         │                      knowledge_search / knowledge_read /
@@ -112,4 +112,4 @@ First launch with no API key shows the launcher in onboarding and opens Settings
 
 `GlobalHotkeyService` lives in `crosspond-core`. macOS registers Option + Space with `global-hotkey` on the main thread and exposes `poll()`. The Tauri host drains that poll on a short loop off the UI thread, then toggles the launcher on the main thread (collect, then show). If the launcher was ordered out while the in-memory visible flag stayed true, Option+Space shows rather than hiding. Settings-driven hotkeys come later; the trait is the extension point.
 
-⌘, opens Settings. ⌘N and ⌘T reset the session (same as **New**). ⌘W hides the launcher without cancelling work or clearing the conversation. Escape closes the mention picker or approval menu first; then cancels an in-flight request (including while waiting for approval); closes History if it is open; otherwise it hides the launcher without clearing the conversation. **New** resets the session. Approval **Cancel** rejects only that tool call. Enter submits the prompt (or selects the highlighted mention). Shift+Enter inserts a newline; the field grows with wrapped lines (capped) and pastes keep line breaks. Type `@` or `＠` after whitespace to attach optional mentions (`@vault`, `@save`, `@later`, `@screen`, `@app`, `@files`, `@calendar`, `@web`). `@screen` screenshots the ambient window from launcher-open time, not Crosspond. ⌘C / ⌘V / ⌘X / ⌘A / ⌘Z are native Edit menu items so WKWebView can copy, paste, and undo (the app menu is otherwise only Settings and Quit).
+⌘, opens Settings. ⌘N and ⌘T reset the session (same as **New**). ⌘W hides the launcher without cancelling work or clearing the conversation. Escape closes the mention picker or approval menu first; then cancels an in-flight request (including while waiting for approval); closes History if it is open; otherwise it hides the launcher without clearing the conversation. **New** resets the session. Approval **Cancel** rejects only that tool call. Enter submits the prompt (or selects the highlighted mention). Shift+Enter inserts a newline; the field grows with wrapped lines (capped) and pastes keep line breaks. Type `@` or `＠` after whitespace to attach optional mentions (`@query`, `@save`, `@later`, `@screen`, `@app`, `@files`, `@calendar`, `@web`). `@query` searches accumulated knowledge; the user does not pick a note. `@screen` screenshots the ambient window from launcher-open time, not Crosspond. ⌘C / ⌘V / ⌘X / ⌘A / ⌘Z are native Edit menu items so WKWebView can copy, paste, and undo (the app menu is otherwise only Settings and Quit).

@@ -12,7 +12,6 @@
 		reject,
 		resetSession,
 		revealArtifact,
-		searchVaultMentions,
 		listMentionApps,
 		setComputerApproval,
 		setUiFlags,
@@ -344,7 +343,6 @@
 				ongrow={(extra) => (textExtra = extra)}
 				oncompositionstart={() => (session.composing = true)}
 				oncompositionend={() => (session.composing = false)}
-				onsearchvault={(query) => searchVaultMentions(query)}
 				onlistapps={() => listMentionApps()}
 			/>
 		</div>

@@ -3,10 +3,10 @@ use std::process::Command;
 
 use crosspond_core::{
     AppConfig, ApprovalId, ComputerApprovalMode, ConversationId, ConversationView,
-    MISSING_API_KEY_MESSAGE, Mention, MentionNote, Receipt, RuntimeCommand, SearchIndex, SecretKey,
-    SecretString, StartTaskRequest, TaskId, conversation_artifact_path, default_tasks_root,
-    history_group_label, history_title, index_db_path, list_recent_tasks,
-    open_conversation as load_conversation, parse_running_app_names, provider_key_is_set,
+    MISSING_API_KEY_MESSAGE, Mention, Receipt, RuntimeCommand, SecretKey, SecretString,
+    StartTaskRequest, TaskId, conversation_artifact_path, default_tasks_root, history_group_label,
+    history_title, list_recent_tasks, open_conversation as load_conversation,
+    parse_running_app_names, provider_key_is_set,
 };
 use crosspond_macos::{PermissionKind, PermissionSnapshot};
 use serde::Serialize;
@@ -344,28 +344,6 @@ pub fn set_ui_flags(compact: bool, composing: bool, in_conversation: bool, state
 #[tauri::command]
 pub fn sync_launcher_size(compact: bool, badge_lines: u32, extra_height: f64, app: AppHandle) {
     launcher::request_resize(&app, compact, badge_lines as usize, extra_height);
-}
-
-#[tauri::command]
-pub fn search_vault_mentions(query: String, state: State<AppState>) -> Vec<MentionNote> {
-    let Ok(config) = state.config.load() else {
-        return Vec::new();
-    };
-    let Some(vault_path) = config
-        .vault_path
-        .filter(|path| !path.as_os_str().is_empty())
-    else {
-        return Vec::new();
-    };
-    let home = std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into());
-    let index_path = index_db_path(&PathBuf::from(home).join(".crosspond"), &vault_path);
-    if !index_path.exists() {
-        return Vec::new();
-    }
-    let Ok(index) = SearchIndex::open(index_path) else {
-        return Vec::new();
-    };
-    index.mention_search(&query, 12).unwrap_or_default()
 }
 
 #[tauri::command]

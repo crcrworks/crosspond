@@ -14,7 +14,7 @@ use crate::vault::{FsVaultRepository, VaultError, VaultRepository, VaultWatcher,
 
 pub use fts::SearchHit;
 pub use graph::IndexedLink;
-pub use sqlite::{IndexSnapshot, MentionNote, SnapshotNote};
+pub use sqlite::{IndexSnapshot, SnapshotNote};
 
 const SCHEMA_VERSION: i32 = 1;
 
@@ -78,14 +78,6 @@ impl IndexedVault {
 
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, VaultError> {
         self.index.search(query, limit)
-    }
-
-    pub fn mention_search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<MentionNote>, VaultError> {
-        self.index.mention_search(query, limit)
     }
 
     pub fn rebuild(&self) -> Result<(), VaultError> {
@@ -202,11 +194,6 @@ mod tests {
         assert!(by_alias.iter().any(|hit| hit.title == "Lab VPN"));
         let by_body = indexed.search("lab profile", 10).unwrap();
         assert!(by_body.iter().any(|hit| hit.title == "Lab VPN"));
-        let mentions = indexed.mention_search("VPN", 8).unwrap();
-        assert!(mentions.iter().any(|hit| hit.title == "Lab VPN"));
-        assert!(mentions.iter().all(|hit| {
-            !hit.id.contains('/') && hit.title != "lab profile" && hit.kind != "activity"
-        }));
         let _ = fs::remove_dir_all(vault);
         let _ = fs::remove_file(sqlite);
     }

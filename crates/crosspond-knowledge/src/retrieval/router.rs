@@ -15,14 +15,12 @@ const STALE_VERIFIED_DAYS: i64 = 30;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct KnowledgeContextRequest {
     pub prompt: String,
-    pub pin_ids: Vec<String>,
 }
 
 impl KnowledgeContextRequest {
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
             prompt: prompt.into(),
-            pin_ids: Vec::new(),
         }
     }
 }
@@ -53,7 +51,6 @@ pub struct ProcedureFollow {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct KnowledgeBrief {
-    pub pinned: Vec<KnowledgeSummary>,
     pub procedures: Vec<KnowledgeSummary>,
     pub resources: Vec<KnowledgeSummary>,
     pub knowledge: Vec<KnowledgeSummary>,
@@ -63,8 +60,7 @@ pub struct KnowledgeBrief {
 
 impl KnowledgeBrief {
     pub fn is_empty(&self) -> bool {
-        self.pinned.is_empty()
-            && self.procedures.is_empty()
+        self.procedures.is_empty()
             && self.resources.is_empty()
             && self.knowledge.is_empty()
             && self.recent_activity.is_empty()
@@ -75,15 +71,6 @@ impl KnowledgeBrief {
             return String::new();
         }
         let mut out = String::from("Relevant Knowledge\n");
-        if !self.pinned.is_empty() {
-            out.push_str("\nPinned (user attached; knowledge_read these before other tools):\n");
-            for item in &self.pinned {
-                out.push_str(&format!("- {}\n", summary_line(item)));
-                if !item.snippet.is_empty() {
-                    out.push_str(&format!("  {}\n", item.snippet));
-                }
-            }
-        }
         push_section(&mut out, "Procedure", &self.procedures);
         push_section(&mut out, "Resources", &self.resources);
         push_section(&mut out, "Knowledge", &self.knowledge);
@@ -154,29 +141,7 @@ impl<'a> KnowledgeRouter<'a> {
                 title: hit.title,
             });
         }
-        self.pin_notes(&mut brief, &request.pin_ids)?;
         Ok(brief)
-    }
-
-    fn pin_notes(&self, brief: &mut KnowledgeBrief, pin_ids: &[String]) -> Result<(), VaultError> {
-        for id in pin_ids {
-            let id = id.trim();
-            if id.is_empty() {
-                continue;
-            }
-            if brief.pinned.iter().any(|item| item.id == id) {
-                continue;
-            }
-            let Some(hit) = self.vault.index().lookup(id)? else {
-                continue;
-            };
-            let summary = self.summarize(&hit)?;
-            brief.procedures.retain(|item| item.id != summary.id);
-            brief.resources.retain(|item| item.id != summary.id);
-            brief.knowledge.retain(|item| item.id != summary.id);
-            brief.pinned.push(summary);
-        }
-        Ok(())
     }
 
     fn expand_procedure_resources(&self, brief: &mut KnowledgeBrief) -> Result<(), VaultError> {
@@ -574,33 +539,6 @@ mod tests {
         assert!(rendered.contains("(url)"));
         assert!(!rendered.contains("Lab VPN"));
         assert!(!rendered.contains("WireGuard"));
-        let _ = fs::remove_dir_all(vault);
-        let _ = fs::remove_file(sqlite);
-    }
-
-    #[test]
-    fn pinned_note_is_must_read_even_when_the_prompt_does_not_match() {
-        let (indexed, vault, sqlite) = lab_vault();
-        let vpn_id = indexed
-            .search("Lab VPN", 4)
-            .unwrap()
-            .into_iter()
-            .find(|hit| hit.title == "Lab VPN")
-            .expect("vpn")
-            .id;
-        let brief = KnowledgeRouter::new(&indexed)
-            .route(&KnowledgeContextRequest {
-                prompt: "what's for lunch".into(),
-                pin_ids: vec![vpn_id.clone()],
-            })
-            .unwrap();
-        assert_eq!(brief.pinned[0].title, "Lab VPN");
-        assert_eq!(brief.pinned[0].id, vpn_id);
-        assert!(!brief.resources.iter().any(|item| item.id == vpn_id));
-        let rendered = brief.render();
-        assert!(rendered.contains("Pinned"));
-        assert!(rendered.contains("Lab VPN"));
-        assert!(rendered.contains("user attached"));
         let _ = fs::remove_dir_all(vault);
         let _ = fs::remove_file(sqlite);
     }
