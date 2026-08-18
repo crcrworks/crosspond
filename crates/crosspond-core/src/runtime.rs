@@ -2106,17 +2106,19 @@ mod tests {
         .await;
 
         assert_eq!(*pids.lock().expect("lock"), vec![Some(7)]);
-        let captured = requests.lock().expect("lock");
-        let user = captured[0]
-            .iter()
-            .find(|message| message.role == Role::User)
-            .expect("user");
-        assert_eq!(user.images.len(), 1);
-        assert_eq!(user.images[0].width, Some(10));
-        assert!(user.content.contains("screenshot"));
-        let system = &captured[0][0].content;
-        assert!(system.contains("User mentions"));
-        assert!(!system.contains('\u{89}'));
+        {
+            let captured = requests.lock().expect("lock");
+            let user = captured[0]
+                .iter()
+                .find(|message| message.role == Role::User)
+                .expect("user");
+            assert_eq!(user.images.len(), 1);
+            assert_eq!(user.images[0].width, Some(10));
+            assert!(user.content.contains("screenshot"));
+            let system = &captured[0][0].content;
+            assert!(system.contains("User mentions"));
+            assert!(!system.contains('\u{89}'));
+        }
         let events = std::fs::read_to_string(
             tmp.0
                 .join("tasks")

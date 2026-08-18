@@ -23,6 +23,7 @@ impl Default for ApprovalId {
 
 /// UI → runtime.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)] // StartTask carries context + mentions; keep match sites unboxed.
 pub enum RuntimeCommand {
     StartTask(StartTaskRequest),
     Approve(ApprovalId),

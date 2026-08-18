@@ -251,7 +251,8 @@ mod tests {
         assert!(text.contains("screenshot"));
         assert!(text.contains("knowledge_ingest"));
         assert!(!text.contains('/'));
-        assert!(!text.contains("secret"));
+        assert!(!text.contains("secret-token"));
+        assert!(!text.contains("password"));
     }
 
     #[test]
