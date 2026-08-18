@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::command::{ApprovalId, RuntimeCommand, StartTaskRequest};
-use crate::config::ConfigStore;
+use crate::config::{AppConfig, ConfigStore};
 use crate::context::{ContextCapsule, StagedInput, stage_selected_files};
 use crate::conversation::{load_session_messages, write_session};
 use crate::event::AgentEvent;
@@ -252,17 +252,21 @@ struct Runtime {
 }
 
 fn open_vault_index(config: &dyn ConfigStore) -> (Option<Arc<IndexedVault>>, Option<VaultWatcher>) {
-    let Ok(cfg) = config.load() else {
+    let path = config
+        .load()
+        .ok()
+        .and_then(|cfg| cfg.effective_vault_path());
+    open_vault_from_path(path)
+}
+
+fn open_vault_from_path(
+    vault_path: Option<PathBuf>,
+) -> (Option<Arc<IndexedVault>>, Option<VaultWatcher>) {
+    let Some(vault_path) = vault_path.filter(|path| !path.as_os_str().is_empty()) else {
         return (None, None);
     };
-    let Some(vault_path) = cfg.vault_path else {
-        return (None, None);
-    };
-    if vault_path.as_os_str().is_empty() {
-        return (None, None);
-    }
-    let home = std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into());
-    let index_path = index_db_path(&PathBuf::from(home).join(".crosspond"), &vault_path);
+    let home = crate::config::home_dir().join(".crosspond");
+    let index_path = index_db_path(&home, &vault_path);
     let Ok(indexed) = IndexedVault::open(vault_path, index_path) else {
         return (None, None);
     };
@@ -288,12 +292,36 @@ async fn run_loop(mut runtime: Runtime) {
             }
             RuntimeCommand::ResumeSession(id) => runtime.resume_session(id),
             RuntimeCommand::TestConnection => runtime.spawn_test_connection(),
+            RuntimeCommand::ReloadKnowledge => runtime.sync_knowledge(),
             RuntimeCommand::Cancel(_) | RuntimeCommand::Approve(_) | RuntimeCommand::Reject(_) => {}
         }
     }
 }
 
 impl Runtime {
+    fn sync_knowledge(&mut self) {
+        if let Ok(config) = self.config.load() {
+            self.sync_knowledge_to(&config);
+        }
+    }
+
+    fn sync_knowledge_to(&mut self, config: &AppConfig) {
+        let wanted = config.effective_vault_path();
+        let current = self
+            .knowledge
+            .as_ref()
+            .map(|vault| vault.repository().root().to_path_buf());
+        let wanted_canon = wanted
+            .as_ref()
+            .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()));
+        if wanted_canon == current {
+            return;
+        }
+        let (knowledge, watch) = open_vault_from_path(wanted);
+        self.knowledge = knowledge;
+        self._vault_watch = watch;
+    }
+
     fn spawn_test_connection(&self) {
         let events = self.events.clone();
         let config = Arc::clone(&self.config);
@@ -345,6 +373,7 @@ impl Runtime {
                 return;
             }
         };
+        self.sync_knowledge_to(&config);
 
         let reused_scratch = self.session_scratch.is_some();
         let task_dir = self.tasks_root.join(task_id.to_string());
@@ -1420,6 +1449,7 @@ mod tests {
 
     use super::*;
     use crate::command::StartTaskRequest;
+    use crate::config::AppConfig;
     use crate::config::memory::MemoryConfigStore;
     use crate::context::ContextCapsule;
     use crate::ids::{ConversationId, TaskId};
@@ -1747,6 +1777,67 @@ mod tests {
         let _ = tmp;
         let _ = std::fs::remove_dir_all(vault);
         let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn start_task_opens_vault_configured_after_launch() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let build: ProviderBuilder = {
+            let captured = Arc::clone(&captured);
+            Arc::new(move |_, _, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&captured),
+                })
+            })
+        };
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        drop(indexed);
+        let _ = std::fs::remove_file(&sqlite);
+        let store = Arc::new(MemoryConfigStore::default());
+        store
+            .save(&AppConfig {
+                vault_path: Some(vault.clone()),
+                ..AppConfig::default()
+            })
+            .unwrap();
+        let (mut runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        runtime.config = store;
+        assert!(runtime.knowledge.is_none());
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx.send(RuntimeCommand::ReloadKnowledge).unwrap();
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                task_id,
+                "研究室の課題確認して",
+            )))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        let system = {
+            let captured = requests.lock().expect("lock");
+            captured[0]
+                .iter()
+                .find(|message| message.role == Role::System)
+                .map(|message| message.content.clone())
+                .unwrap_or_default()
+        };
+        assert!(system.contains("Check Lab Assignment"));
+        assert!(system.contains("knowledge_read"));
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let index = index_db_path(&crate::config::home_dir().join(".crosspond"), &vault);
+        let _ = std::fs::remove_file(index);
+        let _ = std::fs::remove_dir_all(vault);
     }
 
     #[tokio::test]

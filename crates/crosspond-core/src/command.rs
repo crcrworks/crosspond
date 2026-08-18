@@ -35,6 +35,8 @@ pub enum RuntimeCommand {
     ResumeSession(ConversationId),
     /// Verify the current provider settings without starting a task.
     TestConnection,
+    /// Re-open the Knowledge Vault after Settings saves `vault_path`.
+    ReloadKnowledge,
 }
 
 #[derive(Clone, Debug)]

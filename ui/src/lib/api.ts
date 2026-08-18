@@ -49,8 +49,8 @@ export function loadSettings() {
 	return invoke<SettingsView>('load_settings');
 }
 
-export function saveConfig(baseUrl: string, model: string) {
-	return invoke('save_config', { baseUrl, model });
+export function saveConfig(baseUrl: string, model: string, vaultPath: string) {
+	return invoke('save_config', { baseUrl, model, vaultPath });
 }
 
 export function saveSecret(kind: 'provider' | 'exa', value: string) {

@@ -9,6 +9,7 @@
 	let settings = $state<SettingsView | null>(null);
 	let baseUrl = $state('');
 	let model = $state('');
+	let vaultPath = $state('');
 	let apiKey = $state('');
 	let exaKey = $state('');
 	let saveStatus = $state<string | null>(null);
@@ -20,6 +21,7 @@
 			settings = loaded;
 			baseUrl = loaded.base_url;
 			model = loaded.model;
+			vaultPath = loaded.vault_path;
 		})();
 		let unlisten: (() => void) | undefined;
 		void listen<AgentEvent>('agent-event', (event) => {
@@ -33,12 +35,13 @@
 	});
 
 	async function persist() {
-		await saveConfig(baseUrl, model);
+		await saveConfig(baseUrl, model, vaultPath);
 		await saveSecret('provider', apiKey);
 		await saveSecret('exa', exaKey);
 		if (apiKey.trim()) apiKey = '';
 		if (exaKey.trim()) exaKey = '';
 		settings = await loadSettings();
+		vaultPath = settings.vault_path;
 	}
 
 	async function onSave() {
@@ -128,6 +131,23 @@
 		</label>
 		<div class="text-sm text-[var(--muted)]">
 			Required for web_search. Free credits at https://dashboard.exa.ai/api-keys
+		</div>
+		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
+			Knowledge
+		</div>
+		<label class="flex flex-col gap-1">
+			<span class="text-sm text-[var(--muted)]">Vault path</span>
+			<input
+				bind:value={vaultPath}
+				placeholder={settings?.default_vault_path ?? ''}
+				class="rounded-md border px-2 py-1 font-mono text-sm"
+				style:border-color="var(--border)"
+				style:background="var(--bg)"
+			/>
+		</label>
+		<div class="text-sm text-[var(--muted)]">
+			Obsidian-compatible folder. Empty uses {settings?.default_vault_path ?? '~/Documents/Crosspond'}.
+			Created if it does not exist.
 		</div>
 		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
 			Permissions

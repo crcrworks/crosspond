@@ -5,6 +5,48 @@ use serde::{Deserialize, Serialize};
 
 use crate::policy::ComputerApprovalMode;
 
+/// Default Knowledge Vault folder. Not under `~/.crosspond`.
+pub const DEFAULT_VAULT_RELATIVE: &str = "Documents/Crosspond";
+
+pub fn home_dir() -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into()))
+}
+
+/// `~/Documents/Crosspond`.
+pub fn default_vault_path() -> PathBuf {
+    home_dir().join(DEFAULT_VAULT_RELATIVE)
+}
+
+/// Expand `~` / `~/…` and make relative paths sit under `$HOME`.
+pub fn expand_user_path(path: &str) -> PathBuf {
+    let path = path.trim();
+    if path.is_empty() {
+        return PathBuf::new();
+    }
+    let expanded = if path == "~" {
+        home_dir()
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        home_dir().join(rest)
+    } else {
+        PathBuf::from(path)
+    };
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        home_dir().join(expanded)
+    }
+}
+
+/// Settings input: empty uses the default vault path.
+pub fn parse_vault_path_input(input: &str) -> PathBuf {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        default_vault_path()
+    } else {
+        expand_user_path(trimmed)
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
@@ -23,6 +65,16 @@ pub struct AppConfig {
     /// Unset means Crosspond will not read or write a vault.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_path: Option<PathBuf>,
+}
+
+impl AppConfig {
+    pub fn effective_vault_path(&self) -> Option<PathBuf> {
+        match &self.vault_path {
+            Some(path) if path.as_os_str().is_empty() => None,
+            Some(path) => Some(expand_user_path(&path.to_string_lossy())),
+            None => None,
+        }
+    }
 }
 
 impl Default for AppConfig {
@@ -154,6 +206,43 @@ mod tests {
             parsed.vault_path.as_deref(),
             Some(Path::new("/Users/example/Documents/Crosspond"))
         );
+        assert_eq!(
+            parsed.effective_vault_path().as_deref(),
+            Some(Path::new("/Users/example/Documents/Crosspond"))
+        );
+    }
+
+    #[test]
+    fn default_vault_path_is_documents_crosspond() {
+        let home = home_dir();
+        assert_eq!(
+            default_vault_path(),
+            home.join("Documents").join("Crosspond")
+        );
+        assert_eq!(parse_vault_path_input(""), default_vault_path());
+        assert_eq!(parse_vault_path_input("   "), default_vault_path());
+        assert_eq!(
+            parse_vault_path_input("~/Documents/Notes"),
+            home.join("Documents").join("Notes")
+        );
+        assert_eq!(
+            parse_vault_path_input("Documents/TeamVault"),
+            home.join("Documents").join("TeamVault")
+        );
+        assert_eq!(
+            parse_vault_path_input("/tmp/custom-vault"),
+            PathBuf::from("/tmp/custom-vault")
+        );
+    }
+
+    #[test]
+    fn empty_configured_vault_path_is_disabled() {
+        let config = AppConfig {
+            vault_path: Some(PathBuf::new()),
+            ..AppConfig::default()
+        };
+        assert!(config.effective_vault_path().is_none());
+        assert!(AppConfig::default().effective_vault_path().is_none());
     }
 
     #[test]

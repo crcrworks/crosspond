@@ -17,7 +17,7 @@ That runs the Tauri 2 host (`crates/crosspond-app`) and the SvelteKit Vite serve
 
 Then:
 
-1. On first launch, Crosspond opens a welcome. Press **⌘,** (or **Open Settings**) and set Base URL, model, and API key. Optionally add an Exa API key for `web_search`.
+1. On first launch, Crosspond opens a welcome. Press **⌘,** (or **Open Settings**) and set Base URL, model, and API key. Optionally add an Exa API key for `web_search`. The Knowledge Vault path defaults to `~/Documents/Crosspond`; change it in Settings if you want a different folder.
 2. Click **Save**, then **Test Connection**, then **Continue**.
 3. Grant Accessibility, Screen Recording, or Calendars later from Settings → Permissions, or when a tool needs them. Finder selection may also prompt for Automation.
 4. Select text in another app, or files in Finder — or leave Safari / Helium in front.

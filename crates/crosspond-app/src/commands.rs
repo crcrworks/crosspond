@@ -4,8 +4,9 @@ use std::process::Command;
 use crosspond_core::{
     AppConfig, ApprovalId, ComputerApprovalMode, ConversationId, ConversationView,
     MISSING_API_KEY_MESSAGE, Mention, Receipt, RuntimeCommand, SecretKey, SecretString,
-    StartTaskRequest, TaskId, conversation_artifact_path, default_tasks_root, history_group_label,
-    history_title, list_recent_tasks, open_conversation as load_conversation, provider_key_is_set,
+    StartTaskRequest, TaskId, conversation_artifact_path, default_tasks_root, default_vault_path,
+    history_group_label, history_title, list_recent_tasks, open_conversation as load_conversation,
+    parse_vault_path_input, provider_key_is_set,
 };
 use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
 use serde::Serialize;
@@ -27,6 +28,8 @@ pub struct Bootstrap {
 pub struct SettingsView {
     pub base_url: String,
     pub model: String,
+    pub vault_path: String,
+    pub default_vault_path: String,
     pub provider_key_stored: bool,
     pub exa_key_stored: bool,
     pub permissions: PermissionSnapshot,
@@ -178,6 +181,12 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
     SettingsView {
         base_url: loaded.base_url,
         model: loaded.model,
+        vault_path: loaded
+            .effective_vault_path()
+            .unwrap_or_else(default_vault_path)
+            .display()
+            .to_string(),
+        default_vault_path: default_vault_path().display().to_string(),
         provider_key_stored,
         exa_key_stored,
         permissions: PermissionSnapshot::current(),
@@ -186,7 +195,12 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
 }
 
 #[tauri::command]
-pub fn save_config(base_url: String, model: String, state: State<AppState>) -> Result<(), String> {
+pub fn save_config(
+    base_url: String,
+    model: String,
+    vault_path: String,
+    state: State<AppState>,
+) -> Result<(), String> {
     let mut config = state.config.load().unwrap_or_default();
     let defaults = AppConfig::default();
     config.base_url = if base_url.trim().is_empty() {
@@ -199,7 +213,10 @@ pub fn save_config(base_url: String, model: String, state: State<AppState>) -> R
     } else {
         model.trim().to_string()
     };
-    state.config.save(&config).map_err(|err| err.to_string())
+    config.vault_path = Some(parse_vault_path_input(&vault_path));
+    state.config.save(&config).map_err(|err| err.to_string())?;
+    state.commands.send(RuntimeCommand::ReloadKnowledge);
+    Ok(())
 }
 
 #[tauri::command]
