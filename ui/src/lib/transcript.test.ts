@@ -6,6 +6,7 @@ import {
 	heartbeatStatus,
 	thoughtLabel,
 	workHeaderVisual,
+	workHostsPreparing,
 	workedForLabel
 } from './transcript';
 import { taskStatusVisual, toolIconPath, toolRowLabel as row, toolVisual } from './tools';
@@ -331,11 +332,28 @@ describe('transcript', () => {
 		start(transcript, 'read_file');
 		expect(heartbeatStatus('running', transcript, { kind: 'tool', name: 'read_file' })).toBeNull();
 		transcript.finishTool('read_file');
+		expect(workHostsPreparing(transcript.blocks()[0])).toBe(true);
+		expect(heartbeatStatus('running', transcript, { kind: 'preparing' })).toBeNull();
+		transcript.pushReasoning('plan');
+		expect(workHostsPreparing(transcript.blocks()[0])).toBe(false);
+		expect(heartbeatStatus('running', transcript, { kind: 'thinking' })).toBeNull();
+	});
+
+	it('heartbeat still shows preparing when no work group can host it', () => {
+		const transcript = new Transcript();
+		expect(workHostsPreparing(transcript.blocks().at(-1))).toBe(false);
 		expect(heartbeatStatus('running', transcript, { kind: 'preparing' })).toBe(
 			'Preparing next moves'
 		);
-		transcript.pushReasoning('plan');
-		expect(heartbeatStatus('running', transcript, { kind: 'thinking' })).toBeNull();
+	});
+
+	it('sealed or running work does not host preparing', () => {
+		const transcript = new Transcript();
+		start(transcript, 'read_file');
+		expect(workHostsPreparing(transcript.blocks()[0])).toBe(false);
+		transcript.finishTool('read_file');
+		transcript.finishRunningTools();
+		expect(workHostsPreparing(transcript.blocks()[0])).toBe(false);
 	});
 
 	it('snapshot copies streamed text so later deltas do not mutate the view copy', () => {
