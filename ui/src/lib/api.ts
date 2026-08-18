@@ -2,8 +2,10 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
 	Bootstrap,
 	ComputerApproval,
+	ConversationView,
 	HistoryItem,
-	SettingsView
+	SettingsView,
+	StartTaskResult
 } from './types';
 
 export function bootstrap() {
@@ -11,7 +13,7 @@ export function bootstrap() {
 }
 
 export function startTask(prompt: string) {
-	return invoke<string>('start_task', { prompt });
+	return invoke<StartTaskResult>('start_task', { prompt });
 }
 
 export function approve(id: string) {
@@ -56,6 +58,10 @@ export function testConnection() {
 
 export function listHistory() {
 	return invoke<HistoryItem[]>('list_history');
+}
+
+export function openConversation(id: string) {
+	return invoke<ConversationView>('open_conversation', { id });
 }
 
 export function cycleComputerApproval() {

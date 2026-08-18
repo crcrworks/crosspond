@@ -69,6 +69,7 @@ pub fn run() {
             commands::save_secret,
             commands::test_connection,
             commands::list_history,
+            commands::open_conversation,
             commands::cycle_computer_approval,
             commands::set_computer_approval,
             commands::permissions,

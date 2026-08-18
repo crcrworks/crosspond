@@ -1,4 +1,11 @@
-import type { AgentEvent, ComputerApproval, HistoryItem, Receipt, WindowState } from './types';
+import type {
+	AgentEvent,
+	ComputerApproval,
+	ConversationView,
+	HistoryItem,
+	Receipt,
+	WindowState
+} from './types';
 import {
 	Transcript,
 	failedOffersSettings,
@@ -21,6 +28,7 @@ export class LauncherSession {
 	onboardingHint = $state<string | null>(null);
 	badges = $state<string[]>([]);
 	currentTask = $state<string | null>(null);
+	currentConversation = $state<string | null>(null);
 	pendingApproval = $state<{
 		id: string;
 		title: string;
@@ -79,6 +87,7 @@ export class LauncherSession {
 		this.overlay = 'none';
 		this.onboardingHint = null;
 		this.currentTask = null;
+		this.currentConversation = null;
 		this.pendingApproval = null;
 		this.artifacts = [];
 		this.receipt = null;
@@ -174,8 +183,9 @@ export class LauncherSession {
 		this.bump();
 	}
 
-	beginTask(taskId: string, prompt: string) {
+	beginTask(taskId: string, conversationId: string, prompt: string) {
 		this.currentTask = taskId;
+		this.currentConversation = conversationId;
 		this.transcript.pushUser(prompt);
 		this.artifacts = [];
 		this.receipt = null;
@@ -186,6 +196,32 @@ export class LauncherSession {
 		this.input = '';
 		this.placeholder = FOLLOW_UP;
 		this.failedMessage = null;
+		this.bump();
+	}
+
+	restoreConversation(view: ConversationView) {
+		for (const timer of this.#finishTimers.values()) clearTimeout(timer);
+		this.#finishTimers.clear();
+		this.#toolStarts = [];
+		this.transcript.restore(view.transcript);
+		this.currentConversation = view.id;
+		this.currentTask = null;
+		this.pendingApproval = null;
+		this.artifacts = [...view.artifact_names];
+		this.receipt = view.receipt;
+		this.activity = { kind: 'thinking' };
+		this.overlay = 'none';
+		this.historySelected = null;
+		this.placeholder = FOLLOW_UP;
+		this.input = '';
+		this.failedMessage = null;
+		if (view.status === 'failed') {
+			this.state = 'failed';
+		} else if (view.status === 'cancelled' || view.status === 'running') {
+			this.state = 'cancelled';
+		} else {
+			this.state = 'completed';
+		}
 		this.bump();
 	}
 

@@ -347,4 +347,37 @@ describe('transcript', () => {
 		expect(transcript.snapshot()[0]).toMatchObject({ kind: 'text', text: 'Hello' });
 		expect(first).not.toBe(transcript.blocks());
 	});
+
+	it('restore hydrates a sealed transcript that can continue', () => {
+		const transcript = new Transcript();
+		transcript.restore([
+			{ kind: 'user', text: 'hello' },
+			{
+				kind: 'work',
+				expanded: false,
+				startedAt: 0,
+				workedMs: 2500,
+				steps: [
+					{
+						kind: 'thinking',
+						text: 'plan',
+						expanded: false,
+						startedAt: 0,
+						durationMs: 1200
+					},
+					{
+						kind: 'tool',
+						tool: { name: 'read_file', summary: 'notes.md', running: false }
+					}
+				]
+			},
+			{ kind: 'text', text: 'Done.' }
+		]);
+		expect(transcript.blocks()).toHaveLength(3);
+		expect(collapsedLabel(transcript.blocks()[1], false)).toBe('Worked for 2s');
+		expect(transcript.runningTool()).toBeNull();
+		transcript.pushUser('again');
+		expect(transcript.blocks()).toHaveLength(4);
+		expect(transcript.blocks()[3]).toMatchObject({ kind: 'user', text: 'again' });
+	});
 });

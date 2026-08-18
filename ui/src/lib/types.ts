@@ -1,3 +1,5 @@
+import type { TranscriptBlock } from './transcript';
+
 export type ComputerApproval = 'auto' | 'agent' | 'manual';
 
 export type AgentEvent =
@@ -35,6 +37,19 @@ export type HistoryItem = {
 	group: string;
 	receipt: Receipt | null;
 	artifact_names: string[];
+};
+
+export type ConversationView = {
+	id: string;
+	status: string;
+	transcript: TranscriptBlock[];
+	receipt: Receipt | null;
+	artifact_names: string[];
+};
+
+export type StartTaskResult = {
+	task_id: string;
+	conversation_id: string;
 };
 
 export type SettingsView = {

@@ -5,7 +5,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::ids::TaskId;
+use crate::ids::{ConversationId, TaskId};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Receipt {
@@ -27,6 +27,7 @@ pub fn write_task_meta(
     prompt: &str,
     status: &str,
     workspace: Option<&Path>,
+    conversation_id: ConversationId,
 ) {
     let _ = fs::create_dir_all(task_dir);
     let json = serde_json::json!({
@@ -34,6 +35,7 @@ pub fn write_task_meta(
         "prompt": prompt,
         "status": status,
         "workspace": workspace.map(|path| path.to_string_lossy().into_owned()),
+        "conversation_id": conversation_id.to_string(),
     });
     if let Ok(text) = serde_json::to_string_pretty(&json) {
         let _ = fs::write(task_dir.join("task.json"), text);

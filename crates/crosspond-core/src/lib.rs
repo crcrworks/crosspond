@@ -7,6 +7,7 @@
 mod command;
 mod config;
 mod context;
+mod conversation;
 mod event;
 mod history;
 mod hotkey;
@@ -25,6 +26,9 @@ pub use context::{
     AppContext, ContextCapsule, ContextCollector, MAX_AMBIENT_TEXT_CHARS, NullContextCollector,
     StagedInput, WindowContext,
 };
+pub use conversation::{
+    ConversationView, TranscriptBlock, conversation_artifact_path, open_conversation,
+};
 pub use crosspond_knowledge::{
     FsVaultRepository, IndexedVault, KnowledgeId, KnowledgeNote, NoteKind, SearchHit, SearchIndex,
     VaultError, VaultRepository, index_db_path,
@@ -32,7 +36,7 @@ pub use crosspond_knowledge::{
 pub use event::AgentEvent;
 pub use history::{TaskHistoryEntry, history_group_label, history_title, list_recent_tasks};
 pub use hotkey::{GlobalHotkeyService, HotkeyEvent};
-pub use ids::TaskId;
+pub use ids::{ConversationId, TaskId};
 pub use policy::{
     AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate, evaluate_with,
     risk_for_tool,

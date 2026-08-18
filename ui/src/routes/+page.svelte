@@ -7,11 +7,11 @@
 		hideLauncher,
 		listHistory,
 		loadSettings,
+		openConversation,
 		openSettings,
 		reject,
 		resetSession,
 		revealArtifact,
-		revealHistoryArtifact,
 		setComputerApproval,
 		setUiFlags,
 		startTask,
@@ -69,7 +69,7 @@
 		return firstUserTitle(session.transcript.blocks());
 	});
 	const historyTabs = $derived(
-		session.history.filter((item) => item.id !== session.currentTask)
+		session.history.filter((item) => item.id !== session.currentConversation)
 	);
 
 	// Size follows compact/overlay/badges, not transcript `rev`.
@@ -152,8 +152,8 @@
 		const prompt = session.input.trim();
 		if (prompt.length === 0) return;
 		try {
-			const taskId = await startTask(prompt);
-			session.beginTask(taskId, prompt);
+			const started = await startTask(prompt);
+			session.beginTask(started.task_id, started.conversation_id, prompt);
 			resetComposerSize();
 		} catch (error) {
 			session.transcript.pushNotice(String(error));
@@ -186,8 +186,31 @@
 		}
 		session.history = await listHistory();
 		session.overlay = 'history';
-		session.historySelected = session.history.length > 0 ? 0 : null;
+		session.historySelected = null;
 		session.bump();
+	}
+
+	async function openPast(id: string) {
+		if (session.busy) return;
+		if (id === session.currentConversation) {
+			session.overlay = 'none';
+			session.historySelected = null;
+			session.bump();
+			return;
+		}
+		try {
+			const view = await openConversation(id);
+			session.restoreConversation(view);
+			resetComposerSize();
+			await refreshHistory();
+			textarea?.focus();
+		} catch (error) {
+			session.transcript.pushNotice(String(error));
+			session.state = 'failed';
+			session.failedMessage = String(error);
+			session.overlay = 'none';
+			session.bump();
+		}
 	}
 
 	async function onEscape() {
@@ -259,22 +282,14 @@
 			liveTitle={session.inConversation ? (liveTitle ?? 'Chat') : null}
 			liveActive={session.overlay === 'none' && session.inConversation}
 			entries={historyTabs}
-			selectedId={session.overlay === 'history' && session.historySelected !== null
-				? session.history[session.historySelected]?.id ?? null
-				: null}
+			selectedId={null}
 			onnew={() => void onNew()}
 			onlive={() => {
 				session.overlay = 'none';
 				session.historySelected = null;
 				session.bump();
 			}}
-			onselect={(id) => {
-				const index = session.history.findIndex((item) => item.id === id);
-				if (index < 0) return;
-				session.overlay = 'history';
-				session.historySelected = index;
-				session.bump();
-			}}
+			onselect={(id) => void openPast(id)}
 		/>
 	{/if}
 	{#if session.overlay === 'onboarding'}
@@ -334,11 +349,7 @@
 			{:else if session.overlay === 'history'}
 				<HistoryPanel
 					entries={session.history}
-					selected={session.historySelected}
-					showBack={false}
-					onselect={(index) => (session.historySelected = index)}
-					onback={() => (session.historySelected = null)}
-					onreveal={(taskId, name) => void revealHistoryArtifact(taskId, name)}
+					onselect={(id) => void openPast(id)}
 				/>
 			{:else}
 				<TranscriptView

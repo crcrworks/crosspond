@@ -47,11 +47,11 @@ Tasks no longer get a workspace directory on start. Chat and computer-use action
 Polish: a human-readable receipt after each task, recent task history, and first-launch onboarding — on top of the Phase 11 Whole-Mac agent.
 
 - **Receipt** — after a task, the launcher keeps the summary in the conversation and lists artifacts with **Show in Finder**. Receipts stay on disk as `receipt.json` (no secrets, calendar notes, command output, or typed text). Changed action lines are not shown in the launcher.
-- **History** — **History** (or ↑ when the input is empty) lists recent tasks from `~/.crosspond/tasks/`. This is task history, not a chat sidebar. Opening an item shows that receipt; it does not resume the conversation.
+- **History** — **History** (or ↑ when the input is empty) lists recent conversations from `~/.crosspond/tasks/`, grouped by `conversation_id`. Opening an item shows the same transcript as the live chat (user turns, work steps, commentary, receipt) and the follow-up field continues that thread. **New** still starts a blank session.
 - **Onboarding** — first launch with no API key shows a welcome and Settings. Do not prompt for Accessibility yet. After a key is saved: “Press Option + Space anywhere.”
 - **Settings → Permissions** — Accessibility, Screen Recording, and Calendars with **Open System Settings**. Chat still works if they are off.
 
-Demo: first launch → Settings → Option + Space → do work → see the receipt → hide → Option + Space → History → open a past task.
+Demo: first launch → Settings → Option + Space → do work → see the transcript → hide → Option + Space → History → open a past conversation and follow up.
 
 Phase 11 Whole-Mac tools still apply (any app, keyboard/scroll, shell/URL, EventKit, external file reads, web tools, earlier computer use).
 

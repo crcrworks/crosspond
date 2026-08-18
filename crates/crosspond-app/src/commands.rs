@@ -2,9 +2,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crosspond_core::{
-    AppConfig, ApprovalId, ComputerApprovalMode, MISSING_API_KEY_MESSAGE, Receipt, RuntimeCommand,
-    SecretKey, SecretString, StartTaskRequest, TaskId, default_tasks_root, history_group_label,
-    history_title, list_recent_tasks, provider_key_is_set,
+    AppConfig, ApprovalId, ComputerApprovalMode, ConversationId, ConversationView,
+    MISSING_API_KEY_MESSAGE, Receipt, RuntimeCommand, SecretKey, SecretString, StartTaskRequest,
+    TaskId, conversation_artifact_path, default_tasks_root, history_group_label, history_title,
+    list_recent_tasks, open_conversation as load_conversation, provider_key_is_set,
 };
 use crosspond_macos::{PermissionKind, PermissionSnapshot};
 use serde::Serialize;
@@ -58,12 +59,18 @@ pub fn bootstrap(state: State<AppState>) -> Bootstrap {
     }
 }
 
+#[derive(Serialize)]
+pub struct StartTaskResult {
+    pub task_id: String,
+    pub conversation_id: String,
+}
+
 #[tauri::command]
 pub fn start_task(
     prompt: String,
     app: AppHandle,
     state: State<AppState>,
-) -> Result<String, String> {
+) -> Result<StartTaskResult, String> {
     let prompt = prompt.trim().to_string();
     if prompt.is_empty() {
         return Err("prompt is empty".into());
@@ -73,6 +80,8 @@ pub fn start_task(
     }
     let task_id = TaskId::new();
     let mut inner = state.lock_inner();
+    let conversation_id = inner.conversation_id.unwrap_or_else(ConversationId::new);
+    inner.conversation_id = Some(conversation_id);
     let context = inner.ambient.clone();
     inner.current_task = Some(task_id);
     inner.in_conversation = true;
@@ -88,8 +97,12 @@ pub fn start_task(
             task_id,
             prompt,
             context,
+            conversation_id,
         }));
-    Ok(task_id.to_string())
+    Ok(StartTaskResult {
+        task_id: task_id.to_string(),
+        conversation_id: conversation_id.to_string(),
+    })
 }
 
 #[tauri::command]
@@ -118,6 +131,7 @@ pub fn reset_session(app: AppHandle, state: State<AppState>) {
     {
         let mut inner = state.lock_inner();
         inner.current_task = None;
+        inner.conversation_id = None;
         inner.in_conversation = false;
         inner.compact = true;
         inner.artifacts.clear();
@@ -229,6 +243,36 @@ pub fn list_history() -> Vec<HistoryItem> {
 }
 
 #[tauri::command]
+pub fn open_conversation(
+    id: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<ConversationView, String> {
+    let view = load_conversation(&default_tasks_root(), &id)
+        .ok_or_else(|| "conversation not found".to_string())?;
+    let parsed: ConversationId = id
+        .parse()
+        .map_err(|_| "conversation not found".to_string())?;
+    let mut artifacts = Vec::new();
+    for name in &view.artifact_names {
+        if let Some(path) = conversation_artifact_path(&default_tasks_root(), &id, name) {
+            artifacts.push((name.clone(), path));
+        }
+    }
+    let mut inner = state.lock_inner();
+    inner.conversation_id = Some(parsed);
+    inner.current_task = None;
+    inner.in_conversation = true;
+    inner.compact = false;
+    inner.artifacts = artifacts;
+    let seq = inner.bump_resize_seq();
+    drop(inner);
+    launcher::request_resize_with_seq(&app, false, 0, 0.0, seq);
+    state.commands.send(RuntimeCommand::ResumeSession(parsed));
+    Ok(view)
+}
+
+#[tauri::command]
 pub fn cycle_computer_approval(state: State<AppState>) -> Result<ComputerApprovalMode, String> {
     let mut config = state.config.load().unwrap_or_default();
     config.computer_approval = config.computer_approval.cycle();
@@ -280,13 +324,7 @@ pub fn reveal_artifact(name: String, state: State<AppState>) -> Result<(), Strin
 
 #[tauri::command]
 pub fn reveal_history_artifact(task_id: String, name: String) -> Result<(), String> {
-    let entries = list_recent_tasks(&default_tasks_root(), 50);
-    let entry = entries
-        .iter()
-        .find(|entry| entry.id == task_id)
-        .ok_or_else(|| "task not found".to_string())?;
-    let path = entry
-        .artifact_path(&name)
+    let path = conversation_artifact_path(&default_tasks_root(), &task_id, &name)
         .ok_or_else(|| "artifact not found".to_string())?;
     reveal_in_finder(&path)
 }
