@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { APPROVAL_MODES, approvalLabel } from '$lib/tools';
+	import { composerExtraHeight } from '$lib/launcher-size';
 	import type { ComputerApproval } from '$lib/types';
 	import Chevron from './Chevron.svelte';
 	import Icon from './Icon.svelte';
@@ -58,9 +59,8 @@
 	function resize() {
 		if (!textarea) return;
 		textarea.style.height = 'auto';
-		const next = Math.min(textarea.scrollHeight, 160);
-		textarea.style.height = `${next}px`;
-		ongrow(Math.max(0, next - 24));
+		ongrow(composerExtraHeight(textarea.scrollHeight));
+		textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
 	}
 
 	function onPromptKey(event: KeyboardEvent) {
