@@ -17,6 +17,7 @@
 		startTask,
 		syncLauncherSize
 	} from '$lib/api';
+	import ActivityLabel from '$lib/components/ActivityLabel.svelte';
 	import ApprovalCard from '$lib/components/ApprovalCard.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import HistoryPanel from '$lib/components/HistoryPanel.svelte';
@@ -317,8 +318,8 @@
 						/>
 					{/if}
 					{#if session.heartbeat}
-						<div class="w-full overflow-hidden pt-2 text-sm text-[var(--muted)]">
-							{session.heartbeat}
+						<div class="w-full overflow-hidden pt-2 text-sm">
+							<ActivityLabel text={session.heartbeat} running />
 						</div>
 					{/if}
 					{#if session.offerSettings}
