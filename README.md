@@ -6,19 +6,14 @@ Phase 12 adds receipts in the launcher, recent task history, and first-launch on
 
 ## Run
 
-Xcode 27 needs the Metal toolchain once:
-
-```bash
-xcodebuild -downloadComponent MetalToolchain
-```
-
-Then:
-
 ```bash
 # Computer use needs cua-driver on PATH (https://cua.ai/cua-driver).
 # Override with CUA_DRIVER_BIN if it is installed somewhere else.
-cargo run -p crosspond-app
+npm --prefix ui install
+npm --prefix ui run desktop
 ```
+
+That runs the Tauri 2 host (`crates/crosspond-app`) and the SvelteKit Vite server together. To run them separately: `npm --prefix ui run dev` then `cargo run -p crosspond-app`. `npm --prefix ui run check` and `npm --prefix ui test` cover the frontend.
 
 Then:
 
@@ -29,7 +24,7 @@ Then:
 5. Press **Option + Space**. A badge should show the app and “Selected text: N chars” or “N selected files”.
 6. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions show an **Allow** / **Cancel** card first (unless Auto). After a task, a receipt lists what changed; **History** opens recent tasks.
 
-**Escape** or **Stop** cancels the whole task. Approval **Cancel** rejects only that action. Hiding the window starts a new session.
+**Escape** or **Stop** cancels the whole task while it is running. Approval **Cancel** rejects only that action. Hiding the window keeps work running and keeps the conversation; press **New** to start fresh.
 
 If hotkey registration fails, the window opens immediately so the app is still usable.
 
@@ -41,8 +36,10 @@ For local OpenAI-compatible servers, Base URL must include `/v1` (for example `h
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+npm --prefix ui run check
+npm --prefix ui test
 ```
 
 ## Bundle notes
 
-`resources/macos/Info.plist` is the minimum accessory-app manifest (`LSUIElement`). `cargo run` still shows a Dock icon because it is not wrapped in an `.app` bundle yet. Accessibility / Apple Events usage strings are in that plist for a future bundle.
+`resources/macos/Info.plist` is the minimum accessory-app manifest (`LSUIElement`). The Tauri host also sets Accessory at runtime so `cargo run` / `tauri dev` do not steal the frontmost app (tao defaults to Regular). Accessibility / Apple Events usage strings are in that plist for a future bundle.

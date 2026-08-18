@@ -19,6 +19,10 @@ pub struct AppConfig {
     pub model: String,
     #[serde(default)]
     pub computer_approval: ComputerApprovalMode,
+    /// Absolute path to an Obsidian-compatible Knowledge Vault.
+    /// Unset means Crosspond will not read or write a vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_path: Option<PathBuf>,
 }
 
 impl Default for AppConfig {
@@ -28,6 +32,7 @@ impl Default for AppConfig {
             base_url: "https://api.openai.com/v1".into(),
             model: "gpt-4o-mini".into(),
             computer_approval: ComputerApprovalMode::Manual,
+            vault_path: None,
         }
     }
 }
@@ -124,6 +129,8 @@ mod tests {
         let loaded = store.load().unwrap();
         assert_eq!(loaded, AppConfig::default());
         assert_eq!(loaded.computer_approval, ComputerApprovalMode::Manual);
+        assert!(loaded.vault_path.is_none());
+        assert!(!text.contains("vault_path"));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -134,6 +141,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.computer_approval, ComputerApprovalMode::Manual);
+        assert!(parsed.vault_path.is_none());
+    }
+
+    #[test]
+    fn vault_path_is_configurable() {
+        let parsed: AppConfig = serde_json::from_str(
+            r#"{"provider":"openai_compatible","base_url":"https://api.openai.com/v1","model":"gpt-4o-mini","vault_path":"/Users/example/Documents/Crosspond"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.vault_path.as_deref(),
+            Some(Path::new("/Users/example/Documents/Crosspond"))
+        );
     }
 
     #[test]

@@ -1,13 +1,15 @@
-//! Permission status for Settings. Do not prompt at first launch.
+use serde::Serialize;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Permission status for Settings. Do not prompt at first launch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct PermissionSnapshot {
     pub accessibility: bool,
     pub screen_recording: bool,
     pub calendars: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PermissionKind {
     Accessibility,
     ScreenRecording,

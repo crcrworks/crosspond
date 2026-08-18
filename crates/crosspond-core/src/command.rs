@@ -1,8 +1,11 @@
+use serde::{Deserialize, Serialize};
+
 use crate::context::ContextCapsule;
 use crate::ids::TaskId;
 
 /// Identifier for a pending approval prompt.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct ApprovalId(uuid::Uuid);
 
 impl ApprovalId {
@@ -24,7 +27,7 @@ pub enum RuntimeCommand {
     Approve(ApprovalId),
     Reject(ApprovalId),
     Cancel(TaskId),
-    /// Drop in-memory follow-up history. Sent when the launcher hides.
+    /// Drop in-memory follow-up history. Sent when the user starts a new conversation (New).
     ResetSession,
     /// Verify the current provider settings without starting a task.
     TestConnection,

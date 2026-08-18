@@ -47,6 +47,7 @@ struct LiveState {
     window_id: u32,
     image_w: u32,
     image_h: u32,
+    snapshot_id: Option<String>,
     nodes: HashMap<u32, LiveNode>,
 }
 
@@ -68,6 +69,7 @@ struct WindowRecord {
 struct ParsedSnapshot {
     app_name: String,
     window_id: u32,
+    snapshot_id: Option<String>,
     truncated: bool,
     elements: Vec<CuaElement>,
     image: Option<CapturedImage>,
@@ -126,19 +128,17 @@ impl CuaHost {
         crate::tcc::ensure_screen_capture()?;
         let (pid, name) = resolve_target(pid, app_name)?;
         let parsed = self.window_state(pid, &name, true)?;
-        let image = parsed
-            .image
-            .clone()
-            .ok_or_else(|| ToolError::Failed("cua-driver returned no screenshot".into()))?;
-        let app_name = parsed.app_name.clone();
-        self.store_and_render(pid, parsed)?;
-        Ok(Screenshot {
-            bytes: image.bytes,
-            media_type: image.media_type,
-            width: image.width,
-            height: image.height,
-            app_name,
-        })
+        self.screenshot_from_parsed(pid, parsed)
+    }
+
+    pub(crate) fn capture_live(&self) -> Result<Screenshot, ToolError> {
+        if !crate::ax::is_trusted() {
+            return Err(not_trusted());
+        }
+        crate::tcc::ensure_screen_capture()?;
+        let live = self.live_state()?;
+        let parsed = self.window_state_at(live.pid, &live.app_name, live.window_id, true)?;
+        self.screenshot_from_parsed(live.pid, parsed)
     }
 
     pub(crate) fn click_pixels(&self, x: u32, y: u32) -> Result<String, ToolError> {
@@ -155,13 +155,7 @@ impl CuaHost {
                 live.image_w, live.image_h
             )));
         }
-        let arguments = json!({
-            "pid": live.pid,
-            "window_id": live.window_id,
-            "x": x,
-            "y": y,
-            "delivery_mode": "background"
-        });
+        let arguments = pixel_click_args(&live, x, y);
         let result = self.call("click", arguments)?;
         tool_error(&result)?;
         Ok(format!("Clicked ({x}, {y}) in {}.", live.app_name))
@@ -190,12 +184,9 @@ impl CuaHost {
         let mut arguments = json!({
             "pid": live.pid,
             "window_id": live.window_id,
-            "element_index": id,
             "value": value
         });
-        if let Some(token) = &node.token {
-            arguments["element_token"] = json!(token);
-        }
+        attach_element(&mut arguments, &live, id, node.token.as_deref())?;
         let result = self.call("set_value", arguments)?;
         tool_error(&result)?;
         std::thread::sleep(Duration::from_millis(50));
@@ -339,10 +330,7 @@ impl CuaHost {
         if let Some(node_id) = node_id {
             let id = parse_node_id(node_id)?;
             let node = live.nodes.get(&id).cloned().ok_or_else(stale_node)?;
-            arguments["element_index"] = json!(id);
-            if let Some(token) = &node.token {
-                arguments["element_token"] = json!(token);
-            }
+            attach_element(&mut arguments, &live, id, node.token.as_deref())?;
         }
         let result = self.call("type_text", arguments)?;
         tool_error(&result)?;
@@ -392,10 +380,7 @@ impl CuaHost {
         if let Some(node_id) = node_id {
             let id = parse_node_id(node_id)?;
             let node = live.nodes.get(&id).cloned().ok_or_else(stale_node)?;
-            arguments["element_index"] = json!(id);
-            if let Some(token) = &node.token {
-                arguments["element_token"] = json!(token);
-            }
+            attach_element(&mut arguments, &live, id, node.token.as_deref())?;
         } else if let (Some(x), Some(y)) = (x, y) {
             arguments["x"] = json!(x);
             arguments["y"] = json!(y);
@@ -414,14 +399,31 @@ impl CuaHost {
         let mut arguments = json!({
             "pid": live.pid,
             "window_id": live.window_id,
-            "element_index": index,
             "delivery_mode": "background"
         });
-        if let Some(token) = token {
-            arguments["element_token"] = json!(token);
-        }
+        attach_element(&mut arguments, live, index, token)?;
         let result = self.call("click", arguments)?;
         tool_error(&result)
+    }
+
+    fn screenshot_from_parsed(
+        &self,
+        pid: i32,
+        parsed: ParsedSnapshot,
+    ) -> Result<Screenshot, ToolError> {
+        let image = parsed
+            .image
+            .clone()
+            .ok_or_else(|| ToolError::Failed("cua-driver returned no screenshot".into()))?;
+        let app_name = parsed.app_name.clone();
+        self.store_and_render(pid, parsed)?;
+        Ok(Screenshot {
+            bytes: image.bytes,
+            media_type: image.media_type,
+            width: image.width,
+            height: image.height,
+            app_name,
+        })
     }
 
     fn window_state(
@@ -431,18 +433,33 @@ impl CuaHost {
         include_screenshot: bool,
     ) -> Result<ParsedSnapshot, ToolError> {
         let window = self.largest_window(pid, app_name)?;
+        let name = if window.app_name.is_empty() {
+            app_name
+        } else {
+            window.app_name.as_str()
+        };
+        self.window_state_at(pid, name, window.id, include_screenshot)
+    }
+
+    fn window_state_at(
+        &self,
+        pid: i32,
+        app_name: &str,
+        window_id: u32,
+        include_screenshot: bool,
+    ) -> Result<ParsedSnapshot, ToolError> {
         let arguments = json!({
             "pid": pid,
-            "window_id": window.id,
+            "window_id": window_id,
             "include_screenshot": include_screenshot,
             "max_elements": MAX_AX_NODES,
             "max_depth": MAX_AX_DEPTH
         });
         let result = self.call("get_window_state", arguments)?;
         tool_error(&result)?;
-        let mut parsed = parse_snapshot(&result, window.id, &window.app_name)?;
+        let mut parsed = parse_snapshot(&result, window_id, app_name)?;
         if parsed.app_name.is_empty() {
-            parsed.app_name = window.app_name;
+            parsed.app_name = app_name.to_string();
         }
         Ok(parsed)
     }
@@ -488,12 +505,15 @@ impl CuaHost {
             .lock()
             .map_err(|_| ToolError::Failed("cua-driver state is unavailable".into()))?;
         let previous = live.take();
+        let same_window = previous
+            .as_ref()
+            .is_some_and(|state| state.pid == pid && state.window_id == parsed.window_id);
         let (image_w, image_h) = match &parsed.image {
             Some(image) => (image.width, image.height),
-            None => previous
-                .filter(|state| state.pid == pid && state.window_id == parsed.window_id)
+            None if same_window => previous
                 .map(|state| (state.image_w, state.image_h))
                 .unwrap_or((0, 0)),
+            None => (0, 0),
         };
         *live = Some(LiveState {
             pid,
@@ -501,6 +521,7 @@ impl CuaHost {
             window_id: parsed.window_id,
             image_w,
             image_h,
+            snapshot_id: parsed.snapshot_id,
             nodes,
         });
         Ok(text)
@@ -519,6 +540,12 @@ impl CuaHost {
         })
     }
 
+    fn clear_live(&self) {
+        if let Ok(mut live) = self.inner.live.lock() {
+            *live = None;
+        }
+    }
+
     fn call(&self, name: &str, arguments: Value) -> Result<Value, ToolError> {
         let mut slot = self
             .inner
@@ -527,6 +554,7 @@ impl CuaHost {
             .map_err(|_| ToolError::Failed("cua-driver state is unavailable".into()))?;
         if slot.as_mut().is_some_and(|session| !session.alive()) {
             *slot = None;
+            self.clear_live();
         }
         if slot.is_none() {
             *slot = Some(McpSession::spawn()?);
@@ -538,6 +566,7 @@ impl CuaHost {
             Ok(value) => Ok(value),
             Err(error) => {
                 *slot = None;
+                self.clear_live();
                 Err(error)
             }
         }
@@ -722,23 +751,26 @@ fn mcp_args(binary: &Path) -> Vec<String> {
             )
         })
         .unwrap_or_default();
+    mcp_args_from_help(&help)
+}
+
+fn mcp_args_from_help(help: &str) -> Vec<String> {
     let mut args = vec!["mcp".to_string()];
-    if flag_listed(&help, "--direct") {
+    if flag_listed(help, "--direct") {
         args.push("--direct".into());
-        if flag_listed(&help, "--embedded") {
+        if flag_listed(help, "--embedded") {
             args.push("--embedded".into());
-            if flag_listed(&help, "--host-bundle-id") {
+            if flag_listed(help, "--host-bundle-id") {
                 args.push("--host-bundle-id".into());
                 args.push(CROSSPOND_BUNDLE_ID.into());
             }
         }
-        if flag_listed(&help, "--dangerously-bypass-approvals") {
-            args.push("--dangerously-bypass-approvals".into());
-        }
-    } else if flag_listed(&help, "--no-daemon-relaunch") {
+        // cua-driver 0.20+ rejects serve-only authorization flags on `mcp`
+        // (exit 64). Unrestricted mode is set via CUA_DRIVER_* env vars.
+    } else if flag_listed(help, "--no-daemon-relaunch") {
         args.push("--no-daemon-relaunch".into());
     }
-    if flag_listed(&help, "--no-overlay") {
+    if flag_listed(help, "--no-overlay") {
         args.push("--no-overlay".into());
     }
     args
@@ -885,10 +917,40 @@ fn parse_snapshot(
     Ok(ParsedSnapshot {
         app_name: json_string(&structured, "app_name").unwrap_or_else(|| fallback_name.to_string()),
         window_id: json_u32(&structured, "window_id").unwrap_or(window_id),
+        snapshot_id: json_string(&structured, "snapshot_id"),
         truncated,
         elements,
         image,
     })
+}
+
+fn pixel_click_args(live: &LiveState, x: u32, y: u32) -> Value {
+    json!({
+        "pid": live.pid,
+        "window_id": live.window_id,
+        "x": x,
+        "y": y,
+        "delivery_mode": "background",
+        "scope": "window"
+    })
+}
+
+fn attach_element(
+    arguments: &mut Value,
+    live: &LiveState,
+    index: u32,
+    token: Option<&str>,
+) -> Result<(), ToolError> {
+    arguments["element_index"] = json!(index);
+    if let Some(token) = token.filter(|token| !token.is_empty()) {
+        arguments["element_token"] = json!(token);
+    }
+    if let Some(snapshot_id) = &live.snapshot_id {
+        arguments["snapshot_id"] = json!(snapshot_id);
+    } else if token.is_none() {
+        return Err(stale_node());
+    }
+    Ok(())
 }
 
 fn parse_element(value: &Value) -> Option<CuaElement> {
@@ -1129,7 +1191,7 @@ fn resolve_target(pid: Option<i32>, app_name: Option<&str>) -> Result<(i32, Stri
     let Some(app) = crate::context::frontmost_app() else {
         return Err(no_target());
     };
-    if app.bundle_id == CROSSPOND_BUNDLE_ID || app.pid == std::process::id() as i32 {
+    if crate::context::is_host_app(&app) {
         return Err(no_target());
     }
     Ok((app.pid, app.name))
@@ -1259,5 +1321,100 @@ mod tests {
             "  --direct    Own the runtime\n  --embedded",
             "--direct"
         ));
+    }
+
+    #[test]
+    fn mcp_args_prefer_direct_without_serve_authorization_flags() {
+        let help = "\
+mcp options:
+  --direct
+  --embedded
+  --host-bundle-id <id>
+agent authorization (serve only):
+  --dangerously-bypass-approvals
+  --no-overlay";
+        let args = mcp_args_from_help(help);
+        assert_eq!(
+            args,
+            vec![
+                "mcp",
+                "--direct",
+                "--embedded",
+                "--host-bundle-id",
+                CROSSPOND_BUNDLE_ID,
+                "--no-overlay",
+            ]
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "--dangerously-bypass-approvals")
+        );
+    }
+
+    #[test]
+    fn mcp_args_fall_back_to_no_daemon_relaunch() {
+        assert_eq!(
+            mcp_args_from_help("Usage: cua-driver mcp --no-daemon-relaunch"),
+            vec!["mcp", "--no-daemon-relaunch"]
+        );
+    }
+
+    fn sample_live() -> LiveState {
+        LiveState {
+            pid: 42,
+            app_name: "Helium".into(),
+            window_id: 9,
+            image_w: 1568,
+            image_h: 980,
+            snapshot_id: Some("s00abcdef".into()),
+            nodes: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn pixel_click_args_are_window_local_png_pixels() {
+        let args = pixel_click_args(&sample_live(), 120, 40);
+        assert_eq!(args["pid"], 42);
+        assert_eq!(args["window_id"], 9);
+        assert_eq!(args["x"], 120);
+        assert_eq!(args["y"], 40);
+        assert_eq!(args["scope"], "window");
+        assert_eq!(args["delivery_mode"], "background");
+        assert!(args.get("snapshot_id").is_none());
+        assert!(args.get("target").is_none());
+    }
+
+    #[test]
+    fn element_actions_include_snapshot_id() {
+        let live = sample_live();
+        let mut args = json!({
+            "pid": live.pid,
+            "window_id": live.window_id,
+            "delivery_mode": "background"
+        });
+        attach_element(&mut args, &live, 4, Some("s00abcdef:4")).unwrap();
+        assert_eq!(args["element_index"], 4);
+        assert_eq!(args["element_token"], "s00abcdef:4");
+        assert_eq!(args["snapshot_id"], "s00abcdef");
+    }
+
+    #[test]
+    fn parse_snapshot_reads_snapshot_id() {
+        let parsed = parse_snapshot(
+            &json!({
+                "structuredContent": {
+                    "app_name": "Helium",
+                    "window_id": 9,
+                    "snapshot_id": "s00abcdef",
+                    "elements": []
+                }
+            }),
+            9,
+            "Helium",
+        )
+        .unwrap();
+        assert_eq!(parsed.snapshot_id.as_deref(), Some("s00abcdef"));
+        assert_eq!(parsed.window_id, 9);
     }
 }

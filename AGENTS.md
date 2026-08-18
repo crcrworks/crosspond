@@ -6,51 +6,54 @@ Treat `docs/mvp.md` and `docs/architecture.md` as the product and design source 
 
 Implement one phase at a time. Do not start the next phase until the current one builds, formats, lints, and tests.
 
-Current phase: **12 — Polish (receipts UI, history, onboarding)**.
+Current phase: **Knowledge Vault complete (Phases 0–8)**. UI host is Tauri 2 + SvelteKit.
 
-Out of scope until later phases: drag, `kill_app`, exposing cua-driver’s full catalog, signing/notarization.
+Out of scope until later: drag, `kill_app`, exposing cua-driver’s full catalog, signing/notarization.
 
 ## Crate boundaries
 
 ```
-crosspond-app
-      ↓
+crosspond-app (Tauri)    ui/ (SvelteKit SPA)
+       ↓
 crosspond-core
- ↙          ↘
-model       tools ← macos
+   ↙       ↘
+model    knowledge
+  │
+  └── tools ← macos
 ```
 
-- Only `crosspond-app` may depend on GPUI.
-- `crosspond-core`, `crosspond-model`, and `crosspond-tools` must not depend on GPUI.
+- Only `crosspond-app` may depend on Tauri. Svelte lives in `ui/` and talks to Rust only through invoke/events.
+- `crosspond-core`, `crosspond-model`, `crosspond-tools`, and `crosspond-knowledge` must not depend on Tauri or Svelte.
 - `crosspond-model` must not depend on `crosspond-core`.
+- `crosspond-knowledge` must not depend on Tauri, `crosspond-core`, or `crosspond-macos`.
 - `crosspond-tools` must not depend on `crosspond-macos` (that would cycle through core).
 - `crosspond-macos` may depend on `crosspond-tools` and implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` (cua-driver + EventKit).
 - UI and core must not import `global-hotkey` or Security framework crates directly.
 - `unsafe` stays in `crosspond-macos` (or platform bindings it wraps) and needs a comment.
 
-## GPUI
+## Tauri / Svelte
 
-Do not guess GPUI APIs. Confirm against the pinned crate version:
+Do not guess Tauri 2 APIs. Confirm against the pinned crate versions in the workspace `Cargo.toml`, `crates/crosspond-app/tauri.conf.json`, and compiler errors.
 
-- `gpui = "=0.2.2"` (crates.io, git revision `69e2130295c2649963eb639fc70b4f2ee8ea1624`)
-- that version's `examples/`
-- compiler errors
+The frontend is Svelte 5 + SvelteKit 2 in SPA mode (`@sveltejs/adapter-static` with `fallback: 'index.html'`, `ssr = false`). Do not add SvelteKit server routes or `load` functions that must run at build time against Tauri APIs.
 
-Do not copy later Zed `main` examples (`gpui_platform::application`, extra `ShapedLine::paint` arguments, etc.).
+The WebView must never receive API keys, selected text, Finder paths, screenshot bytes, or calendar notes. Ambient UI gets `badge_lines()` only. `ContextCapsule` stays in Rust `AppState`.
 
-GPUI 0.2.2 has no per-window hide. `App::hide()` / `App::activate(true)` hide and show the whole app, including Settings.
+Hide and show the launcher with per-window `hide()` / `show()`. Do not hide the whole app.
+
+WKWebView owns Japanese IME. Compact-bar click-away still skips hide while the app is active (IME candidate windows).
 
 ## Secrets
 
-Never persist API keys in `config.json`, `.env`, SQLite, logs, or task history. Store them in Keychain via `SecretStore`. `SecretString` must not derive `Debug`. Do not log selected text, Finder paths, Accessibility field values (especially passwords), screenshot bytes, or calendar event notes/bodies.
+Never persist API keys in `config.json`, `.env`, SQLite, logs, task history, or the Knowledge Vault. Store them in Keychain via `SecretStore`. `SecretString` must not derive `Debug`. Do not log selected text, Finder paths, Accessibility field values (especially passwords), screenshot bytes, or calendar event notes/bodies. Vault notes may only store `credential_ref` pointers, never secret values.
 
 ## Cursor Cloud specific instructions
 
-Crosspond is a **macOS-only** GPUI product, but the Cloud Agent VM is **headless Linux**. Standard dev commands live in `README.md` (`cargo fmt`, `cargo clippy`, `cargo test`, `cargo run -p crosspond-app`); the notes below only cover Linux-specific caveats. Rust `1.96.0` (with `rustfmt`/`clippy`) is pinned by `rust-toolchain.toml` and preinstalled.
+Crosspond targets **macOS**, but the Cloud Agent VM is **headless Linux**. Standard dev commands live in `README.md`; the notes below only cover Linux-specific caveats. Rust `1.96.0` (with `rustfmt`/`clippy`) is pinned by `rust-toolchain.toml` and preinstalled.
 
-What works on Linux: `cargo build --workspace`, `cargo test --workspace` (127 tests pass), and `cargo fmt --all --check`. What does not: **running the GUI** — `cargo run -p crosspond-app` builds and starts, then GPUI panics at `platform.rs` (`Failed to initialize X11 client` / `NoSupportedDeviceFound`) because there is no display or Vulkan GPU. That is expected; the real app needs macOS + Metal + a display, so validate GUI changes on macOS.
+The portable crates — `crosspond-core`, `crosspond-model`, `crosspond-tools`, and `crosspond-knowledge` — build, lint, and test on Linux. `cargo fmt --all --check` is clean.
 
-- **App linking:** GPUI links `libstdc++`, but Rust's bundled `lld` does not search the gcc dir (`/usr/lib/gcc/x86_64-linux-gnu/13`) where `libstdc++.so` lives, so `crosspond-app` fails to link out of the box. This is fixed by a Linux-only global cargo config at `/usr/local/cargo/config.toml` (outside the repo, baked into the VM snapshot). Do **not** set a `RUSTFLAGS` env var — it overrides that config and app linking breaks again.
-- **Clippy caveat:** the documented `cargo clippy --workspace --all-targets -- -D warnings` is clean on macOS but fails on Linux **only inside `crosspond-macos`** stub code (`needless_return` / unused imports that don't exist on the macOS implementations). On Linux, lint the platform-independent crates instead: `cargo clippy -p crosspond-core -p crosspond-model -p crosspond-tools --all-targets -- -D warnings`.
-- **macOS-gated tests:** `crosspond-macos` runs only 2 unit tests on Linux; the rest are `#[cfg(target_os = "macos")]`.
-- **Running the core headlessly:** the agent engine `crosspond-app/src/main.rs` drives (`spawn_runtime_with_tools`) is platform-independent and fully runnable without macOS. `crosspond-core`'s runtime tests (e.g. `tool_loop_writes_workspace_file` in `src/runtime.rs`) exercise `StartTask` → model stream → tool call → `receipt.json` end-to-end and are the best way to validate core behavior on Linux.
+- **Clippy caveat:** the documented `cargo clippy --workspace --all-targets -- -D warnings` is clean on macOS but fails on Linux **only inside `crosspond-macos`** stub code (`needless_return` / unused imports that don't exist on the macOS implementations). On Linux, lint the portable crates instead: `cargo clippy -p crosspond-core -p crosspond-model -p crosspond-tools -p crosspond-knowledge --all-targets -- -D warnings`.
+- **macOS-gated tests:** `crosspond-macos` runs only 2 unit tests on Linux; the rest are `#[cfg(target_os = "macos")]` (cua-driver, EventKit, Keychain, hotkeys).
+- **Running the core headlessly:** the agent engine `crosspond-app` drives (`spawn_runtime_with_tools`) is platform-independent and runnable without macOS; `crosspond-core`'s runtime tests exercise `StartTask` → model stream → tool call → receipt end-to-end and are the best way to validate core behavior on Linux.
+- **GUI (Tauri):** `crosspond-app` is a **Tauri 2 + SvelteKit** app (frontend in `ui/`). The desktop GUI does not run on this headless VM, and building it on Linux needs WebKitGTK/GTK/libsoup3 system packages plus a `ui/` npm build that are **not** part of the current VM setup — validate GUI changes on macOS. NOTE: the Linux system-dependency setup and update script for this environment predate the GPUI→Tauri migration and should be re-validated for Tauri before relying on a Linux `crosspond-app` build.

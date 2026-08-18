@@ -50,4 +50,18 @@ impl ScreenshotBackend for MacOsScreenshot {
             self.host.click_pixels(x, y)
         }
     }
+
+    fn recapture(&self) -> Result<Screenshot, ToolError> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            return Err(ToolError::Failed(
+                "Screenshots are only available on macOS".into(),
+            ));
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            self.host.capture_live()
+        }
+    }
 }

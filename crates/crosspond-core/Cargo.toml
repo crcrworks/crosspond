@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+crosspond-knowledge.workspace = true
 crosspond-model.workspace = true
 crosspond-tools.workspace = true
 serde.workspace = true

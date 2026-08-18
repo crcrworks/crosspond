@@ -6,34 +6,26 @@
 use std::ptr;
 
 use core_foundation::base::{CFType, CFTypeRef, TCFType};
-use core_foundation::boolean::CFBoolean;
-use core_foundation::dictionary::CFDictionary;
-use core_foundation::string::{CFString, CFStringRef};
+use core_foundation::string::CFString;
 
 const AX_SUCCESS: i32 = 0;
+/// Keep hotkey-time AX reads off the main thread's unbounded wait. Hung apps
+/// otherwise freeze Option+Space until the default Accessibility timeout.
+const AX_MESSAGING_TIMEOUT_SECS: f32 = 0.25;
 
 type AxUiElementRef = *const std::ffi::c_void;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
-    static kAXTrustedCheckOptionPrompt: CFStringRef;
     fn AXIsProcessTrusted() -> bool;
-    fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef)
-    -> bool;
     fn AXUIElementCreateSystemWide() -> AxUiElementRef;
     fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
+    fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, timeout_in_seconds: f32);
     fn AXUIElementCopyAttributeValue(
         element: AxUiElementRef,
-        attribute: CFStringRef,
+        attribute: core_foundation::string::CFStringRef,
         value: *mut CFTypeRef,
     ) -> i32;
-}
-
-pub fn prompt_and_is_trusted() -> bool {
-    let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
-    let options = CFDictionary::from_CFType_pairs(&[(key, CFBoolean::true_value())]);
-    // SAFETY: `options` is a valid CFDictionary that lives for this call.
-    unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) }
 }
 
 pub fn is_trusted() -> bool {
@@ -57,6 +49,33 @@ pub fn selected_text(pid: i32) -> Option<String> {
     let system = system_wide()?;
     let focused = ax_copy(&system, "AXFocusedUIElement")?;
     ax_string(&focused, "AXSelectedText")
+}
+
+pub fn document_url(pid: i32) -> Option<String> {
+    let app = application_element(pid)?;
+    if let Some(focused) = ax_copy(&app, "AXFocusedUIElement")
+        && let Some(url) = ax_url_string(&focused)
+    {
+        return Some(url);
+    }
+    let window = ax_copy(&app, "AXFocusedWindow")?;
+    ax_url_string(&window)
+}
+
+fn ax_url_string(element: &CFType) -> Option<String> {
+    for attribute in ["AXURL", "AXDocument"] {
+        if let Some(value) = ax_string(element, attribute)
+            && looks_like_http_url(&value)
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn looks_like_http_url(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 fn application_element(pid: i32) -> Option<CFType> {
@@ -99,7 +118,11 @@ fn wrap_create(raw: AxUiElementRef) -> Option<CFType> {
     if raw.is_null() {
         None
     } else {
-        // SAFETY: caller used a Create rule; `raw` is a CFType.
-        Some(unsafe { CFType::wrap_under_create_rule(raw as CFTypeRef) })
+        // SAFETY: caller used a Create rule; `raw` is a CFType. Timeout is
+        // per-element and does not transfer ownership.
+        unsafe {
+            AXUIElementSetMessagingTimeout(raw, AX_MESSAGING_TIMEOUT_SECS);
+            Some(CFType::wrap_under_create_rule(raw as CFTypeRef))
+        }
     }
 }

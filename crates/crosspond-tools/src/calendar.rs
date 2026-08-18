@@ -196,29 +196,20 @@ impl CalendarBackend for MockCalendar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::Workspace;
-    use uuid::Uuid;
-
-    fn temp_workspace() -> Workspace {
-        let root = std::env::temp_dir().join(format!("crosspond-cal-{}", Uuid::new_v4()));
-        Workspace::create(root).unwrap()
-    }
 
     #[test]
     fn calendar_events_with_mock() {
-        let workspace = temp_workspace();
         let mut registry = ToolRegistry::new();
         register_calendar_tools(&mut registry, Arc::new(MockCalendar));
         let result = registry
             .execute(
                 "calendar_events",
-                &ToolContext::new(workspace.clone()),
+                &ToolContext::new(),
                 json!({"calendar": "Work"}),
             )
             .unwrap();
         assert!(result.text.contains("Standup"));
         assert!(result.text.contains("Work"));
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 
     #[test]

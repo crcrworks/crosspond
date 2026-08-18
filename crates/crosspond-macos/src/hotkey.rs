@@ -19,7 +19,7 @@ pub enum HotkeyError {
 
 /// Option + Space, isolated behind [`GlobalHotkeyService`].
 ///
-/// The manager must be created on the main thread (GPUI's thread).
+/// The manager must be created on the main thread (the Tauri event loop).
 pub struct MacOsGlobalHotkey {
     #[cfg(target_os = "macos")]
     _manager: GlobalHotKeyManager,

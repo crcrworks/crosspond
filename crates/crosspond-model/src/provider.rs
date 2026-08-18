@@ -35,6 +35,8 @@ pub struct ToolDefinition {
 pub struct ImagePart {
     pub media_type: String,
     pub bytes: Vec<u8>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 impl std::fmt::Debug for ImagePart {
@@ -42,6 +44,8 @@ impl std::fmt::Debug for ImagePart {
         f.debug_struct("ImagePart")
             .field("media_type", &self.media_type)
             .field("bytes_len", &self.bytes.len())
+            .field("width", &self.width)
+            .field("height", &self.height)
             .finish()
     }
 }
@@ -223,6 +227,8 @@ mod tests {
                 vec![ImagePart {
                     media_type: "image/jpeg".into(),
                     bytes: vec![1],
+                    width: Some(100),
+                    height: Some(50),
                 }],
             ),
             Message::assistant("ok"),
@@ -232,6 +238,8 @@ mod tests {
                 vec![ImagePart {
                     media_type: "image/jpeg".into(),
                     bytes: vec![2, 2],
+                    width: Some(200),
+                    height: Some(100),
                 }],
             ),
         ];

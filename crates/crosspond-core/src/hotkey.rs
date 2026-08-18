@@ -7,6 +7,6 @@ pub enum HotkeyEvent {
 }
 
 /// Implemented by each OS. Constructed on the UI/main thread.
-pub trait GlobalHotkeyService {
+pub trait GlobalHotkeyService: Send {
     fn poll(&self) -> Option<HotkeyEvent>;
 }

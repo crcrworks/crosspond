@@ -20,15 +20,41 @@ mod screenshot;
 #[cfg(target_os = "macos")]
 mod tcc;
 
+#[cfg(target_os = "macos")]
+mod window;
+
 pub use accessibility::MacOsAccessibility;
 pub use apps::MacOsApps;
 pub use calendar::MacOsCalendar;
-pub use context::MacOsContextCollector;
+pub use context::{MacOsContextCollector, yield_to_other_app};
 pub use hotkey::{HotkeyError, MacOsGlobalHotkey};
 pub use input::MacOsInput;
 pub use keychain::MacOsKeychainSecretStore;
 pub use permissions::{PermissionKind, PermissionSnapshot};
 pub use screenshot::MacOsScreenshot;
+#[cfg(target_os = "macos")]
+pub use window::make_ns_window_transparent;
+
+/// True when this process is the active macOS application.
+///
+/// Japanese IME candidate windows can steal key from the launcher without
+/// deactivating Crosspond. Callers should not treat that as "click away".
+pub fn application_is_active() -> bool {
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSApplication;
+
+        let Some(mtm) = MainThreadMarker::new() else {
+            return false;
+        };
+        NSApplication::sharedApplication(mtm).isActive()
+    }
+}
 
 /// Accessibility and screenshot backends that share one cua-driver child.
 pub fn macos_computer_backends() -> (MacOsAccessibility, MacOsScreenshot) {

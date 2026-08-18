@@ -105,7 +105,15 @@ pub fn risk_for_tool(name: &str, scope: PathScope, input: &serde_json::Value) ->
                 RiskLevel::Shell
             }
         }
-        "list_apps" | "calendar_events" => RiskLevel::ReadOnly,
+        "list_apps"
+        | "calendar_events"
+        | "knowledge_search"
+        | "knowledge_read"
+        | "knowledge_neighbors"
+        | "knowledge_backlinks"
+        | "knowledge_find_procedure" => RiskLevel::ReadOnly,
+        "knowledge_ingest" | "knowledge_propose_update" => RiskLevel::WorkspaceWrite,
+        "knowledge_read_later" | "knowledge_archive_source" => RiskLevel::WorkspaceWrite,
         "open_app" | "focus_app" | "ui_type" | "ui_hotkey" | "ui_scroll" => {
             RiskLevel::ComputerAction
         }
@@ -131,10 +139,7 @@ fn risk_for_tool_scope(name: &str, scope: PathScope) -> RiskLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::TaskId;
-    use crate::workspace::FsWorkspaceManager;
-    use crate::workspace::WorkspaceManager;
-    use crosspond_tools::classify_write_path;
+    use crosspond_tools::{ScratchSpace, classify_write_path};
     use serde_json::json;
     use std::fs;
 
@@ -169,13 +174,12 @@ mod tests {
     #[test]
     fn write_desktop_requires_approval() {
         let root = std::env::temp_dir().join(format!("crosspond-policy-{}", uuid::Uuid::new_v4()));
-        let manager = FsWorkspaceManager::new(root.join("workspaces"));
-        let workspace = manager.create(TaskId::new()).unwrap();
+        let space = ScratchSpace::create(root.join("scratch")).unwrap();
         let desktop = format!(
             "{}/Desktop/file.txt",
             std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
         );
-        let scope = classify_write_path(&workspace.root, &desktop).unwrap();
+        let scope = classify_write_path(&space.root, &desktop).unwrap();
         assert_eq!(scope, PathScope::External);
         assert_eq!(
             evaluate(risk_for_tool("write_file", scope, &empty_input())),
@@ -261,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn list_apps_and_calendar_are_auto() {
+    fn list_apps_calendar_and_knowledge_are_auto() {
         assert_eq!(
             evaluate(risk_for_tool(
                 "list_apps",
@@ -273,6 +277,51 @@ mod tests {
         assert_eq!(
             evaluate(risk_for_tool(
                 "calendar_events",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::Allow
+        );
+        for tool in [
+            "knowledge_search",
+            "knowledge_read",
+            "knowledge_neighbors",
+            "knowledge_backlinks",
+            "knowledge_find_procedure",
+        ] {
+            assert_eq!(
+                evaluate(risk_for_tool(tool, PathScope::Workspace, &empty_input())),
+                PolicyDecision::Allow,
+                "{tool}"
+            );
+        }
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "knowledge_ingest",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "knowledge_propose_update",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "knowledge_read_later",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "knowledge_archive_source",
                 PathScope::Workspace,
                 &empty_input()
             )),

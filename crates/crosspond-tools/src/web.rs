@@ -408,17 +408,6 @@ fn decode_basic_entities(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::Workspace;
-
-    fn workspace() -> Workspace {
-        let root = std::env::temp_dir().join("crosspond-web-test-ws");
-        Workspace {
-            input: root.join("input"),
-            work: root.join("work"),
-            output: root.join("output"),
-            root,
-        }
-    }
 
     #[test]
     fn formats_exa_results() {
@@ -444,7 +433,7 @@ mod tests {
 
     #[test]
     fn web_search_requires_key() {
-        let context = ToolContext::new(workspace());
+        let context = ToolContext::new();
         let err = WebSearch
             .execute(&context, json!({"query": "rust async"}))
             .unwrap_err();
@@ -453,7 +442,7 @@ mod tests {
 
     #[test]
     fn tool_context_debug_redacts_key() {
-        let mut context = ToolContext::new(workspace());
+        let mut context = ToolContext::new();
         context.search_api_key = Some("exa_super_secret_token".into());
         let rendered = format!("{context:?}");
         assert!(rendered.contains("***"));
@@ -474,7 +463,7 @@ mod tests {
 
     #[test]
     fn fetch_url_rejects_private() {
-        let context = ToolContext::new(workspace());
+        let context = ToolContext::new();
         let err = FetchUrl
             .execute(&context, json!({"url": "http://127.0.0.1/"}))
             .unwrap_err();

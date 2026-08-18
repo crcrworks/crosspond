@@ -120,7 +120,7 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "run_command".into(),
-            description: "Run a shell command in the task workspace directory. stdout and stderr are returned. sudo is not allowed.".into(),
+            description: "Run a shell command in the task scratch directory. stdout and stderr are returned. sudo is not allowed.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -145,7 +145,12 @@ impl Tool for RunCommand {
     fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
         let command = required_string(&input, "command")?;
         reject_sudo(&command)?;
-        let output = run_shell(&command, &context.workspace.root, COMMAND_TIMEOUT)?;
+        let cwd = context
+            .scratch
+            .as_ref()
+            .map(|space| space.root.as_path())
+            .ok_or_else(|| ToolError::Failed("no scratch space is available".into()))?;
+        let output = run_shell(&command, cwd, COMMAND_TIMEOUT)?;
         Ok(ToolResult {
             text: truncate_output(format_command_output(&output)),
             created_file: None,
@@ -213,23 +218,23 @@ impl Tool for OpenUrl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::Workspace;
+    use crate::scratch::ScratchSpace;
     use uuid::Uuid;
 
-    fn temp_workspace() -> Workspace {
+    fn temp_scratch() -> ScratchSpace {
         let root = std::env::temp_dir().join(format!("crosspond-shell-{}", Uuid::new_v4()));
-        Workspace::create(root).unwrap()
+        ScratchSpace::create(root).unwrap()
     }
 
     #[test]
     fn run_command_rejects_sudo() {
-        let workspace = temp_workspace();
+        let scratch = temp_scratch();
         let mut registry = ToolRegistry::new();
         register_shell_tools(&mut registry);
         let err = registry
             .execute(
                 "run_command",
-                &ToolContext::new(workspace.clone()),
+                &ToolContext::with_scratch(scratch.clone()),
                 json!({"command": "sudo rm -rf /"}),
             )
             .unwrap_err();
@@ -237,27 +242,39 @@ mod tests {
         let err = registry
             .execute(
                 "run_command",
-                &ToolContext::new(workspace.clone()),
+                &ToolContext::with_scratch(scratch.clone()),
                 json!({"command": "ls && sudo ls"}),
             )
             .unwrap_err();
         assert!(err.to_string().contains("sudo"));
-        let _ = std::fs::remove_dir_all(&workspace.root);
+        let _ = std::fs::remove_dir_all(&scratch.root);
+    }
+
+    #[test]
+    fn run_command_without_scratch_fails() {
+        let mut registry = ToolRegistry::new();
+        register_shell_tools(&mut registry);
+        let err = registry
+            .execute(
+                "run_command",
+                &ToolContext::new(),
+                json!({"command": "pwd"}),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("scratch"));
     }
 
     #[test]
     fn open_url_rejects_private_http() {
-        let workspace = temp_workspace();
         let mut registry = ToolRegistry::new();
         register_shell_tools(&mut registry);
         let err = registry
             .execute(
                 "open_url",
-                &ToolContext::new(workspace.clone()),
+                &ToolContext::new(),
                 json!({"url": "http://127.0.0.1/"}),
             )
             .unwrap_err();
         assert!(err.to_string().contains("private") || err.to_string().contains("blocked"));
-        let _ = std::fs::remove_dir_all(&workspace.root);
     }
 }
