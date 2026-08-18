@@ -29,6 +29,7 @@
 	import { LauncherSession } from '$lib/session.svelte';
 	import { approvalLabel } from '$lib/tools';
 	import { firstUserTitle } from '$lib/transcript';
+	import { composerExtraHeight, shouldSyncLauncherSize } from '$lib/launcher-size';
 	import type { AgentEvent, LauncherShown } from '$lib/types';
 	import { onMount } from 'svelte';
 
@@ -64,15 +65,23 @@
 	// Size follows compact/overlay/badges, not transcript `rev`.
 	let appliedCompact = true;
 
+	function resetComposerSize() {
+		extraHeight = 0;
+		if (textarea) textarea.style.height = 'auto';
+	}
+
 	function resize() {
 		const compact = session.compact;
-		void setUiFlags(compact, session.composing, session.inConversation);
-		if (!compact && !appliedCompact) {
+		const composing = session.composing;
+		const inConversation = session.inConversation;
+		const badges = session.overlay === 'onboarding' || chatLayout ? 0 : session.badges.length;
+		const extra = extraHeight;
+		void setUiFlags(compact, composing, inConversation);
+		if (!shouldSyncLauncherSize(compact, appliedCompact)) {
 			return;
 		}
 		appliedCompact = compact;
-		const badges = session.overlay === 'onboarding' || chatLayout ? 0 : session.badges.length;
-		void syncLauncherSize(compact, badges, extraHeight);
+		void syncLauncherSize(compact, badges, extra);
 	}
 
 	$effect(() => {
@@ -134,6 +143,7 @@
 		try {
 			const taskId = await startTask(prompt);
 			session.beginTask(taskId, prompt);
+			resetComposerSize();
 		} catch (error) {
 			session.transcript.pushNotice(String(error));
 			session.state = 'failed';
@@ -149,6 +159,7 @@
 	async function onNew() {
 		if (session.overlay === 'onboarding') return;
 		session.resetLocal();
+		resetComposerSize();
 		await resetSession();
 		await refreshHistory();
 		textarea?.focus();
@@ -230,9 +241,8 @@
 	function onInput() {
 		if (!textarea) return;
 		textarea.style.height = 'auto';
-		const next = Math.min(textarea.scrollHeight, 160);
-		textarea.style.height = `${next}px`;
-		extraHeight = Math.max(0, next - 24);
+		extraHeight = composerExtraHeight(textarea.scrollHeight);
+		textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
 	}
 </script>
 

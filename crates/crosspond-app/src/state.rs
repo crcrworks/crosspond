@@ -25,6 +25,8 @@ pub struct InnerState {
     pub in_conversation: bool,
     pub compact: bool,
     pub composing: bool,
+    /// Latest launcher resize request. Older queued resizes are dropped.
+    pub resize_seq: u64,
 }
 
 impl AppState {
@@ -50,6 +52,7 @@ impl AppState {
                 in_conversation: false,
                 compact: true,
                 composing: false,
+                resize_seq: 0,
             }),
             _runtime: runtime,
         }
@@ -61,6 +64,13 @@ impl AppState {
 
     pub fn lock_hotkey(&self) -> std::sync::MutexGuard<'_, Box<dyn GlobalHotkeyService>> {
         self.hotkey.lock().unwrap_or_else(|err| err.into_inner())
+    }
+}
+
+impl InnerState {
+    pub fn bump_resize_seq(&mut self) -> u64 {
+        self.resize_seq = self.resize_seq.wrapping_add(1);
+        self.resize_seq
     }
 }
 

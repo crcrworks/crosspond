@@ -94,7 +94,7 @@ The agent loop is capped at 16 steps. Tool output is capped at 100KB. Tools run 
 
 The launcher and Settings are separate Tauri windows. Hide/show is per-window (`WebviewWindow::hide` / `show`). Settings stays up when the launcher hides.
 
-The launcher window is created once (`visible: false`) and toggled; it is not destroyed on Escape. It is frameless and transparent. Compact idle height is about 108px plus badge lines (input row plus the conversation tab header); opening a conversation resizes to about 560px. Streaming progress lines and a user resize must not snap an already-expanded window back to that default.
+The launcher window is created once (`visible: false`) and toggled; it is not destroyed on Escape. It is frameless and transparent. Compact idle height is about 108px plus badge lines (input row plus the conversation tab header); opening a conversation resizes to about 560px. A compact bar that grew for badges or wrapped input is still compact — the first message (including after **New**) must expand. Streaming progress and a user resize of an already-expanded window must not snap it back to 560px. Compact-then-expand requests are sequenced so New cannot shrink the window after send has already asked for 560px.
 
 The compact idle command bar (no message sent yet, no History/onboarding overlay) hides when Crosspond is no longer the active app. An expanded conversation stays visible. Hide is skipped when Settings is also open. Hide is also skipped while Japanese IME (or another in-app palette) has key without deactivating the app — WKWebView owns IME, and IME candidate windows typically keep the app active.
 

@@ -27,8 +27,58 @@ pub fn launcher_height(compact: bool, badge_lines: usize, extra_height: f64) -> 
 
 /// Keep a conversation window the user already opened or resized.
 /// Streaming progress must not snap it back to the default 560px height.
+///
+/// Compact bars can grow past idle height for badge lines or wrapped input.
+/// Those sizes are still compact and must expand on the first message.
 pub(crate) fn keep_user_expanded_size(compact: bool, current_height: f64) -> bool {
-    !compact && current_height > idle_height(0) + 8.0
+    !compact && current_height >= RESULT_HEIGHT - 8.0
+}
+
+fn next_resize_seq(app: &AppHandle) -> Option<u64> {
+    let state = app.try_state::<AppState>()?;
+    let mut inner = state.lock_inner();
+    Some(inner.bump_resize_seq())
+}
+
+fn is_current_resize(app: &AppHandle, seq: u64) -> bool {
+    app.try_state::<AppState>()
+        .is_some_and(|state| !stale_resize_seq(seq, state.lock_inner().resize_seq))
+}
+
+pub(crate) fn stale_resize_seq(seq: u64, latest: u64) -> bool {
+    seq != latest
+}
+
+fn enqueue_resize(app: &AppHandle, compact: bool, badge_lines: usize, extra_height: f64, seq: u64) {
+    let handle = app.clone();
+    let queued = handle.clone();
+    let _ = handle.run_on_main_thread(move || {
+        if !is_current_resize(&queued, seq) {
+            return;
+        }
+        if let Some(window) = launcher_window(&queued) {
+            resize_launcher(&window, compact, badge_lines, extra_height);
+        }
+    });
+}
+
+/// Queue a launcher resize on the main thread. A newer request cancels this one
+/// so New (compact) cannot apply after the first message has already expanded.
+pub fn request_resize(app: &AppHandle, compact: bool, badge_lines: usize, extra_height: f64) {
+    let Some(seq) = next_resize_seq(app) else {
+        return;
+    };
+    enqueue_resize(app, compact, badge_lines, extra_height, seq);
+}
+
+pub fn request_resize_with_seq(
+    app: &AppHandle,
+    compact: bool,
+    badge_lines: usize,
+    extra_height: f64,
+    seq: u64,
+) {
+    enqueue_resize(app, compact, badge_lines, extra_height, seq);
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -175,6 +225,8 @@ pub fn show(app: &AppHandle) {
 
     apply_transparency(&window);
     position_launcher(&window);
+    // Invalidate in-flight UI resizes, then apply immediately (already on main).
+    let _ = next_resize_seq(app);
     resize_launcher(&window, compact || needs_onboarding, badges.len(), 0.0);
     let _ = window.show();
     let _ = window.set_focus();
@@ -269,8 +321,8 @@ pub fn start_hotkey_loop(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        IDLE_HEIGHT, RESULT_HEIGHT, keep_user_expanded_size, launcher_height,
-        should_hide_compact_on_blur,
+        IDLE_HEIGHT, RESULT_HEIGHT, idle_height, keep_user_expanded_size, launcher_height,
+        should_hide_compact_on_blur, stale_resize_seq,
     };
 
     #[test]
@@ -310,5 +362,23 @@ mod tests {
         assert!(keep_user_expanded_size(false, 800.0));
         assert!(!keep_user_expanded_size(false, IDLE_HEIGHT));
         assert!(!keep_user_expanded_size(true, RESULT_HEIGHT));
+    }
+
+    #[test]
+    fn compact_bar_with_badges_or_wrapped_input_still_expands() {
+        let with_badges = launcher_height(true, 2, 0.0);
+        let with_input = launcher_height(true, 0, 40.0);
+        assert!(with_badges > idle_height(0) + 8.0);
+        assert!(with_input > idle_height(0) + 8.0);
+        assert!(!keep_user_expanded_size(false, with_badges));
+        assert!(!keep_user_expanded_size(false, with_input));
+        assert!(!keep_user_expanded_size(false, RESULT_HEIGHT - 9.0));
+    }
+
+    #[test]
+    fn newer_resize_request_drops_the_older_one() {
+        assert!(stale_resize_seq(1, 2));
+        assert!(!stale_resize_seq(2, 2));
+        assert!(stale_resize_seq(u64::MAX, 0));
     }
 }

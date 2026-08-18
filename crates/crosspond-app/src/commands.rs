@@ -11,7 +11,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::launcher::{self, resize_launcher};
+use crate::launcher;
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -59,7 +59,11 @@ pub fn bootstrap(state: State<AppState>) -> Bootstrap {
 }
 
 #[tauri::command]
-pub fn start_task(prompt: String, state: State<AppState>) -> Result<String, String> {
+pub fn start_task(
+    prompt: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<String, String> {
     let prompt = prompt.trim().to_string();
     if prompt.is_empty() {
         return Err("prompt is empty".into());
@@ -74,7 +78,10 @@ pub fn start_task(prompt: String, state: State<AppState>) -> Result<String, Stri
     inner.in_conversation = true;
     inner.compact = false;
     inner.artifacts.clear();
+    let seq = inner.bump_resize_seq();
     drop(inner);
+    // Expand here so New's in-flight compact resize cannot land after send.
+    launcher::request_resize_with_seq(&app, false, 0, 0.0, seq);
     state
         .commands
         .send(RuntimeCommand::StartTask(StartTaskRequest {
@@ -283,9 +290,7 @@ pub fn set_ui_flags(compact: bool, composing: bool, in_conversation: bool, state
 
 #[tauri::command]
 pub fn sync_launcher_size(compact: bool, badge_lines: u32, extra_height: f64, app: AppHandle) {
-    if let Some(window) = launcher::launcher_window(&app) {
-        resize_launcher(&window, compact, badge_lines as usize, extra_height);
-    }
+    launcher::request_resize(&app, compact, badge_lines as usize, extra_height);
 }
 
 fn reveal_in_finder(path: &Path) -> Result<(), String> {
