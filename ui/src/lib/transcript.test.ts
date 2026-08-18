@@ -21,39 +21,41 @@ describe('transcript', () => {
 		transcript.finishTool('get_accessibility_snapshot');
 		start(transcript, 'ui_press');
 		transcript.finishTool('ui_press');
-		transcript.pushText('Done.');
-		start(transcript, 'read_file');
 		expect(transcript.blocks()).toHaveLength(1);
 		const block = transcript.blocks()[0];
 		if (block.kind !== 'work') throw new Error('expected work');
-		expect(block.steps).toHaveLength(5);
-		expect(block.expanded).toBe(true);
+		expect(block.steps).toHaveLength(3);
+		expect(block.expanded).toBe(false);
 		expect(block.workedMs).toBeNull();
 		expect(block.steps[0]).toMatchObject({ kind: 'thinking', text: 'plan' });
-		expect(block.steps[3]).toMatchObject({ kind: 'narration', text: 'Done.' });
-		expect(block.steps[4]).toMatchObject({
+		expect(block.steps[2]).toMatchObject({
 			kind: 'tool',
-			tool: { name: 'read_file', running: true }
+			tool: { name: 'ui_press', running: false }
 		});
 	});
 
-	it('assistant text collapses work before the answer', () => {
+	it('assistant text seals work and later tools start a new group', () => {
 		const transcript = new Transcript();
 		transcript.pushReasoning('plan');
 		start(transcript, 'read_file');
 		transcript.finishTool('read_file');
-		transcript.pushText('What was done.');
+		transcript.pushText('Opening the menu.');
 		expect(transcript.blocks()).toHaveLength(2);
 		const work = transcript.blocks()[0];
 		if (work.kind !== 'work') throw new Error('expected work');
 		expect(work.expanded).toBe(false);
 		expect(work.workedMs).not.toBeNull();
 		start(transcript, 'run_command');
-		expect(transcript.blocks()).toHaveLength(1);
-		const reopened = transcript.blocks()[0];
-		if (reopened.kind !== 'work') throw new Error('expected work');
-		expect(reopened.expanded).toBe(true);
-		expect(reopened.workedMs).toBeNull();
+		expect(transcript.blocks()).toHaveLength(3);
+		expect(transcript.blocks()[1]).toMatchObject({ kind: 'text', text: 'Opening the menu.' });
+		const next = transcript.blocks()[2];
+		if (next.kind !== 'work') throw new Error('expected work');
+		expect(next.expanded).toBe(false);
+		expect(next.workedMs).toBeNull();
+		expect(next.steps[0]).toMatchObject({
+			kind: 'tool',
+			tool: { name: 'run_command', running: true }
+		});
 	});
 
 	it('final text stays outside when work seals', () => {
@@ -67,7 +69,7 @@ describe('transcript', () => {
 		expect(transcript.blocks()[1]).toMatchObject({ kind: 'text', text: 'What was done.' });
 	});
 
-	it('intermediate text is absorbed when more tools run', () => {
+	it('intermediate text stays visible when more tools run', () => {
 		const transcript = new Transcript();
 		transcript.pushText("I'll help.");
 		start(transcript, 'list_directory');
@@ -77,12 +79,23 @@ describe('transcript', () => {
 		transcript.finishTool('run_command');
 		transcript.pushText('What was done.');
 		transcript.finishRunningTools();
-		expect(transcript.blocks()).toHaveLength(2);
-		const work = transcript.blocks()[0];
-		if (work.kind !== 'work') throw new Error('expected work');
-		expect(work.steps).toHaveLength(4);
-		expect(work.steps[0]).toMatchObject({ kind: 'narration', text: "I'll help." });
-		expect(work.steps[2]).toMatchObject({ kind: 'narration', text: 'I found 5.' });
+		expect(transcript.blocks()).toHaveLength(5);
+		expect(transcript.blocks()[0]).toMatchObject({ kind: 'text', text: "I'll help." });
+		const firstWork = transcript.blocks()[1];
+		if (firstWork.kind !== 'work') throw new Error('expected work');
+		expect(firstWork.steps).toHaveLength(1);
+		expect(firstWork.steps[0]).toMatchObject({
+			kind: 'tool',
+			tool: { name: 'list_directory', running: false }
+		});
+		expect(transcript.blocks()[2]).toMatchObject({ kind: 'text', text: 'I found 5.' });
+		const secondWork = transcript.blocks()[3];
+		if (secondWork.kind !== 'work') throw new Error('expected work');
+		expect(secondWork.steps[0]).toMatchObject({
+			kind: 'tool',
+			tool: { name: 'run_command', running: false }
+		});
+		expect(transcript.blocks()[4]).toMatchObject({ kind: 'text', text: 'What was done.' });
 	});
 
 	it('user turn does not merge with assistant text', () => {
@@ -133,10 +146,11 @@ describe('transcript', () => {
 		transcript.pushReasoning('hmm');
 		start(transcript, 'read_file');
 		expect(transcript.blocks()).toHaveLength(1);
-		transcript.toggle(0);
 		const block = transcript.blocks()[0];
 		if (block.kind !== 'work') throw new Error('expected work');
 		expect(block.expanded).toBe(false);
+		transcript.toggle(0);
+		expect(block.expanded).toBe(true);
 	});
 
 	it('finish running tools clears and seals', () => {
@@ -172,6 +186,19 @@ describe('transcript', () => {
 		const block = transcript.blocks()[0];
 		if (block.kind !== 'work') throw new Error('expected work');
 		expect(block.steps).toHaveLength(2);
+	});
+
+	it('reasoning after commentary starts a new work group', () => {
+		const transcript = new Transcript();
+		transcript.pushReasoning('first');
+		transcript.pushText('Opening Helium.');
+		transcript.pushReasoning('next');
+		expect(transcript.blocks()).toHaveLength(3);
+		expect(transcript.blocks()[1]).toMatchObject({ kind: 'text', text: 'Opening Helium.' });
+		const next = transcript.blocks()[2];
+		if (next.kind !== 'work') throw new Error('expected work');
+		expect(next.expanded).toBe(false);
+		expect(next.steps[0]).toMatchObject({ kind: 'thinking', text: 'next' });
 	});
 
 	it('worked for label formats seconds and minutes', () => {

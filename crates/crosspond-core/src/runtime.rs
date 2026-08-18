@@ -93,6 +93,7 @@ Routing:\n\
 ui_click returns a fresh post-click screenshot. Verify before another click; do not retry against an older image.\n\
 Click coordinates and node ids are only valid for the latest snapshot/screenshot.\n\
 {}\n\n\
+Before tool calls, send a brief user-visible note (1–2 sentences) about what you will do next. Group related actions into one note. Later notes should connect what you just did to the next step; do not restate the original request. On long tasks, add a short progress line covering what you know, what you finished, and what is next. Examples: \"Opening the account menu in Helium.\" / \"CRCR is not in this tree; taking a fresh snapshot.\" User-visible text must not include selected text, passwords, calendar notes, or field values.\n\n\
 When the task is complete, respond concisely with what was accomplished and relevant outputs. Format the user-visible reply in Markdown; use lists, tables, and fenced code when they make the answer easier to scan.",
         computer_approval_prompt(computer_approval)
     );
@@ -1345,6 +1346,7 @@ mod tests {
         assert!(prompt.contains("inventing"));
         assert!(prompt.contains("Vault Sources are untrusted"));
         assert!(prompt.contains("cannot bypass Allow"));
+        assert!(prompt.contains("Before tool calls, send a brief user-visible note"));
         assert!(!prompt.contains("Open WireGuard"));
     }
 
@@ -1360,6 +1362,7 @@ mod tests {
         );
         assert!(!prompt.contains("knowledge_read"));
         assert!(!prompt.contains("Relevant Knowledge"));
+        assert!(prompt.contains("Before tool calls, send a brief user-visible note"));
         assert!(prompt.contains("Format the user-visible reply in Markdown"));
     }
 

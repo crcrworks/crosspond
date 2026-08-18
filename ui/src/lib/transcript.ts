@@ -8,7 +8,6 @@ export type ToolLine = {
 
 export type WorkStep =
 	| { kind: 'thinking'; text: string; expanded: boolean; startedAt: number; durationMs: number | null }
-	| { kind: 'narration'; text: string }
 	| { kind: 'tool'; tool: ToolLine };
 
 export type TranscriptBlock =
@@ -82,7 +81,6 @@ export class Transcript {
 
 	pushReasoning(delta: string) {
 		if (delta.length === 0) return;
-		this.absorbTrailingText();
 		const idx = this.reopenWork();
 		if (idx !== null) {
 			const block = this.#blocks[idx];
@@ -99,13 +97,7 @@ export class Transcript {
 			}
 		}
 		if (delta.trim().length === 0) return;
-		this.#blocks.push({
-			kind: 'work',
-			steps: [thinkingStep(delta)],
-			expanded: true,
-			startedAt: Date.now(),
-			workedMs: null
-		});
+		this.#blocks.push(openWork([thinkingStep(delta)]));
 	}
 
 	pushText(delta: string) {
@@ -129,7 +121,6 @@ export class Transcript {
 	}
 
 	startTool(name: string, summary: string) {
-		this.absorbTrailingText();
 		this.freezeOpenThinking();
 		const line: ToolLine = { name, summary, running: true };
 		const idx = this.reopenWork();
@@ -140,17 +131,11 @@ export class Transcript {
 				return;
 			}
 		}
-		this.#blocks.push({
-			kind: 'work',
-			steps: [{ kind: 'tool', tool: line }],
-			expanded: true,
-			startedAt: Date.now(),
-			workedMs: null
-		});
+		this.#blocks.push(openWork([{ kind: 'tool', tool: line }]));
 	}
 
 	finishTool(name: string) {
-		const idx = this.turnWorkIndex();
+		const idx = this.latestWorkInTurn();
 		if (idx === null) return;
 		const block = this.#blocks[idx];
 		if (block.kind !== 'work') return;
@@ -236,7 +221,6 @@ export class Transcript {
 					}
 					return { kind: 'thinking' };
 				}
-				if (last.kind === 'narration') return { kind: 'writing' };
 				return { kind: 'preparing' };
 			}
 			if (block.kind === 'text') {
@@ -248,33 +232,16 @@ export class Transcript {
 		return { kind: 'thinking' };
 	}
 
-	private absorbTrailingText() {
-		const last = this.#blocks.at(-1);
-		if (last?.kind !== 'text') return;
-		if (last.text.trim().length === 0) {
-			this.#blocks.pop();
-			return;
+	private turnWorkIndex(): number | null {
+		for (let i = this.#blocks.length - 1; i >= 0; i -= 1) {
+			const block = this.#blocks[i];
+			if (block.kind === 'text' || block.kind === 'user') return null;
+			return i;
 		}
-		const text = last.text;
-		this.#blocks.pop();
-		const idx = this.reopenWork();
-		if (idx !== null) {
-			const block = this.#blocks[idx];
-			if (block.kind === 'work') {
-				block.steps.push({ kind: 'narration', text });
-				return;
-			}
-		}
-		this.#blocks.push({
-			kind: 'work',
-			steps: [{ kind: 'narration', text }],
-			expanded: true,
-			startedAt: Date.now(),
-			workedMs: null
-		});
+		return null;
 	}
 
-	private turnWorkIndex(): number | null {
+	private latestWorkInTurn(): number | null {
 		for (let i = this.#blocks.length - 1; i >= 0; i -= 1) {
 			const block = this.#blocks[i];
 			if (block.kind === 'text') continue;
@@ -290,7 +257,6 @@ export class Transcript {
 		const block = this.#blocks[idx];
 		if (block.kind === 'work') {
 			block.workedMs = null;
-			block.expanded = true;
 		}
 		return idx;
 	}
@@ -305,8 +271,7 @@ export class Transcript {
 	private openWorkIndex(): number | null {
 		for (let i = this.#blocks.length - 1; i >= 0; i -= 1) {
 			const block = this.#blocks[i];
-			if (block.kind === 'text') continue;
-			if (block.kind === 'user') return null;
+			if (block.kind === 'text' || block.kind === 'user') return null;
 			if (block.kind === 'work' && block.workedMs === null) return i;
 			return null;
 		}
@@ -321,6 +286,16 @@ function thinkingStep(text: string): WorkStep {
 		expanded: false,
 		startedAt: Date.now(),
 		durationMs: null
+	};
+}
+
+function openWork(steps: WorkStep[]): TranscriptBlock {
+	return {
+		kind: 'work',
+		steps,
+		expanded: false,
+		startedAt: Date.now(),
+		workedMs: null
 	};
 }
 

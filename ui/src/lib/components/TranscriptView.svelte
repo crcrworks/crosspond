@@ -32,39 +32,33 @@
 	{:else if block.kind === 'text'}
 		<Markdown source={block.text} />
 	{:else}
-		{@const sealed = block.workedMs !== null}
-		{#if !sealed}
-			<div class="flex flex-col gap-2">
-				{#each block.steps as step, row (row)}
-					{@render workStep(index, row, step, thinkingLiveIndex === index, false)}
-				{/each}
-			</div>
-		{:else}
-			<div class="flex flex-col gap-2">
-				<button
-					type="button"
-					class="group flex w-full cursor-pointer flex-row items-center justify-start gap-1 appearance-none border-0 bg-transparent p-0 text-left"
-					onclick={() => ontoggle(index)}
-				>
-					{#if workHeaderIcon(block.steps)}
-						<Icon src={workHeaderIcon(block.steps) ?? ''} />
-					{/if}
-					<div
-						class="min-w-0 overflow-hidden text-left text-sm text-[var(--muted)] group-hover:opacity-80"
-					>
-						<ActivityLabel text={collapsedLabel(block, false)} />
-					</div>
-					<Chevron expanded={block.expanded} />
-				</button>
-				{#if block.expanded}
-					<div class="flex flex-col gap-2">
-						{#each block.steps as step, row (row)}
-							{@render workStep(index, row, step, false, true)}
-						{/each}
-					</div>
+		<div class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="group flex w-full cursor-pointer flex-row items-center justify-start gap-1 appearance-none border-0 bg-transparent p-0 text-left"
+				onclick={() => ontoggle(index)}
+			>
+				{#if workHeaderIcon(block.steps)}
+					<Icon src={workHeaderIcon(block.steps) ?? ''} />
 				{/if}
-			</div>
-		{/if}
+				<div
+					class="min-w-0 overflow-hidden text-left text-sm text-[var(--muted)] group-hover:opacity-80"
+				>
+					<ActivityLabel
+						text={collapsedLabel(block, thinkingLiveIndex === index)}
+						running={block.workedMs === null}
+					/>
+				</div>
+				<Chevron expanded={block.expanded} />
+			</button>
+			{#if block.expanded}
+				<div class="flex flex-col gap-2">
+					{#each block.steps as step, row (row)}
+						{@render workStep(index, row, step, thinkingLiveIndex === index, true)}
+					{/each}
+				</div>
+			{/if}
+		</div>
 	{/if}
 	{/each}
 </div>
@@ -98,20 +92,15 @@
 				<div class="pl-4 text-sm leading-[1.35] break-words text-[var(--muted)]">{step.text.trim()}</div>
 			{/if}
 		</div>
-	{:else if step.kind === 'narration'}
-		<div class={nested ? 'w-full pl-4' : 'w-full'}>
-			<Markdown source={step.text} />
-		</div>
 	{:else}
 		<div class={['flex w-full flex-row items-center gap-1', nested && 'pl-4']}>
 			<Icon src={workHeaderIcon([step]) ?? '/icons/wrench.svg'} />
 			<div class="min-w-0 flex-1 overflow-hidden text-sm text-[var(--muted)]">
 				<ActivityLabel
 					text={toolRowLabel(step.tool.name, step.tool.summary)}
-					running={step.tool.running && !nested}
+					running={step.tool.running}
 				/>
 			</div>
 		</div>
 	{/if}
 {/snippet}
-
