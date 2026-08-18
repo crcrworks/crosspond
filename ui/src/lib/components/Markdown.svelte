@@ -5,9 +5,18 @@
 	const html = $derived(renderMarkdown(source.trimEnd()));
 </script>
 
-<div class="markdown text-sm leading-[1.35] break-words">{@html html}</div>
+<div class="markdown text-sm leading-[1.65] break-words">{@html html}</div>
 
 <style>
+	.markdown :global(p) {
+		margin: 0.55em 0;
+	}
+	.markdown :global(p:first-child) {
+		margin-top: 0;
+	}
+	.markdown :global(p:last-child) {
+		margin-bottom: 0;
+	}
 	.markdown :global(a) {
 		color: var(--link);
 	}

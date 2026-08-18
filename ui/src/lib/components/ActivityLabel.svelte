@@ -7,12 +7,14 @@
 
 <style>
 	.label {
-		display: inline-block;
+		display: block;
+		width: fit-content;
 		max-width: 100%;
 		overflow: hidden;
 		text-align: left;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		line-height: 1;
 		color: var(--muted);
 	}
 

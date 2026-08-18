@@ -6,14 +6,16 @@
 
 <style>
 	.icon {
-		display: inline-block;
+		display: block;
 		flex-shrink: 0;
 		width: 14px;
 		height: 14px;
+		overflow: hidden;
 		background-color: var(--muted);
-		-webkit-mask: var(--icon) center / contain no-repeat;
-		mask: var(--icon) center / contain no-repeat;
-		-webkit-mask-source-type: alpha;
-		mask-mode: alpha;
+		-webkit-mask-image: var(--icon);
+		-webkit-mask-size: contain;
+		-webkit-mask-repeat: no-repeat;
+		-webkit-mask-position: center;
+		transform: translateZ(0);
 	}
 </style>

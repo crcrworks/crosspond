@@ -8,6 +8,7 @@
 	} from '$lib/transcript';
 	import { toolRowLabel } from '$lib/tools';
 	import ActivityLabel from './ActivityLabel.svelte';
+	import Chevron from './Chevron.svelte';
 	import Icon from './Icon.svelte';
 	import Markdown from './Markdown.svelte';
 
@@ -24,7 +25,8 @@
 	} = $props();
 </script>
 
-{#each blocks as block, index (index)}
+<div class="flex flex-col gap-2">
+	{#each blocks as block, index (index)}
 	{#if block.kind === 'user'}
 		<div class="w-full py-1 text-sm leading-[1.35] break-words text-[var(--muted)]">{block.text}</div>
 	{:else if block.kind === 'text'}
@@ -32,33 +34,40 @@
 	{:else}
 		{@const sealed = block.workedMs !== null}
 		{#if !sealed}
-			<div class="flex flex-col gap-1">
+			<div class="flex flex-col gap-2">
 				{#each block.steps as step, row (row)}
 					{@render workStep(index, row, step, thinkingLiveIndex === index, false)}
 				{/each}
 			</div>
 		{:else}
-			<button
-				type="button"
-				class="flex w-full cursor-pointer flex-row items-center justify-start gap-1 appearance-none border-0 bg-transparent p-0 text-left hover:opacity-80"
-				onclick={() => ontoggle(index)}
-			>
-				<span class="shrink-0 text-sm text-[var(--muted)]">{block.expanded ? '▾' : '▸'}</span>
-				{#if workHeaderIcon(block.steps)}
-					<Icon src={workHeaderIcon(block.steps) ?? ''} />
+			<div class="flex flex-col gap-2">
+				<button
+					type="button"
+					class="group flex w-full cursor-pointer flex-row items-center justify-start gap-1 appearance-none border-0 bg-transparent p-0 text-left"
+					onclick={() => ontoggle(index)}
+				>
+					{#if workHeaderIcon(block.steps)}
+						<Icon src={workHeaderIcon(block.steps) ?? ''} />
+					{/if}
+					<div
+						class="min-w-0 overflow-hidden text-left text-sm text-[var(--muted)] group-hover:opacity-80"
+					>
+						<ActivityLabel text={collapsedLabel(block, false)} />
+					</div>
+					<Chevron expanded={block.expanded} />
+				</button>
+				{#if block.expanded}
+					<div class="flex flex-col gap-2">
+						{#each block.steps as step, row (row)}
+							{@render workStep(index, row, step, false, true)}
+						{/each}
+					</div>
 				{/if}
-				<div class="min-w-0 flex-1 overflow-hidden text-left text-sm text-[var(--muted)]">
-					<ActivityLabel text={collapsedLabel(block, false)} />
-				</div>
-			</button>
-			{#if block.expanded}
-				{#each block.steps as step, row (row)}
-					{@render workStep(index, row, step, false, true)}
-				{/each}
-			{/if}
+			</div>
 		{/if}
 	{/if}
-{/each}
+	{/each}
+</div>
 
 {#snippet workStep(
 	blockIndex: number,
@@ -69,19 +78,21 @@
 )}
 	{#if step.kind === 'thinking'}
 		{@const live = thinkingLive && step.durationMs === null}
-		<div class={['flex flex-col gap-1', nested && 'pl-4']}>
+		<div class={['flex flex-col gap-2', nested && 'pl-4']}>
 			<button
 				type="button"
-				class="flex w-full cursor-pointer flex-row items-center justify-start gap-1 appearance-none border-0 bg-transparent p-0 text-left hover:opacity-80"
+				class="group flex w-full cursor-pointer flex-row items-center justify-start gap-1 appearance-none border-0 bg-transparent p-0 text-left"
 				onclick={() => ontogglestep(blockIndex, row)}
 			>
-				<span class="shrink-0 text-sm text-[var(--muted)]">{step.expanded ? '▾' : '▸'}</span>
-				<div class="min-w-0 flex-1 overflow-hidden text-left text-sm text-[var(--muted)]">
+				<div
+					class="min-w-0 overflow-hidden text-left text-sm text-[var(--muted)] group-hover:opacity-80"
+				>
 					<ActivityLabel
 						text={thoughtLabel(step.durationMs, step.startedAt, live)}
 						running={live}
 					/>
 				</div>
+				<Chevron expanded={step.expanded} />
 			</button>
 			{#if step.expanded && step.text.trim()}
 				<div class="pl-4 text-sm leading-[1.35] break-words text-[var(--muted)]">{step.text.trim()}</div>
@@ -103,3 +114,4 @@
 		</div>
 	{/if}
 {/snippet}
+
