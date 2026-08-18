@@ -28,7 +28,7 @@ Then:
 
 If hotkey registration fails, the window opens immediately so the app is still usable.
 
-For local OpenAI-compatible servers, Base URL must include `/v1` (for example `http://127.0.0.1:1234/v1`). An empty API key is rejected; use a dummy value such as `lm-studio`. Vision-capable models are required for screenshot tools.
+For local OpenAI-compatible servers, Base URL must include `/v1` (for example `http://127.0.0.1:1234/v1`). For Gemini’s OpenAI-compatible API, use `https://generativelanguage.googleapis.com/v1beta/openai`. An empty API key is rejected; use a dummy value such as `lm-studio`. Vision-capable models are required for screenshot tools.
 
 ## Develop
 

@@ -87,7 +87,9 @@
 				style:background="var(--bg)"
 			/>
 		</label>
-		<div class="text-sm text-[var(--muted)]">Must include /v1, e.g. http://127.0.0.1:1234/v1</div>
+		<div class="text-sm text-[var(--muted)]">
+			Local servers: http://127.0.0.1:1234/v1. Gemini: https://generativelanguage.googleapis.com/v1beta/openai
+		</div>
 		<label class="flex flex-col gap-1">
 			<span class="text-sm text-[var(--muted)]">Model</span>
 			<input

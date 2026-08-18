@@ -114,6 +114,9 @@ impl OpenAiCompatibleProvider {
                     if let Some(arguments) = delta.arguments {
                         builder.arguments.push_str(&arguments);
                     }
+                    if let Some(extra_content) = delta.extra_content {
+                        builder.extra_content = Some(extra_content);
+                    }
                 }
                 Ok(())
             })?;
@@ -142,6 +145,7 @@ impl OpenAiCompatibleProvider {
                     id,
                     name: builder.name,
                     arguments: builder.arguments,
+                    extra_content: builder.extra_content,
                 }))
                 .is_err()
             {
@@ -280,6 +284,8 @@ struct WireToolCall {
     #[serde(rename = "type")]
     kind: &'static str,
     function: WireToolCallFn,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extra_content: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -317,6 +323,7 @@ impl From<&Message> for WireMessage {
                         name: call.name.clone(),
                         arguments: call.arguments.clone(),
                     },
+                    extra_content: call.extra_content.clone(),
                 })
                 .collect(),
         }
@@ -385,12 +392,14 @@ struct ToolCallBuilder {
     id: String,
     name: String,
     arguments: String,
+    extra_content: Option<serde_json::Value>,
 }
 
 struct PartialToolDelta {
     id: Option<String>,
     name: Option<String>,
     arguments: Option<String>,
+    extra_content: Option<serde_json::Value>,
 }
 
 pub fn chat_completions_url(base_url: &str) -> String {
@@ -398,15 +407,18 @@ pub fn chat_completions_url(base_url: &str) -> String {
     if base.ends_with("/chat/completions") {
         return base.to_string();
     }
-    if has_openai_v1_prefix(base) {
+    if has_openai_api_prefix(base) {
         format!("{base}/chat/completions")
     } else {
         format!("{base}/v1/chat/completions")
     }
 }
 
-fn has_openai_v1_prefix(base: &str) -> bool {
-    base.ends_with("/v1") || base.contains("/v1/")
+fn has_openai_api_prefix(base: &str) -> bool {
+    base.ends_with("/v1")
+        || base.contains("/v1/")
+        || base.ends_with("/openai")
+        || base.contains("/openai/")
 }
 
 /// Parse complete SSE frames from `buffer`. Returns true when `[DONE]` was seen.
@@ -623,12 +635,17 @@ fn tool_call_deltas_from_chunk(data: &str) -> Result<Vec<(usize, PartialToolDelt
             .pointer("/function/arguments")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
+        let extra_content = item
+            .get("extra_content")
+            .filter(|value| !value.is_null())
+            .cloned();
         deltas.push((
             index,
             PartialToolDelta {
                 id,
                 name,
                 arguments,
+                extra_content,
             },
         ));
     }
@@ -663,11 +680,11 @@ mod tests {
         let messages = vec![
             Message::assistant_tool_calls(
                 "",
-                vec![crate::provider::ToolCall {
-                    id: "call_1".into(),
-                    name: "take_screenshot".into(),
-                    arguments: "{}".into(),
-                }],
+                vec![crate::provider::ToolCall::new(
+                    "call_1",
+                    "take_screenshot",
+                    "{}",
+                )],
             ),
             Message::tool_with_images(
                 "call_1",
@@ -719,6 +736,46 @@ mod tests {
             chat_completions_url("http://127.0.0.1:1234/"),
             "http://127.0.0.1:1234/v1/chat/completions"
         );
+        assert_eq!(
+            chat_completions_url("https://generativelanguage.googleapis.com/v1beta/openai"),
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        );
+        assert_eq!(
+            chat_completions_url("https://generativelanguage.googleapis.com/v1beta/openai/"),
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        );
+    }
+
+    #[test]
+    fn echoes_gemini_thought_signature_on_tool_calls() {
+        let signature = serde_json::json!({
+            "google": { "thought_signature": "sig-abc" }
+        });
+        let messages = vec![Message::assistant_tool_calls(
+            "",
+            vec![crate::provider::ToolCall {
+                id: "call_1".into(),
+                name: "open_app".into(),
+                arguments: r#"{"name":"X"}"#.into(),
+                extra_content: Some(signature.clone()),
+            }],
+        )];
+        let wire = serde_json::to_value(wire_messages(&messages)).unwrap();
+        assert_eq!(
+            wire[0]["tool_calls"][0]["extra_content"]["google"]["thought_signature"],
+            "sig-abc"
+        );
+        assert_eq!(wire[0]["tool_calls"][0]["id"], "call_1");
+    }
+
+    #[test]
+    fn omits_extra_content_when_absent() {
+        let messages = vec![Message::assistant_tool_calls(
+            "",
+            vec![crate::provider::ToolCall::new("call_1", "open_app", "{}")],
+        )];
+        let wire = serde_json::to_value(wire_messages(&messages)).unwrap();
+        assert!(wire[0]["tool_calls"][0].get("extra_content").is_none());
     }
 
     #[test]
@@ -836,7 +893,7 @@ mod tests {
 
     #[tokio::test]
     async fn streams_tool_calls_from_mock_http() {
-        let body = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"write_file\",\"arguments\":\"\"}}]}}]}\n\n\
+        let body = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"extra_content\":{\"google\":{\"thought_signature\":\"sig-abc\"}},\"function\":{\"name\":\"write_file\",\"arguments\":\"\"}}]}}]}\n\n\
                     data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"output/a.txt\\\"}\"}}]}}]}\n\n\
                     data: [DONE]\n\n";
         let base = serve_http(200, "text/event-stream", body.as_bytes(), None);
@@ -859,6 +916,13 @@ mod tests {
                 assert_eq!(call.id, "call_1");
                 assert_eq!(call.name, "write_file");
                 assert_eq!(call.arguments, r#"{"path":"output/a.txt"}"#);
+                assert_eq!(
+                    call.extra_content
+                        .as_ref()
+                        .and_then(|value| value.pointer("/google/thought_signature"))
+                        .and_then(|value| value.as_str()),
+                    Some("sig-abc")
+                );
             }
             other => panic!("{other:?}"),
         }

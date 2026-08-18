@@ -2537,16 +2537,16 @@ mod tests {
                 .unwrap_or_default();
             Box::pin(async move {
                 if phase == 1 {
-                    let _ = events.send(ModelEvent::ToolCall(ToolCall {
-                        id: "call_a".into(),
-                        name: "write_file".into(),
-                        arguments: r#"{"path":"output/a.txt","content":"a"}"#.into(),
-                    }));
-                    let _ = events.send(ModelEvent::ToolCall(ToolCall {
-                        id: "call_b".into(),
-                        name: "write_file".into(),
-                        arguments: r#"{"path":"output/b.txt","content":"b"}"#.into(),
-                    }));
+                    let _ = events.send(ModelEvent::ToolCall(ToolCall::new(
+                        "call_a",
+                        "write_file",
+                        r#"{"path":"output/a.txt","content":"a"}"#,
+                    )));
+                    let _ = events.send(ModelEvent::ToolCall(ToolCall::new(
+                        "call_b",
+                        "write_file",
+                        r#"{"path":"output/b.txt","content":"b"}"#,
+                    )));
                 } else {
                     let _ = events.send(ModelEvent::TextDelta(format!("You typed: {prompt}")));
                 }
@@ -2625,11 +2625,11 @@ mod tests {
             let turn = *turn;
             Box::pin(async move {
                 if turn == 1 {
-                    let _ = events.send(ModelEvent::ToolCall(ToolCall {
-                        id: "call_1".into(),
-                        name: "write_file".into(),
-                        arguments: r#"{"path":"output/hello.txt","content":"hello"}"#.into(),
-                    }));
+                    let _ = events.send(ModelEvent::ToolCall(ToolCall::new(
+                        "call_1",
+                        "write_file",
+                        r#"{"path":"output/hello.txt","content":"hello"}"#,
+                    )));
                 } else {
                     let _ = events.send(ModelEvent::TextDelta("Created hello.txt".into()));
                 }
@@ -2663,11 +2663,11 @@ mod tests {
             let arguments = self.arguments.clone();
             Box::pin(async move {
                 if turn == 1 {
-                    let _ = events.send(ModelEvent::ToolCall(ToolCall {
-                        id: "call_ext".into(),
-                        name: "write_file".into(),
+                    let _ = events.send(ModelEvent::ToolCall(ToolCall::new(
+                        "call_ext",
+                        "write_file",
                         arguments,
-                    }));
+                    )));
                 } else {
                     let _ = events.send(ModelEvent::TextDelta("File was not written".into()));
                 }
@@ -2693,11 +2693,11 @@ mod tests {
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ModelError>> + Send>>
         {
             Box::pin(async move {
-                let _ = events.send(ModelEvent::ToolCall(ToolCall {
-                    id: "call_loop".into(),
-                    name: "list_directory".into(),
-                    arguments: r#"{"path":"."}"#.into(),
-                }));
+                let _ = events.send(ModelEvent::ToolCall(ToolCall::new(
+                    "call_loop",
+                    "list_directory",
+                    r#"{"path":"."}"#,
+                )));
                 Ok(())
             })
         }
@@ -2815,18 +2815,18 @@ mod tests {
             Box::pin(async move {
                 match turn {
                     1 => {
-                        let _ = events.send(ModelEvent::ToolCall(ToolCall {
-                            id: "call_snap".into(),
-                            name: "get_accessibility_snapshot".into(),
-                            arguments: "{}".into(),
-                        }));
+                        let _ = events.send(ModelEvent::ToolCall(ToolCall::new(
+                            "call_snap",
+                            "get_accessibility_snapshot",
+                            "{}",
+                        )));
                     }
                     2 => {
-                        let _ = events.send(ModelEvent::ToolCall(ToolCall {
-                            id: "call_press".into(),
-                            name: "ui_press".into(),
-                            arguments: press_arguments,
-                        }));
+                        let _ = events.send(ModelEvent::ToolCall(ToolCall::new(
+                            "call_press",
+                            "ui_press",
+                            press_arguments,
+                        )));
                     }
                     _ => {
                         let _ = events.send(ModelEvent::TextDelta("Pressed Continue".into()));
