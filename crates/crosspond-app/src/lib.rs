@@ -120,14 +120,34 @@ pub fn run() {
 fn install_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
     let quit = PredefinedMenuItem::quit(app, Some("Quit Crosspond"))?;
+    // macOS routes ⌘C / ⌘V / ⌘X / ⌘A / ⌘Z through the Edit menu even for
+    // accessory apps whose menu bar is not shown. Without these items,
+    // WKWebView cannot copy or paste in the prompt or Settings fields.
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
     let menu = Menu::with_items(
         app,
-        &[&Submenu::with_items(
-            app,
-            "Crosspond",
-            true,
-            &[&settings, &PredefinedMenuItem::separator(app)?, &quit],
-        )?],
+        &[
+            &Submenu::with_items(
+                app,
+                "Crosspond",
+                true,
+                &[&settings, &PredefinedMenuItem::separator(app)?, &quit],
+            )?,
+            &edit,
+        ],
     )?;
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
