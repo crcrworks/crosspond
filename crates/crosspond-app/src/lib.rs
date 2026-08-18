@@ -70,6 +70,7 @@ pub fn run() {
             commands::test_connection,
             commands::list_history,
             commands::cycle_computer_approval,
+            commands::set_computer_approval,
             commands::permissions,
             commands::open_system_settings,
             commands::reveal_artifact,

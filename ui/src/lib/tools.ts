@@ -207,6 +207,8 @@ export function taskStatusVisual(status: string): { label: string; tone: ToolTon
 	}
 }
 
+export const APPROVAL_MODES = ['auto', 'agent', 'manual'] as const;
+
 export function approvalLabel(mode: string): string {
 	switch (mode) {
 		case 'auto':

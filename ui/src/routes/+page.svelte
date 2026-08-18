@@ -4,7 +4,6 @@
 		approve,
 		bootstrap,
 		cancel,
-		cycleComputerApproval,
 		hideLauncher,
 		listHistory,
 		loadSettings,
@@ -13,6 +12,7 @@
 		resetSession,
 		revealArtifact,
 		revealHistoryArtifact,
+		setComputerApproval,
 		setUiFlags,
 		startTask,
 		syncLauncherSize
@@ -21,20 +21,20 @@
 	import ApprovalCard from '$lib/components/ApprovalCard.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import ConversationHeader from '$lib/components/ConversationHeader.svelte';
-	import Icon from '$lib/components/Icon.svelte';
 	import HistoryPanel from '$lib/components/HistoryPanel.svelte';
 	import Onboarding from '$lib/components/Onboarding.svelte';
+	import PromptBar from '$lib/components/PromptBar.svelte';
 	import ReceiptCard from '$lib/components/ReceiptCard.svelte';
 	import TranscriptView from '$lib/components/TranscriptView.svelte';
 	import { LauncherSession } from '$lib/session.svelte';
-	import { approvalLabel } from '$lib/tools';
 	import { firstUserTitle } from '$lib/transcript';
-	import type { AgentEvent, LauncherShown } from '$lib/types';
+	import type { AgentEvent, ComputerApproval, LauncherShown } from '$lib/types';
 	import { onMount } from 'svelte';
 
 	const session = new LauncherSession();
 	let textarea: HTMLTextAreaElement | undefined = $state();
-	let extraHeight = $state(0);
+	let textExtra = $state(0);
+	let modeMenuOpen = $state(false);
 	let stickToBottom = $state(true);
 	let scroller: HTMLDivElement | undefined = $state();
 
@@ -42,6 +42,16 @@
 		session.inConversation && session.overlay === 'none'
 	);
 	const expanded = $derived(!session.compact);
+	const extraHeight = $derived(
+		textExtra + (session.compact && modeMenuOpen ? 120 : 0)
+	);
+	const canSubmit = $derived(
+		session.state === 'idle' ||
+			session.state === 'completed' ||
+			session.state === 'failed' ||
+			session.state === 'cancelled'
+	);
+	const dockPrompt = $derived(expanded && session.overlay !== 'onboarding');
 	const blocks = $derived.by(() => {
 		session.rev;
 		return session.transcript.snapshot();
@@ -134,6 +144,9 @@
 		try {
 			const taskId = await startTask(prompt);
 			session.beginTask(taskId, prompt);
+			modeMenuOpen = false;
+			textExtra = 0;
+			if (textarea) textarea.style.height = 'auto';
 		} catch (error) {
 			session.transcript.pushNotice(String(error));
 			session.state = 'failed';
@@ -151,6 +164,9 @@
 		session.resetLocal();
 		await resetSession();
 		await refreshHistory();
+		modeMenuOpen = false;
+		textExtra = 0;
+		if (textarea) textarea.style.height = 'auto';
 		textarea?.focus();
 	}
 
@@ -185,6 +201,10 @@
 	function onKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
 			event.preventDefault();
+			if (modeMenuOpen) {
+				modeMenuOpen = false;
+				return;
+			}
 			void onEscape();
 			return;
 		}
@@ -203,16 +223,9 @@
 			void hideLauncher();
 			return;
 		}
-		if (event.key === 'ArrowUp' && session.input.length === 0 && session.overlay === 'none') {
+		if (event.key === 'ArrowUp' && !modeMenuOpen && session.input.length === 0 && session.overlay === 'none') {
 			event.preventDefault();
 			void onHistory();
-		}
-	}
-
-	function onPromptKey(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey) {
-			event.preventDefault();
-			void submit();
 		}
 	}
 
@@ -227,18 +240,14 @@
 		await openSettings();
 	}
 
-	function onInput() {
-		if (!textarea) return;
-		textarea.style.height = 'auto';
-		const next = Math.min(textarea.scrollHeight, 160);
-		textarea.style.height = `${next}px`;
-		extraHeight = Math.max(0, next - 24);
+	async function onApproval(mode: ComputerApproval) {
+		session.computerApproval = await setComputerApproval(mode);
 	}
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="launcher">
+<div class={['launcher', dockPrompt && 'dock-prompt']}>
 	{#if showHeader}
 		<ConversationHeader
 			liveTitle={session.inConversation ? (liveTitle ?? 'Chat') : null}
@@ -262,45 +271,35 @@
 			}}
 		/>
 	{/if}
-	<div
-		class="flex shrink-0 flex-row items-center gap-3 px-4 py-3"
-		class:items-end={expanded}
-		data-tauri-drag-region
-	>
-		{#if session.overlay === 'onboarding'}
-			<div class="min-w-0 flex-1 text-sm">Welcome to Crosspond</div>
-		{:else}
-			<div class="prompt">
-				<label class="prompt-main">
-					<Icon src="/icons/search.svg" />
-					<textarea
-						bind:this={textarea}
-						bind:value={session.input}
-						placeholder={session.placeholder}
-						aria-label={session.placeholder}
-						rows="1"
-						onkeydown={onPromptKey}
-						oninput={onInput}
-						oncompositionstart={() => (session.composing = true)}
-						oncompositionend={() => (session.composing = false)}
-					></textarea>
-				</label>
-				<button
-					type="button"
-					class="prompt-mode"
-					onclick={async (event) => {
-						event.preventDefault();
-						session.computerApproval = await cycleComputerApproval();
-					}}
-				>
-					{approvalLabel(session.computerApproval)}
-				</button>
-			</div>
-		{/if}
-		{#if session.busy}
-			<Button label="Stop" onclick={() => void cancel()} variant="danger" />
-		{/if}
-	</div>
+	{#if session.overlay === 'onboarding'}
+		<div class="shrink-0 px-4 py-3 text-sm">Welcome to Crosspond</div>
+	{:else}
+		<div
+			class={[
+				'prompt-slot',
+				expanded ? 'docked' : 'seamless',
+				!expanded && session.badges.length === 0 && !modeMenuOpen && 'fill'
+			]}
+			data-tauri-drag-region
+		>
+			<PromptBar
+				variant={expanded ? 'docked' : 'seamless'}
+				bind:value={session.input}
+				bind:textarea
+				bind:menuOpen={modeMenuOpen}
+				placeholder={session.placeholder}
+				approval={session.computerApproval}
+				busy={session.busy}
+				{canSubmit}
+				onsubmit={() => void submit()}
+				oncancel={() => void cancel()}
+				onapproval={(mode) => void onApproval(mode)}
+				ongrow={(extra) => (textExtra = extra)}
+				oncompositionstart={() => (session.composing = true)}
+				oncompositionend={() => (session.composing = false)}
+			/>
+		</div>
+	{/if}
 	{#if session.overlay !== 'onboarding' && !chatLayout && session.badges.length > 0}
 		<div class="px-4 pb-2 text-xs text-[var(--muted)]">
 			{#each session.badges as line (line)}
@@ -311,7 +310,7 @@
 	{#if expanded}
 		<div
 			bind:this={scroller}
-			class="min-h-0 flex-1 overflow-y-auto px-4 pb-4"
+			class="transcript-pane min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-2"
 			onscroll={() => {
 				if (!scroller) return;
 				const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
