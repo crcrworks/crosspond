@@ -300,15 +300,20 @@ kbd {
 	flex-shrink: 0;
 	align-items: center;
 	justify-content: center;
-	width: 32px;
+	align-self: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
 	border: 0;
-	border-radius: 6px;
+	border-radius: 4px;
 	background: transparent;
 	cursor: pointer;
 }
 
-.chat-new:hover {
+.chat-new:hover,
+.chat-new:focus-visible {
 	background: var(--tone-muted-bg);
+	outline: none;
 }
 
 .chat-tabs {
