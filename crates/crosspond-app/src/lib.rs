@@ -22,14 +22,13 @@ pub fn run() {
     let config = Arc::new(FileConfigStore::in_home());
     let secrets: Arc<dyn crosspond_core::SecretStore> = Arc::new(MacOsKeychainSecretStore);
     let (accessibility, screenshot, apps, input, calendar) = macos_agent_backends();
-    let apps = Arc::new(apps);
     let (channels, runtime) = spawn_runtime_with_tools(
         Arc::clone(&config) as _,
         Arc::clone(&secrets),
         Arc::new(computer_and_screenshot_registry(
             Arc::new(accessibility),
             Arc::new(screenshot),
-            Arc::clone(&apps) as _,
+            Arc::new(apps),
             Arc::new(input),
             Arc::new(calendar),
         )),
@@ -48,7 +47,6 @@ pub fn run() {
         config,
         secrets,
         Arc::new(MacOsContextCollector),
-        apps,
         hotkey,
         runtime,
     );

@@ -6,14 +6,12 @@ use crosspond_core::{
     CommandSender, ConfigStore, ContextCapsule, ContextCollector, ConversationId,
     GlobalHotkeyService, SecretStore, TaskId,
 };
-use crosspond_tools::AppBackend;
 
 pub struct AppState {
     pub commands: CommandSender,
     pub config: Arc<dyn ConfigStore>,
     pub secrets: Arc<dyn SecretStore>,
     pub collector: Arc<dyn ContextCollector>,
-    pub apps: Arc<dyn AppBackend>,
     pub hotkey: Mutex<Box<dyn GlobalHotkeyService>>,
     pub inner: Mutex<InnerState>,
     _runtime: JoinHandle<()>,
@@ -38,7 +36,6 @@ impl AppState {
         config: Arc<dyn ConfigStore>,
         secrets: Arc<dyn SecretStore>,
         collector: Arc<dyn ContextCollector>,
-        apps: Arc<dyn AppBackend>,
         hotkey: Box<dyn GlobalHotkeyService>,
         runtime: JoinHandle<()>,
     ) -> Self {
@@ -47,7 +44,6 @@ impl AppState {
             config,
             secrets,
             collector,
-            apps,
             hotkey: Mutex::new(hotkey),
             inner: Mutex::new(InnerState {
                 ambient: ContextCapsule::default(),
