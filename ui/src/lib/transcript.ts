@@ -391,6 +391,17 @@ export function workHeaderVisual(steps: WorkStep[]): WorkHeaderVisual | null {
 	return { icon: '/icons/wrench.svg', tone: 'muted' };
 }
 
+/** Live "Preparing next moves" belongs inside an open work group, not as a sibling. */
+export function workHostsPreparing(block: TranscriptBlock | undefined): boolean {
+	if (block?.kind !== 'work' || block.workedMs !== null) return false;
+	const last = block.steps.at(-1);
+	if (last?.kind === 'thinking' && last.durationMs === null) return false;
+	const tools = block.steps.filter(
+		(step): step is Extract<WorkStep, { kind: 'tool' }> => step.kind === 'tool'
+	);
+	return tools.length > 0 && tools.every((step) => !step.tool.running);
+}
+
 export function heartbeatStatus(
 	state: string,
 	transcript: Transcript,
@@ -403,6 +414,9 @@ export function heartbeatStatus(
 			if (transcript.runningTool()) return null;
 			if (activity.kind === 'writing' || activity.kind === 'tool') return null;
 			if (activity.kind === 'thinking' && transcript.liveThinkingIndex() !== null) return null;
+			if (activity.kind === 'preparing' && workHostsPreparing(transcript.blocks().at(-1))) {
+				return null;
+			}
 			return liveActivityLabel(activity);
 		}
 		default:

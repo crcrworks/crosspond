@@ -1,8 +1,10 @@
 <script lang="ts">
 	import {
 		collapsedLabel,
+		liveActivityLabel,
 		thoughtLabel,
 		workHeaderVisual,
+		workHostsPreparing,
 		type TranscriptBlock,
 		type WorkStep
 	} from '$lib/transcript';
@@ -15,11 +17,13 @@
 	let {
 		blocks,
 		thinkingLiveIndex,
+		preparing = false,
 		ontoggle,
 		ontogglestep
 	}: {
 		blocks: TranscriptBlock[];
 		thinkingLiveIndex: number | null;
+		preparing?: boolean;
 		ontoggle: (index: number) => void;
 		ontogglestep: (block: number, step: number) => void;
 	} = $props();
@@ -33,6 +37,7 @@
 			<Markdown source={block.text} />
 		{:else}
 			{@const header = workHeaderVisual(block.steps)}
+			{@const showPreparing = preparing && workHostsPreparing(block)}
 			<div class="flex flex-col gap-2">
 				<button
 					type="button"
@@ -57,6 +62,11 @@
 						{#each block.steps as step, row (row)}
 							{@render workStep(index, row, step, thinkingLiveIndex === index, true)}
 						{/each}
+						{#if showPreparing}
+							<div class="pl-4 text-sm text-[var(--muted)]">
+								<ActivityLabel text={liveActivityLabel({ kind: 'preparing' })} running />
+							</div>
+						{/if}
 					</div>
 				{/if}
 			</div>

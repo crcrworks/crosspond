@@ -381,6 +381,7 @@
 				<TranscriptView
 					{blocks}
 					{thinkingLiveIndex}
+					preparing={session.state === 'running' && session.activity.kind === 'preparing'}
 					ontoggle={(index) => {
 						session.transcript.toggle(index);
 						session.bump();
