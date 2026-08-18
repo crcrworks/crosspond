@@ -60,6 +60,7 @@
 	let triggerStart = $state(0);
 	let stageQuery = $state('');
 	let appHits = $state<string[]>([]);
+	let appsLoading = $state(false);
 	let composing = $state(false);
 	const docked = $derived(variant === 'docked');
 	const sendReady = $derived(canSubmit && (value.trim().length > 0 || mentions.length > 0));
@@ -95,6 +96,7 @@
 		mentionOpen = false;
 		stageQuery = '';
 		appHits = [];
+		appsLoading = false;
 	}
 
 	function openKinds(start: number, query: string) {
@@ -142,6 +144,18 @@
 		queueMicrotask(() => textarea?.focus());
 	}
 
+	async function loadApps() {
+		if (appsLoading) return;
+		appsLoading = true;
+		try {
+			appHits = await onlistapps();
+		} catch {
+			appHits = [];
+		} finally {
+			appsLoading = false;
+		}
+	}
+
 	function selectKind(item: MentionCatalogItem) {
 		if (item.needsPicker) {
 			replaceTrigger('');
@@ -150,13 +164,7 @@
 			mentionIndex = 0;
 			mentionOpen = true;
 			menuOpen = false;
-			void onlistapps()
-				.then((names) => {
-					appHits = names;
-				})
-				.catch(() => {
-					appHits = [];
-				});
+			void loadApps();
 			return;
 		}
 		addMention(mentionFromKind(item.kind));
@@ -281,6 +289,7 @@
 			stage = null;
 			stageQuery = '';
 			appHits = [];
+			appsLoading = false;
 		}
 	});
 </script>
@@ -410,7 +419,7 @@
 					</button>
 				{/each}
 				{#if filteredApps.length === 0}
-					<div class="mention-empty">Type an app name</div>
+					<div class="mention-empty">{appsLoading ? 'Loading apps…' : 'Type an app name'}</div>
 				{/if}
 			{/if}
 		</div>
