@@ -1,15 +1,27 @@
 <script lang="ts">
 	import { APPROVAL_MODES, approvalLabel } from '$lib/tools';
 	import { composerExtraHeight } from '$lib/launcher-size';
+	import {
+		chipLabel,
+		filterCatalog,
+		mentionFromKind,
+		mentionTrigger,
+		type Mention,
+		type MentionCatalogItem
+	} from '$lib/mentions';
 	import type { ComputerApproval } from '$lib/types';
 	import Chevron from './Chevron.svelte';
 	import Icon from './Icon.svelte';
+
+	type PickerStage = 'kinds' | 'app';
 
 	let {
 		variant = 'seamless',
 		value = $bindable(''),
 		textarea = $bindable<HTMLTextAreaElement | undefined>(undefined),
 		menuOpen = $bindable(false),
+		mentionOpen = $bindable(false),
+		mentions = $bindable<Mention[]>([]),
 		placeholder,
 		approval,
 		busy = false,
@@ -19,12 +31,15 @@
 		onapproval,
 		ongrow,
 		oncompositionstart,
-		oncompositionend
+		oncompositionend,
+		onlistapps
 	}: {
 		variant?: 'seamless' | 'docked';
 		value: string;
 		textarea?: HTMLTextAreaElement;
 		menuOpen: boolean;
+		mentionOpen: boolean;
+		mentions: Mention[];
 		placeholder: string;
 		approval: ComputerApproval;
 		busy?: boolean;
@@ -35,12 +50,26 @@
 		ongrow: (extra: number) => void;
 		oncompositionstart: () => void;
 		oncompositionend: () => void;
+		onlistapps: () => Promise<string[]>;
 	} = $props();
 
 	let root: HTMLDivElement | undefined = $state();
 	let activeIndex = $state(0);
+	let mentionIndex = $state(0);
+	let stage = $state<PickerStage | null>(null);
+	let triggerStart = $state(0);
+	let stageQuery = $state('');
+	let appHits = $state<string[]>([]);
+	let appsLoading = $state(false);
+	let appsLoadId = 0;
+	let composing = $state(false);
 	const docked = $derived(variant === 'docked');
-	const sendReady = $derived(canSubmit && value.trim().length > 0);
+	const sendReady = $derived(canSubmit && (value.trim().length > 0 || mentions.length > 0));
+	const kindItems = $derived(filterCatalog(stage === 'kinds' ? stageQuery : ''));
+	const filteredApps = $derived(
+		appHits.filter((name) => name.toLowerCase().includes(stageQuery.trim().toLowerCase()))
+	);
+	const mentionCount = $derived(stage === 'kinds' ? kindItems.length : filteredApps.length);
 
 	function captureRoot(node: HTMLDivElement) {
 		root = node;
@@ -63,14 +92,146 @@
 		textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
 	}
 
+	function closeMentions() {
+		appsLoadId += 1;
+		stage = null;
+		mentionOpen = false;
+		stageQuery = '';
+		appHits = [];
+		appsLoading = false;
+	}
+
+	function openKinds(start: number, query: string) {
+		menuOpen = false;
+		stage = 'kinds';
+		triggerStart = start;
+		stageQuery = query;
+		mentionIndex = 0;
+		mentionOpen = true;
+	}
+
+	function syncTriggerFromValue() {
+		if (composing) return;
+		if (stage === 'app') return;
+		const cursor = textarea?.selectionStart ?? value.length;
+		const trigger = mentionTrigger(value, cursor);
+		if (!trigger) {
+			if (stage === 'kinds') closeMentions();
+			return;
+		}
+		openKinds(trigger.start, trigger.query);
+	}
+
+	function replaceTrigger(next: string) {
+		const before = value.slice(0, triggerStart);
+		const cursor = textarea?.selectionStart ?? value.length;
+		const after = value.slice(cursor);
+		value = `${before}${next}${after}`;
+		queueMicrotask(() => {
+			const pos = before.length + next.length;
+			textarea?.setSelectionRange(pos, pos);
+			resize();
+		});
+	}
+
+	function addMention(mention: Mention) {
+		mentions = [...mentions, mention];
+		replaceTrigger('');
+		closeMentions();
+		queueMicrotask(() => textarea?.focus());
+	}
+
+	function removeMention(index: number) {
+		mentions = mentions.filter((_, item) => item !== index);
+		queueMicrotask(() => textarea?.focus());
+	}
+
+	async function loadApps() {
+		if (appsLoading) return;
+		const id = (appsLoadId += 1);
+		appsLoading = true;
+		try {
+			const names = await onlistapps();
+			if (id !== appsLoadId) return;
+			appHits = names;
+		} catch {
+			if (id !== appsLoadId) return;
+			appHits = [];
+		} finally {
+			if (id === appsLoadId) appsLoading = false;
+		}
+	}
+
+	function selectKind(item: MentionCatalogItem) {
+		if (item.needsPicker) {
+			replaceTrigger('');
+			stage = 'app';
+			stageQuery = '';
+			mentionIndex = 0;
+			mentionOpen = true;
+			menuOpen = false;
+			void loadApps();
+			return;
+		}
+		addMention(mentionFromKind(item.kind));
+	}
+
+	function selectActiveMention() {
+		if (stage === 'kinds') {
+			const item = kindItems[mentionIndex];
+			if (item) selectKind(item);
+			return;
+		}
+		if (stage === 'app') {
+			const name = filteredApps[mentionIndex] ?? stageQuery.trim();
+			if (name) addMention({ kind: 'app', name });
+		}
+	}
+
 	function onPromptKey(event: KeyboardEvent) {
+		if (event.key === 'Escape' && mentionOpen) {
+			event.preventDefault();
+			event.stopPropagation();
+			closeMentions();
+			return;
+		}
+		if (mentionOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+			event.preventDefault();
+			const count = Math.max(mentionCount, 1);
+			mentionIndex =
+				event.key === 'ArrowDown'
+					? (mentionIndex + 1) % count
+					: (mentionIndex - 1 + count) % count;
+			return;
+		}
+		if (mentionOpen && event.key === 'Enter' && !event.shiftKey) {
+			event.preventDefault();
+			selectActiveMention();
+			return;
+		}
+		if (event.key === 'Backspace' && value.length === 0 && mentions.length > 0) {
+			event.preventDefault();
+			removeMention(mentions.length - 1);
+			return;
+		}
 		if (event.key === 'Enter' && !event.shiftKey) {
 			event.preventDefault();
 			onsubmit();
 		}
 	}
 
+	function onPromptInput() {
+		resize();
+		if (stage === 'app') {
+			const cursor = textarea?.selectionStart ?? value.length;
+			stageQuery = value.slice(triggerStart, cursor);
+			return;
+		}
+		syncTriggerFromValue();
+	}
+
 	function openMenu() {
+		closeMentions();
 		activeIndex = Math.max(0, APPROVAL_MODES.indexOf(approval));
 		menuOpen = true;
 	}
@@ -92,9 +253,10 @@
 	}
 
 	function onWindowPointerDown(event: PointerEvent) {
-		if (!menuOpen || !root) return;
+		if (!root) return;
 		if (root.contains(event.target as Node)) return;
 		closeMenu();
+		closeMentions();
 	}
 
 	function onModeKey(event: KeyboardEvent) {
@@ -124,29 +286,63 @@
 
 	function onAction() {
 		if (busy) oncancel();
+		else if (mentionOpen) selectActiveMention();
 		else onsubmit();
 	}
+
+	$effect(() => {
+		if (!mentionOpen && stage !== null) {
+			appsLoadId += 1;
+			stage = null;
+			stageQuery = '';
+			appHits = [];
+			appsLoading = false;
+		}
+	});
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
 
 <div {@attach captureRoot} class={['prompt', variant]}>
-	<label class="prompt-main">
-		{#if !docked}
-			<Icon src="/icons/search.svg" />
+	<div class="prompt-stack">
+		{#if mentions.length > 0}
+			<div class="prompt-chips">
+				{#each mentions as mention, index (chipLabel(mention) + index)}
+					<button
+						type="button"
+						class="prompt-chip"
+						aria-label="Remove {chipLabel(mention)}"
+						onclick={() => removeMention(index)}
+					>
+						{chipLabel(mention)}
+					</button>
+				{/each}
+			</div>
 		{/if}
-		<textarea
-			{@attach captureTextarea}
-			bind:value
-			{placeholder}
-			aria-label={placeholder}
-			rows="1"
-			onkeydown={onPromptKey}
-			oninput={resize}
-			{oncompositionstart}
-			{oncompositionend}
-		></textarea>
-	</label>
+		<label class="prompt-main">
+			{#if !docked}
+				<Icon src="/icons/search.svg" />
+			{/if}
+			<textarea
+				{@attach captureTextarea}
+				bind:value
+				{placeholder}
+				aria-label={placeholder}
+				rows="1"
+				onkeydown={onPromptKey}
+				oninput={onPromptInput}
+				oncompositionstart={() => {
+					composing = true;
+					oncompositionstart();
+				}}
+				oncompositionend={() => {
+					composing = false;
+					oncompositionend();
+					syncTriggerFromValue();
+				}}
+			></textarea>
+		</label>
+	</div>
 	<div class="prompt-tools">
 		<div class="prompt-mode-wrap">
 			<button
@@ -193,4 +389,46 @@
 			</button>
 		{/if}
 	</div>
+	{#if mentionOpen}
+		<div
+			class={['prompt-menu', 'mention-menu', docked ? 'up' : 'down']}
+			role="listbox"
+			aria-label="Mentions"
+		>
+			{#if stage === 'kinds'}
+				{#each kindItems as item, index (item.kind)}
+					<button
+						type="button"
+						class={['prompt-option', 'mention-option', { active: index === mentionIndex }]}
+						role="option"
+						aria-selected={index === mentionIndex}
+						onpointerenter={() => (mentionIndex = index)}
+						onclick={() => selectKind(item)}
+					>
+						<span class="mention-token">@{item.token}</span>
+						<span class="mention-desc">{item.description}</span>
+					</button>
+				{/each}
+				{#if kindItems.length === 0}
+					<div class="mention-empty">No matches</div>
+				{/if}
+			{:else if stage === 'app'}
+				{#each filteredApps as name, index (name)}
+					<button
+						type="button"
+						class={['prompt-option', 'mention-option', { active: index === mentionIndex }]}
+						role="option"
+						aria-selected={index === mentionIndex}
+						onpointerenter={() => (mentionIndex = index)}
+						onclick={() => addMention({ kind: 'app', name })}
+					>
+						<span class="mention-token">{name}</span>
+					</button>
+				{/each}
+				{#if filteredApps.length === 0}
+					<div class="mention-empty">{appsLoading ? 'Loading apps…' : 'Type an app name'}</div>
+				{/if}
+			{/if}
+		</div>
+	{/if}
 </div>

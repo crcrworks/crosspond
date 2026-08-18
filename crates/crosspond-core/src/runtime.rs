@@ -26,6 +26,7 @@ use crate::conversation::{load_session_messages, write_session};
 use crate::event::AgentEvent;
 use crate::history::history_title;
 use crate::ids::{ConversationId, TaskId};
+use crate::mention::{self, Mention};
 use crate::policy::{
     AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate_with, risk_for_tool,
 };
@@ -63,6 +64,7 @@ fn system_prompt(
     computer_approval: ComputerApprovalMode,
     vault_configured: bool,
     knowledge_brief: &str,
+    mentions_block: &str,
 ) -> String {
     let scratch_block = if let Some(scratch) = scratch {
         format!(
@@ -106,6 +108,10 @@ Before tool calls, send a brief user-visible note (1–2 sentences) about what y
 When the task is complete, respond concisely with what was accomplished and relevant outputs. Format the user-visible reply in Markdown; use lists, tables, and fenced code when they make the answer easier to scan.",
         computer_approval_prompt(computer_approval)
     );
+    if !mentions_block.is_empty() {
+        prompt.push_str("\n\n");
+        prompt.push_str(mentions_block);
+    }
     if !knowledge_brief.is_empty() {
         prompt.push_str("\n\n");
         prompt.push_str(knowledge_brief);
@@ -308,11 +314,12 @@ impl Runtime {
 
     async fn start_task(&mut self, request: StartTaskRequest) {
         let task_id = request.task_id;
+        let stored_prompt = mention::display_prompt(&request.prompt, &request.mentions);
         if self
             .events
             .send(AgentEvent::TaskStarted {
                 task_id,
-                prompt: request.prompt.clone(),
+                prompt: stored_prompt.clone(),
             })
             .is_err()
         {
@@ -368,14 +375,14 @@ impl Runtime {
         } else if self.conversation_id.is_none() {
             self.conversation_id = Some(request.conversation_id);
         }
-        self.write_meta(&task_dir, task_id, &request.prompt, "running", None);
+        self.write_meta(&task_dir, task_id, &stored_prompt, "running", None);
         append_event_log(&task_dir, json!({ "type": "task_started" }));
         append_event_log(&task_dir, self.session_context.log_value());
         let _ = self.events.send(AgentEvent::ContextCollected { task_id });
 
-        if looks_like_read_later(&request.prompt)
-            && let Some(vault) = &self.knowledge
-        {
+        let wants_later = looks_like_read_later(&request.prompt)
+            || request.mentions.iter().any(Mention::is_later);
+        if wants_later && let Some(vault) = &self.knowledge {
             let saved = crate::knowledge::save_ambient_read_later(
                 vault,
                 &self.session_context,
@@ -402,14 +409,14 @@ impl Runtime {
                 self.write_meta(
                     &task_dir,
                     task_id,
-                    &request.prompt,
+                    &stored_prompt,
                     "completed",
                     path.as_deref(),
                 );
                 write_session(
                     &task_dir,
                     &[
-                        Message::user(request.prompt.clone()),
+                        Message::user(stored_prompt.clone()),
                         Message::assistant(summary.clone()),
                     ],
                 );
@@ -425,9 +432,7 @@ impl Runtime {
 
         let routed_brief = self.knowledge.as_ref().and_then(|vault| {
             KnowledgeRouter::new(vault)
-                .route(&KnowledgeContextRequest {
-                    prompt: request.prompt.clone(),
-                })
+                .route(&KnowledgeContextRequest::new(request.prompt.clone()))
                 .ok()
                 .filter(|brief| !brief.is_empty())
         });
@@ -435,6 +440,23 @@ impl Runtime {
             .as_ref()
             .map(KnowledgeBrief::render)
             .unwrap_or_default();
+        let mentions_block = mention::mention_routing(&request.mentions);
+        let mut screen_images = Vec::new();
+        if request.mentions.iter().any(Mention::is_screen) {
+            let app = request.mentions.iter().find_map(Mention::app_name);
+            match self
+                .capture_mention_screenshot(task_id, &task_dir, app)
+                .await
+            {
+                Ok(image) => screen_images.push(image),
+                Err(message) => {
+                    let _ = self
+                        .events
+                        .send(AgentEvent::TaskFailed { task_id, message });
+                    return;
+                }
+            }
+        }
         let mut messages = Vec::with_capacity(self.session.len() + 2);
         messages.push(Message::system(system_prompt(
             self.session_scratch.as_ref(),
@@ -443,9 +465,17 @@ impl Runtime {
             config.computer_approval,
             self.knowledge.is_some(),
             &knowledge_brief,
+            &mentions_block,
         )));
         messages.extend(self.session.iter().cloned());
-        messages.push(Message::user(request.prompt.clone()));
+        let user_text = mention::model_user_text(&request.prompt, &request.mentions);
+        messages.push(Message {
+            role: Role::User,
+            content: user_text,
+            images: screen_images,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        });
 
         let tool_defs = model_tools(&self.tools);
         let mut receipt_actions = Vec::new();
@@ -455,7 +485,7 @@ impl Runtime {
             if let Some(reset) = self.drain_control(task_id) {
                 self.finish_cancelled(
                     task_id,
-                    &request.prompt,
+                    &stored_prompt,
                     &task_dir,
                     reset,
                     reused_scratch,
@@ -474,7 +504,7 @@ impl Runtime {
                 StepOutcome::Cancelled { reset } => {
                     self.finish_cancelled(
                         task_id,
-                        &request.prompt,
+                        &stored_prompt,
                         &task_dir,
                         reset,
                         reused_scratch,
@@ -489,7 +519,7 @@ impl Runtime {
                     self.write_meta(
                         &task_dir,
                         task_id,
-                        &request.prompt,
+                        &stored_prompt,
                         "failed",
                         path.as_deref(),
                     );
@@ -515,7 +545,7 @@ impl Runtime {
                         if let Some(reset) = self.drain_control(task_id) {
                             self.finish_cancelled(
                                 task_id,
-                                &request.prompt,
+                                &stored_prompt,
                                 &task_dir,
                                 reset,
                                 reused_scratch,
@@ -547,7 +577,7 @@ impl Runtime {
                             ApprovalOutcome::Cancelled { reset } => {
                                 self.finish_cancelled(
                                     task_id,
-                                    &request.prompt,
+                                    &stored_prompt,
                                     &task_dir,
                                     reset,
                                     reused_scratch,
@@ -654,7 +684,7 @@ impl Runtime {
                         .offer_procedure_learn(
                             task_id,
                             &task_dir,
-                            &request.prompt,
+                            &stored_prompt,
                             &receipt,
                             routed_brief.as_ref(),
                         )
@@ -663,7 +693,7 @@ impl Runtime {
                         LearnOffer::Cancelled { reset } => {
                             self.finish_cancelled(
                                 task_id,
-                                &request.prompt,
+                                &stored_prompt,
                                 &task_dir,
                                 reset,
                                 reused_scratch,
@@ -677,7 +707,7 @@ impl Runtime {
                     }
                     self.record_activity(
                         routed_brief.as_ref(),
-                        &request.prompt,
+                        &stored_prompt,
                         ActivityStatus::Completed,
                         &summary,
                         &receipt.actions,
@@ -687,7 +717,7 @@ impl Runtime {
                     self.write_meta(
                         &task_dir,
                         task_id,
-                        &request.prompt,
+                        &stored_prompt,
                         "completed",
                         path.as_deref(),
                     );
@@ -707,7 +737,7 @@ impl Runtime {
         self.write_meta(
             &task_dir,
             task_id,
-            &request.prompt,
+            &stored_prompt,
             "failed",
             path.as_deref(),
         );
@@ -718,7 +748,7 @@ impl Runtime {
         write_session(&task_dir, &self.session);
         self.record_activity(
             routed_brief.as_ref(),
-            &request.prompt,
+            &stored_prompt,
             ActivityStatus::Failed,
             "Agent step limit exceeded",
             &receipt_actions,
@@ -962,6 +992,61 @@ impl Runtime {
             );
         }
         context
+    }
+
+    async fn capture_mention_screenshot(
+        &self,
+        task_id: TaskId,
+        task_dir: &Path,
+        app: Option<&str>,
+    ) -> Result<ImagePart, String> {
+        let mut input = json!({});
+        if let Some(app) = app.filter(|name| !name.is_empty()) {
+            input["app"] = json!(app);
+        }
+        let summary = tool_ui_summary("take_screenshot", &input);
+        append_event_log(
+            task_dir,
+            json!({
+                "type": "tool_started",
+                "tool": "take_screenshot",
+                "summary": summary,
+            }),
+        );
+        let _ = self.events.send(AgentEvent::ToolStarted {
+            task_id,
+            tool: "take_screenshot".into(),
+            summary,
+        });
+        let (text, _, image, success) = execute_tool(
+            Arc::clone(&self.tools),
+            self.tool_context(),
+            "take_screenshot".into(),
+            input,
+        )
+        .await;
+        append_event_log(
+            task_dir,
+            json!({
+                "type": "tool_finished",
+                "tool": "take_screenshot",
+                "success": success,
+            }),
+        );
+        let _ = self.events.send(AgentEvent::ToolFinished {
+            task_id,
+            tool: "take_screenshot".into(),
+        });
+        if !success {
+            return Err(text);
+        }
+        let image = image.ok_or_else(|| "screenshot was empty".to_string())?;
+        Ok(ImagePart {
+            media_type: image.media_type,
+            bytes: image.bytes,
+            width: Some(image.width),
+            height: Some(image.height),
+        })
     }
 
     async fn await_approval_if_needed(
@@ -1357,9 +1442,6 @@ mod tests {
     use std::time::Duration;
 
     use crosspond_model::{EchoProvider, ModelError, ModelProvider, Role};
-    use crosspond_tools::{
-        AccessibilityBackend, AppBackend, ToolError, computer_registry, register_shell_tools,
-    };
     use tokio::sync::mpsc;
 
     use super::*;
@@ -1367,10 +1449,16 @@ mod tests {
     use crate::config::memory::MemoryConfigStore;
     use crate::context::ContextCapsule;
     use crate::ids::{ConversationId, TaskId};
+    use crate::mention::Mention;
     use crate::policy::ComputerApprovalMode;
     use crate::scratch::FsScratchSpaceManager;
     use crate::secret::SecretString;
     use crate::secret::memory::MemorySecretStore;
+    use crosspond_tools::{
+        AccessibilityBackend, AppBackend, CalendarBackend, InputBackend, Screenshot,
+        ScreenshotBackend, ToolError, computer_and_screenshot_registry, computer_registry,
+        register_shell_tools,
+    };
 
     fn echo_builder() -> ProviderBuilder {
         Arc::new(|_, _, _| Arc::new(EchoProvider::new(Duration::from_millis(80))))
@@ -1489,6 +1577,7 @@ mod tests {
             ComputerApprovalMode::Manual,
             true,
             "Relevant Knowledge\n\nProcedure:\n- Check Lab Assignment  id=cp_lab\n",
+            "",
         );
         assert!(prompt.contains("Check Lab Assignment"));
         assert!(prompt.contains("knowledge_read"));
@@ -1509,6 +1598,7 @@ mod tests {
             ComputerApprovalMode::Manual,
             false,
             "",
+            "",
         );
         assert!(!prompt.contains("knowledge_read"));
         assert!(!prompt.contains("Relevant Knowledge"));
@@ -1526,6 +1616,7 @@ mod tests {
             &[],
             ComputerApprovalMode::Auto,
             false,
+            "",
             "",
         );
         assert!(prompt.contains("runs without asking"));
@@ -1924,6 +2015,165 @@ mod tests {
         let _ = std::fs::remove_dir_all(vault);
         let _ = std::fs::remove_file(sqlite);
         let _ = std::fs::remove_dir_all(files);
+    }
+
+    #[tokio::test]
+    async fn later_mention_saves_unread_source_without_nlp_prompt() {
+        let id = uuid::Uuid::now_v7();
+        let vault = std::env::temp_dir().join(format!("crosspond-later-mention-vault-{id}"));
+        let sqlite = std::env::temp_dir().join(format!("crosspond-later-mention-db-{id}.sqlite"));
+        let indexed = IndexedVault::open(&vault, &sqlite).unwrap();
+        let knowledge = Arc::new(indexed);
+        let (mut runtime, tmp) =
+            test_runtime(echo_builder(), seeded_secrets(), filesystem_registry());
+        runtime.knowledge = Some(Arc::clone(&knowledge));
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let task_id = TaskId::new();
+        let mut request = StartTaskRequest::new(task_id, "");
+        request.mentions = vec![Mention::Later];
+        request.context.page_url = Some("https://example.invalid/paper".into());
+        request.context.focused_window = Some(crate::context::WindowContext {
+            title: Some("Paper".into()),
+        });
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let completed = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        match completed {
+            AgentEvent::TaskCompleted { summary, .. } => {
+                assert!(summary.contains("unread Source"));
+            }
+            other => panic!("{other:?}"),
+        }
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn screen_mention_captures_ambient_pid_and_attaches_image() {
+        let pids = Arc::new(Mutex::new(Vec::new()));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let tools = computer_and_screenshot_registry(
+            Arc::new(RecordingAx {
+                pressed: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(TestShot {
+                pids: Arc::clone(&pids),
+            }),
+            Arc::new(TestApps),
+            Arc::new(TestInput),
+            Arc::new(TestCalendar),
+        );
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_, _, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&requests),
+                })
+            })
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), tools);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                context: ContextCapsule {
+                    frontmost_app: Some(crate::context::AppContext {
+                        name: "Safari".into(),
+                        bundle_id: "com.apple.Safari".into(),
+                        pid: 7,
+                    }),
+                    ..ContextCapsule::default()
+                },
+                mentions: vec![Mention::Screen],
+                ..StartTaskRequest::new(task_id, "このダイアログ進めて")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        assert_eq!(*pids.lock().expect("lock"), vec![Some(7)]);
+        {
+            let captured = requests.lock().expect("lock");
+            let user = captured[0]
+                .iter()
+                .find(|message| message.role == Role::User)
+                .expect("user");
+            assert_eq!(user.images.len(), 1);
+            assert_eq!(user.images[0].width, Some(10));
+            assert!(user.content.contains("screenshot"));
+            let system = &captured[0][0].content;
+            assert!(system.contains("User mentions"));
+            assert!(!system.contains('\u{89}'));
+        }
+        let events = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert!(events.contains("take_screenshot"));
+        assert!(!events.contains('\u{89}'));
+        assert!(!events.contains("secret"));
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn query_mention_instructs_knowledge_search() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_, _, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&requests),
+                })
+            })
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                mentions: vec![Mention::Query],
+                ..StartTaskRequest::new(task_id, "what's for lunch")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        let system = {
+            let captured = requests.lock().expect("lock");
+            captured[0][0].content.clone()
+        };
+        assert!(system.contains("User mentions"));
+        assert!(system.contains("knowledge_search"));
+        assert!(system.contains("knowledge_read"));
+        assert!(!system.contains("Pinned"));
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
     }
 
     fn scratch_dir(tmp: &Path, task_id: TaskId) -> PathBuf {
@@ -3162,6 +3412,72 @@ mod tests {
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ModelError>> + Send>>
         {
             Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct TestShot {
+        pids: Arc<Mutex<Vec<Option<i32>>>>,
+    }
+
+    impl ScreenshotBackend for TestShot {
+        fn capture(
+            &self,
+            pid: Option<i32>,
+            app_name: Option<&str>,
+        ) -> Result<Screenshot, ToolError> {
+            self.pids.lock().expect("lock").push(pid);
+            Ok(Screenshot {
+                bytes: vec![0x89, b'P', b'N', b'G'],
+                media_type: "image/png".into(),
+                width: 10,
+                height: 8,
+                app_name: app_name.unwrap_or("Safari").into(),
+            })
+        }
+
+        fn click(&self, _x: u32, _y: u32) -> Result<String, ToolError> {
+            Err(ToolError::Failed("no click".into()))
+        }
+
+        fn recapture(&self) -> Result<Screenshot, ToolError> {
+            self.capture(None, Some("Safari"))
+        }
+    }
+
+    struct TestInput;
+
+    impl InputBackend for TestInput {
+        fn type_text(&self, text: &str, _node_id: Option<&str>) -> Result<String, ToolError> {
+            Ok(format!("Typed {text}"))
+        }
+
+        fn hotkey(&self, keys: &[String]) -> Result<String, ToolError> {
+            Ok(format!("Pressed {}", keys.join("+")))
+        }
+
+        fn scroll(
+            &self,
+            direction: &str,
+            amount: u32,
+            by: &str,
+            _node_id: Option<&str>,
+            _x: Option<u32>,
+            _y: Option<u32>,
+        ) -> Result<String, ToolError> {
+            Ok(format!("Scrolled {direction} {amount} {by}"))
+        }
+    }
+
+    struct TestCalendar;
+
+    impl CalendarBackend for TestCalendar {
+        fn events(
+            &self,
+            _start_iso: &str,
+            _end_iso: &str,
+            _calendar_name: Option<&str>,
+        ) -> Result<String, ToolError> {
+            Ok("[]".into())
         }
     }
 

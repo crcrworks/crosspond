@@ -288,9 +288,7 @@ mod tests {
         let hits = indexed.find_procedure("経費精算して", 4).unwrap();
         assert!(hits.iter().any(|hit| hit.title == "経費精算"));
         let brief = KnowledgeRouter::new(&indexed)
-            .route(&KnowledgeContextRequest {
-                prompt: "経費精算して".into(),
-            })
+            .route(&KnowledgeContextRequest::new("経費精算して"))
             .unwrap();
         assert_eq!(
             brief

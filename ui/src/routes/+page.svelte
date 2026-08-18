@@ -12,6 +12,7 @@
 		reject,
 		resetSession,
 		revealArtifact,
+		listMentionApps,
 		setComputerApproval,
 		setUiFlags,
 		startTask,
@@ -29,6 +30,13 @@
 	import { LauncherSession } from '$lib/session.svelte';
 	import { firstUserTitle } from '$lib/transcript';
 	import { shouldSyncLauncherSize } from '$lib/launcher-size';
+	import {
+		MENTION_CHIP_ROW,
+		MENTION_MENU_HEIGHT,
+		displayPrompt,
+		mergeMentions,
+		takeInlineMentions
+	} from '$lib/mentions';
 	import type { AgentEvent, ComputerApproval, LauncherShown } from '$lib/types';
 	import { onMount } from 'svelte';
 
@@ -36,6 +44,7 @@
 	let textarea: HTMLTextAreaElement | undefined = $state();
 	let textExtra = $state(0);
 	let modeMenuOpen = $state(false);
+	let mentionOpen = $state(false);
 	let stickToBottom = $state(true);
 	let scroller: HTMLDivElement | undefined = $state();
 
@@ -44,7 +53,10 @@
 	);
 	const expanded = $derived(!session.compact);
 	const extraHeight = $derived(
-		textExtra + (session.compact && modeMenuOpen ? 120 : 0)
+		textExtra +
+			(session.mentions.length > 0 ? MENTION_CHIP_ROW : 0) +
+			(session.compact && mentionOpen ? MENTION_MENU_HEIGHT : 0) +
+			(session.compact && modeMenuOpen && !mentionOpen ? 120 : 0)
 	);
 	const canSubmit = $derived(
 		session.state === 'idle' ||
@@ -77,13 +89,14 @@
 
 	function resetComposerSize() {
 		modeMenuOpen = false;
+		mentionOpen = false;
 		textExtra = 0;
 		if (textarea) textarea.style.height = 'auto';
 	}
 
 	function resize() {
 		const compact = session.compact;
-		const composing = session.composing;
+		const composing = session.composing || mentionOpen || modeMenuOpen;
 		const inConversation = session.inConversation;
 		const badges = session.overlay === 'onboarding' || chatLayout ? 0 : session.badges.length;
 		const extra = extraHeight;
@@ -149,11 +162,17 @@
 		) {
 			return;
 		}
-		const prompt = session.input.trim();
-		if (prompt.length === 0) return;
+		const taken = takeInlineMentions(session.input);
+		const mentions = mergeMentions(session.mentions, taken.mentions);
+		const prompt = taken.prompt;
+		if (prompt.length === 0 && mentions.length === 0) return;
 		try {
-			const started = await startTask(prompt);
-			session.beginTask(started.task_id, started.conversation_id, prompt);
+			const started = await startTask(prompt, mentions);
+			session.beginTask(
+				started.task_id,
+				started.conversation_id,
+				displayPrompt(mentions, prompt)
+			);
 			resetComposerSize();
 		} catch (error) {
 			session.transcript.pushNotice(String(error));
@@ -234,6 +253,10 @@
 				modeMenuOpen = false;
 				return;
 			}
+			if (mentionOpen) {
+				mentionOpen = false;
+				return;
+			}
 			void onEscape();
 			return;
 		}
@@ -252,7 +275,7 @@
 			void hideLauncher();
 			return;
 		}
-		if (event.key === 'ArrowUp' && !modeMenuOpen && session.input.length === 0 && session.overlay === 'none') {
+		if (event.key === 'ArrowUp' && !modeMenuOpen && !mentionOpen && session.input.length === 0 && session.overlay === 'none' && session.mentions.length === 0) {
 			event.preventDefault();
 			void onHistory();
 		}
@@ -299,7 +322,7 @@
 			class={[
 				'prompt-slot',
 				expanded ? 'docked' : 'seamless',
-				!expanded && session.badges.length === 0 && !modeMenuOpen && 'fill'
+				!expanded && session.badges.length === 0 && !modeMenuOpen && !mentionOpen && 'fill'
 			]}
 			data-tauri-drag-region
 		>
@@ -308,6 +331,8 @@
 				bind:value={session.input}
 				bind:textarea
 				bind:menuOpen={modeMenuOpen}
+				bind:mentionOpen
+				bind:mentions={session.mentions}
 				placeholder={session.placeholder}
 				approval={session.computerApproval}
 				busy={session.busy}
@@ -318,6 +343,7 @@
 				ongrow={(extra) => (textExtra = extra)}
 				oncompositionstart={() => (session.composing = true)}
 				oncompositionend={() => (session.composing = false)}
+				onlistapps={() => listMentionApps()}
 			/>
 		</div>
 	{/if}

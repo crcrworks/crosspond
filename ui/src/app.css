@@ -130,6 +130,69 @@ kbd {
 	cursor: text;
 }
 
+.prompt-stack {
+	display: flex;
+	min-width: 0;
+	flex: 1;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.prompt-chips {
+	display: flex;
+	min-width: 0;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.prompt-chip {
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--tone-muted-bg);
+	padding: 2px 8px;
+	font: inherit;
+	font-size: 11px;
+	line-height: 1.4;
+	color: var(--text);
+	cursor: pointer;
+}
+
+.prompt-chip:hover {
+	background: var(--surface);
+}
+
+.mention-menu {
+	left: 0;
+	right: auto;
+	min-width: min(100%, 280px);
+	max-height: 240px;
+	overflow-y: auto;
+}
+
+.mention-option {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.mention-token {
+	color: var(--text);
+	font-family: 'SF Mono', ui-monospace, Menlo, monospace;
+	font-size: 12px;
+}
+
+.mention-desc {
+	color: var(--muted);
+	font-size: 11px;
+}
+
+.mention-empty {
+	padding: 8px;
+	font-size: 12px;
+	color: var(--muted);
+}
+
 .prompt.seamless .prompt-main {
 	align-items: center;
 }

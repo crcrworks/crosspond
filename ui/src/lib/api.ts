@@ -7,13 +7,18 @@ import type {
 	SettingsView,
 	StartTaskResult
 } from './types';
+import type { Mention } from './mentions';
 
 export function bootstrap() {
 	return invoke<Bootstrap>('bootstrap');
 }
 
-export function startTask(prompt: string) {
-	return invoke<StartTaskResult>('start_task', { prompt });
+export function startTask(prompt: string, mentions: Mention[] = []) {
+	return invoke<StartTaskResult>('start_task', { prompt, mentions });
+}
+
+export function listMentionApps() {
+	return invoke<string[]>('list_mention_apps');
 }
 
 export function approve(id: string) {

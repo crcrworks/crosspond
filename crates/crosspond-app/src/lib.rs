@@ -22,13 +22,14 @@ pub fn run() {
     let config = Arc::new(FileConfigStore::in_home());
     let secrets: Arc<dyn crosspond_core::SecretStore> = Arc::new(MacOsKeychainSecretStore);
     let (accessibility, screenshot, apps, input, calendar) = macos_agent_backends();
+    let apps = Arc::new(apps);
     let (channels, runtime) = spawn_runtime_with_tools(
         Arc::clone(&config) as _,
         Arc::clone(&secrets),
         Arc::new(computer_and_screenshot_registry(
             Arc::new(accessibility),
             Arc::new(screenshot),
-            Arc::new(apps),
+            Arc::clone(&apps) as _,
             Arc::new(input),
             Arc::new(calendar),
         )),
@@ -47,6 +48,7 @@ pub fn run() {
         config,
         secrets,
         Arc::new(MacOsContextCollector),
+        apps,
         hotkey,
         runtime,
     );
@@ -78,6 +80,7 @@ pub fn run() {
             commands::reveal_history_artifact,
             commands::set_ui_flags,
             commands::sync_launcher_size,
+            commands::list_mention_apps,
         ])
         .setup(move |app| {
             // tao defaults to Regular, which overrides Info.plist LSUIElement and
