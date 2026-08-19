@@ -15,8 +15,16 @@ pub trait AccessibilityBackend: Send + Sync {
     fn snapshot(&self, pid: Option<i32>, app_name: Option<&str>) -> Result<String, ToolError>;
     fn press(&self, node_id: &str) -> Result<String, ToolError>;
     fn set_value(&self, node_id: &str, value: &str) -> Result<String, ToolError>;
+    /// Fill a password field. Host-only; the model never supplies `value`.
+    fn set_secure_value(&self, node_id: &str, value: &str) -> Result<String, ToolError> {
+        let _ = (node_id, value);
+        Err(ToolError::Failed("secure fill is not available".into()))
+    }
     fn describe_node(&self, node_id: &str) -> Option<String>;
     fn is_secure_node(&self, _node_id: &str) -> bool {
+        false
+    }
+    fn focused_is_secure(&self) -> bool {
         false
     }
 }
@@ -88,7 +96,10 @@ pub fn register_computer_tools(
     registry.register(Arc::new(UiPress {
         backend: Arc::clone(&backend),
     }));
-    registry.register(Arc::new(UiSetValue { backend }));
+    registry.register(Arc::new(UiSetValue {
+        backend: Arc::clone(&backend),
+    }));
+    registry.register(Arc::new(FillCredential { backend }));
 }
 
 pub fn register_screenshot_tools(
@@ -113,9 +124,14 @@ pub fn register_app_tools(registry: &mut ToolRegistry, apps: Arc<dyn AppBackend>
     registry.register(Arc::new(FocusApp { backend: apps }));
 }
 
-pub fn register_input_tools(registry: &mut ToolRegistry, input: Arc<dyn InputBackend>) {
+pub fn register_input_tools(
+    registry: &mut ToolRegistry,
+    input: Arc<dyn InputBackend>,
+    ax: Arc<dyn AccessibilityBackend>,
+) {
     registry.register(Arc::new(UiType {
         backend: Arc::clone(&input),
+        ax,
     }));
     registry.register(Arc::new(UiHotkey {
         backend: Arc::clone(&input),
@@ -142,7 +158,7 @@ pub fn computer_and_screenshot_registry(
     let mut registry = computer_registry(Arc::clone(&ax), Arc::clone(&apps));
     register_screenshot_tools(&mut registry, screenshot, Arc::clone(&apps));
     register_app_tools(&mut registry, apps);
-    register_input_tools(&mut registry, input);
+    register_input_tools(&mut registry, input, ax);
     crate::calendar::register_calendar_tools(&mut registry, calendar);
     crate::web::register_web_tools(&mut registry);
     crate::shell::register_shell_tools(&mut registry);
@@ -191,6 +207,16 @@ fn resolve_target(
         Ok((Some(pid), Some(name)))
     } else {
         Ok((context.frontmost_pid, context.frontmost_name.clone()))
+    }
+}
+
+fn parse_named_node_id(input: &Value, key: &str) -> Result<Option<String>, ToolError> {
+    match input.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if value.trim().is_empty() => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(Value::Number(value)) => Ok(Some(value.to_string())),
+        _ => Err(ToolError::Failed(format!("{key} must be a node id"))),
     }
 }
 
@@ -412,7 +438,7 @@ impl Tool for UiSetValue {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "ui_set_value".into(),
-            description: "Set the value of a text field from the latest accessibility snapshot. May require user approval.".into(),
+            description: "Set the value of a text field from the latest accessibility snapshot. Do not use this for passwords; call fill_credential. May require user approval.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -458,6 +484,100 @@ impl Tool for UiSetValue {
         let text = self.backend.set_value(&node_id, value)?;
         Ok(ToolResult {
             text: truncate_output(text),
+            created_file: None,
+            image: None,
+        })
+    }
+}
+
+struct FillCredential {
+    backend: Arc<dyn AccessibilityBackend>,
+}
+
+impl Tool for FillCredential {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "fill_credential".into(),
+            description: "Fill a login dialog from a Knowledge Vault credential_ref. Pass node ids from the latest snapshot. Never pass a username or password; Crosspond collects those from the user or Keychain.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "credential_ref": {
+                        "type": "string",
+                        "description": "credential_ref from a Resource note. Do not invent a new name."
+                    },
+                    "username_node_id": {
+                        "description": "Username field node id from the latest get_accessibility_snapshot"
+                    },
+                    "password_node_id": {
+                        "description": "Password field node id from the latest get_accessibility_snapshot"
+                    },
+                    "ask_user": ask_user_property()
+                },
+                "required": ["credential_ref"]
+            }),
+        }
+    }
+
+    fn approval_prompt(&self, context: &ToolContext, input: &Value) -> (String, String) {
+        let credential_ref = input
+            .get("credential_ref")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("a saved login");
+        (
+            format!("Fill saved login for {credential_ref}"),
+            app_clause(context),
+        )
+    }
+
+    fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+        let credential_ref = input
+            .get("credential_ref")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ToolError::Failed("credential_ref is required".into()))?;
+        let username_node = parse_named_node_id(&input, "username_node_id")?;
+        let password_node = parse_named_node_id(&input, "password_node_id")?;
+        if username_node.is_none() && password_node.is_none() {
+            return Err(ToolError::Failed(
+                "username_node_id or password_node_id is required".into(),
+            ));
+        }
+        let username = context
+            .fill_username
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let password = context
+            .fill_password
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if username_node.is_some() && username.is_none() {
+            return Err(ToolError::Failed(
+                "login was not provided; Crosspond must collect it from the user".into(),
+            ));
+        }
+        if password_node.is_some() && password.is_none() {
+            return Err(ToolError::Failed(
+                "login was not provided; Crosspond must collect it from the user".into(),
+            ));
+        }
+        if let (Some(node_id), Some(value)) = (username_node.as_deref(), username) {
+            if self.backend.is_secure_node(node_id) {
+                self.backend.set_secure_value(node_id, value)?;
+            } else {
+                self.backend.set_value(node_id, value)?;
+            }
+        }
+        if let (Some(node_id), Some(value)) = (password_node.as_deref(), password) {
+            self.backend.set_secure_value(node_id, value)?;
+        }
+        Ok(ToolResult {
+            text: format!("Filled login for {credential_ref}. Values were not returned."),
             created_file: None,
             image: None,
         })
@@ -702,13 +822,14 @@ impl Tool for FocusApp {
 
 struct UiType {
     backend: Arc<dyn InputBackend>,
+    ax: Arc<dyn AccessibilityBackend>,
 }
 
 impl Tool for UiType {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "ui_type".into(),
-            description: "Type text into the focused field or a node from the latest accessibility snapshot. May require user approval.".into(),
+            description: "Type text into the focused field or a node from the latest accessibility snapshot. Do not type passwords; use fill_credential. May require user approval.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -745,6 +866,15 @@ impl Tool for UiType {
             Some(Value::Number(value)) => Some(value.to_string()),
             _ => None,
         };
+        if node_id
+            .as_deref()
+            .is_some_and(|id| self.ax.is_secure_node(id))
+            || (node_id.is_none() && self.ax.focused_is_secure())
+        {
+            return Err(ToolError::Failed(
+                "won't type into a password field; use fill_credential".into(),
+            ));
+        }
         let text = self.backend.type_text(text, node_id.as_deref())?;
         Ok(ToolResult {
             text: truncate_output(text),
@@ -958,6 +1088,7 @@ mod tests {
         values: Mutex<Vec<(String, String)>>,
         known: Vec<&'static str>,
         secure: Vec<&'static str>,
+        focused_secure: bool,
     }
 
     impl MockAx {
@@ -969,6 +1100,7 @@ mod tests {
                 values: Mutex::new(Vec::new()),
                 known: vec!["2", "4"],
                 secure: vec!["9"],
+                focused_secure: false,
             }
         }
     }
@@ -993,6 +1125,11 @@ mod tests {
         }
 
         fn set_value(&self, node_id: &str, value: &str) -> Result<String, ToolError> {
+            if self.is_secure_node(node_id) {
+                return Err(ToolError::Failed(
+                    "won't set a password field from the snapshot".into(),
+                ));
+            }
             if !self.known.contains(&node_id) && node_id != "9" {
                 return Err(ToolError::Failed(
                     "stale or unknown node id. Call get_accessibility_snapshot again.".into(),
@@ -1003,6 +1140,19 @@ mod tests {
                 .expect("lock")
                 .push((node_id.to_string(), value.to_string()));
             Ok(format!("Set node {node_id}.\n\n{}", self.snapshot))
+        }
+
+        fn set_secure_value(&self, node_id: &str, value: &str) -> Result<String, ToolError> {
+            if !self.known.contains(&node_id) && node_id != "9" {
+                return Err(ToolError::Failed(
+                    "stale or unknown node id. Call get_accessibility_snapshot again.".into(),
+                ));
+            }
+            self.values
+                .lock()
+                .expect("lock")
+                .push((node_id.to_string(), value.to_string()));
+            Ok("Filled a password field.".into())
         }
 
         fn describe_node(&self, node_id: &str) -> Option<String> {
@@ -1016,6 +1166,10 @@ mod tests {
 
         fn is_secure_node(&self, node_id: &str) -> bool {
             self.secure.contains(&node_id)
+        }
+
+        fn focused_is_secure(&self) -> bool {
+            self.focused_secure
         }
     }
 
@@ -1145,6 +1299,93 @@ mod tests {
         );
         assert!(title.contains("Email"));
         assert!(title.contains("a@b.com"));
+    }
+
+    #[test]
+    fn fill_credential_uses_host_login_and_omits_values() {
+        let backend = Arc::new(MockAx::checkout());
+        let registry = computer_registry(Arc::clone(&backend) as _, mock_apps());
+        let mut context = ctx();
+        context.fill_username = Some("labuser".into());
+        context.fill_password = Some("hunter2".into());
+        let result = registry
+            .execute(
+                "fill_credential",
+                &context,
+                json!({
+                    "credential_ref": "lab.fileserver",
+                    "username_node_id": "2",
+                    "password_node_id": "9"
+                }),
+            )
+            .unwrap();
+        assert!(result.text.contains("lab.fileserver"));
+        assert!(!result.text.contains("labuser"));
+        assert!(!result.text.contains("hunter2"));
+        let filled = backend.values.lock().expect("lock").clone();
+        assert_eq!(
+            filled,
+            vec![
+                ("2".into(), "labuser".into()),
+                ("9".into(), "hunter2".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn fill_credential_without_host_login_errors() {
+        let err = computer_registry(Arc::new(MockAx::checkout()), mock_apps())
+            .execute(
+                "fill_credential",
+                &ctx(),
+                json!({
+                    "credential_ref": "lab.fileserver",
+                    "password_node_id": "9"
+                }),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("collect"));
+    }
+
+    #[test]
+    fn ui_set_value_refuses_secure_fields() {
+        let err = computer_registry(Arc::new(MockAx::checkout()), mock_apps())
+            .execute(
+                "ui_set_value",
+                &ctx(),
+                json!({"node_id": "9", "value": "hunter2"}),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("password"));
+        assert!(!err.to_string().contains("hunter2"));
+    }
+
+    #[test]
+    fn ui_type_refuses_secure_fields() {
+        let err = full_registry(Arc::new(MockAx::checkout()), Arc::new(MockShot::new()))
+            .execute(
+                "ui_type",
+                &ctx(),
+                json!({"text": "hunter2", "node_id": "9"}),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("fill_credential"));
+        assert!(!err.to_string().contains("hunter2"));
+    }
+
+    #[test]
+    fn ui_type_refuses_focused_secure_field() {
+        let err = full_registry(
+            Arc::new(MockAx {
+                focused_secure: true,
+                ..MockAx::checkout()
+            }),
+            Arc::new(MockShot::new()),
+        )
+        .execute("ui_type", &ctx(), json!({"text": "hunter2"}))
+        .unwrap_err();
+        assert!(err.to_string().contains("fill_credential"));
+        assert!(!err.to_string().contains("hunter2"));
     }
 
     #[test]

@@ -52,5 +52,8 @@ pub use runtime::{
     spawn_runtime_with, spawn_runtime_with_tools,
 };
 pub use scratch::default_tasks_root;
-pub use secret::{SecretError, SecretKey, SecretStore, SecretString, provider_key_is_set};
+pub use secret::{
+    CredentialBundle, SecretError, SecretKey, SecretStore, SecretString, parse_credential_ref,
+    provider_key_is_set,
+};
 pub use status::{CommandWindowState, TaskStatus};

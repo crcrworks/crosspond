@@ -11,15 +11,15 @@ describe('CredentialCard', () => {
 	it('shows login copy and the credential pointer, not a save switch by default', () => {
 		const { body } = render(CredentialCard, {
 			props: {
-				title: 'Sign in to GitHub',
-				credentialRef: 'vault:github',
+				title: 'Enter login for lab.fileserver',
+				credentialRef: 'lab.fileserver',
 				saveOffered: false,
 				...handlers
 			}
 		});
 		expect(body).toContain('Needs login');
-		expect(body).toContain('Sign in to GitHub');
-		expect(body).toContain('vault:github');
+		expect(body).toContain('Enter login for lab.fileserver');
+		expect(body).toContain('lab.fileserver');
 		expect(body).toContain('Username');
 		expect(body).toContain('Password');
 		expect(body).toContain('Fill');
@@ -31,8 +31,8 @@ describe('CredentialCard', () => {
 	it('offers a Keychain switch defaulting to Off when save is allowed', () => {
 		const { body } = render(CredentialCard, {
 			props: {
-				title: 'Sign in to GitHub',
-				credentialRef: 'vault:github',
+				title: 'Enter login for lab.fileserver',
+				credentialRef: 'lab.fileserver',
 				saveOffered: true,
 				...handlers
 			}

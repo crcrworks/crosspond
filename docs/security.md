@@ -16,6 +16,7 @@ The Keychain items use service `com.crosspond.app`:
 
 - `provider.api_key` — OpenAI-compatible provider key
 - `exa.api_key` — Exa API key for `web_search`
+- `credential.{ref}` — one JSON `{"username","password"}` bundle per Knowledge Vault `credential_ref`. The model never sees the values. Save only overwrites a ref that already exists on a vault note (`provider.api_key` / `exa.api_key` cannot be overwritten this way).
 
 Provider HTTP errors shown in the UI are short status-based messages. Raw provider JSON is not dumped to the user or to logs.
 
@@ -23,7 +24,11 @@ Selected text is sent to the model when present, but it must not appear in `even
 
 Screenshot bytes are sent to the model for vision, but must not appear in `events.jsonl`, `session.json`, receipts, logs, or `Debug` output. Only tool name / success metadata is recorded.
 
-Do not log Accessibility field values. Password fields (`AXSecureTextField`) are shown as `••••` in snapshots and omitted from approval copy.
+Do not log Accessibility field values. Password fields (`AXSecureTextField`) are shown as `••••` in snapshots and omitted from approval copy. `ui_set_value` and `ui_type` refuse secure fields; login uses `fill_credential`.
+
+## Login fill
+
+When a Resource note has `credential_ref`, the agent calls `fill_credential` with that pointer and Accessibility node ids — never a username or password. On a Keychain miss the launcher shows Username / Password and an optional **Save in Keychain** switch (default off, offered only if that ref already exists on a vault note). Fill sends `submit_credential` into Rust. Values must not appear in `AgentEvent`, the WebView, logs, `events.jsonl`, `session.json`, receipts, or tool results. A Keychain hit in Manual/AI shows Allow (“fill saved login”); Auto fills without asking. Do not interpolate secrets into `run_command` or `smb://user:pass@host`.
 
 Calendar event notes/bodies may be returned to the model from `calendar_events`, but must not appear in `events.jsonl`, `session.json`, receipts, or logs — only counts / success metadata.
 
@@ -34,13 +39,13 @@ Calendar event notes/bodies may be returned to the model from `calendar_events`,
 | Read-only (`list_apps`, `get_accessibility_snapshot`, `take_screenshot`, `web_search`, `fetch_url`, `calendar_events`, scratch `read_file` / `list_directory`) | auto |
 | Scratch-space write | auto |
 | External read or write (`read_file` / `list_directory` / `write_file` / `create_directory` outside scratch) | approval, except Auto |
-| Computer action (`open_app`, `focus_app`, `ui_press`, `ui_set_value`, `ui_click`, `ui_type`, `ui_hotkey`, `ui_scroll`) | `computer_approval`: Manual always asks; Auto never asks; Agent asks unless the model sets `ask_user: false` |
+| Computer action (`open_app`, `focus_app`, `ui_press`, `ui_set_value`, `ui_click`, `ui_type`, `ui_hotkey`, `ui_scroll`, `fill_credential`) | `computer_approval`: Manual always asks; Auto never asks; Agent asks unless the model sets `ask_user: false`. A Keychain miss for `fill_credential` prompts for login first (that prompt is consent). |
 | Shell (`run_command`) | approval, except Auto |
 | `open_url` with non-http(s) schemes | approval, except Auto |
 | `open_url` with public http(s) (SSRF-checked) | auto |
 | Destructive | approval, except Auto |
 
-The launcher shows an Allow / Cancel card for tools that require approval. **Allow** runs that one call (`allow_external` for an external path, or the computer / shell / URL action). **Cancel** returns a rejection to the model and the loop continues. Escape / Stop cancels the whole task; Escape also closes History if it is open. A chip next to the prompt cycles approval: **Auto** (run every tool without asking), **AI**, **Manual**. **History** lists recent conversations from `~/.crosspond/tasks/` and opens the same transcript as the live chat. Follow-ups resume from sanitized `session.json` (user/assistant text and tool names only — not tool bodies, images, typed text, or URL query strings).
+The launcher shows an Allow / Cancel card for tools that require approval. **Allow** runs that one call (`allow_external` for an external path, or the computer / shell / URL action). **Cancel** returns a rejection to the model and the loop continues. A Keychain miss for `fill_credential` shows Username / Password instead; **Fill** is consent for that call. Escape / Stop cancels the whole task; Escape also closes History if it is open. A chip next to the prompt cycles approval: **Auto** (run every tool without asking), **AI**, **Manual**. **History** lists recent conversations from `~/.crosspond/tasks/` and opens the same transcript as the live chat. Follow-ups resume from sanitized `session.json` (user/assistant text and tool names only — not tool bodies, images, typed text, or URL query strings).
 
 Scratch membership is not `path.starts_with(scratch)`. Classify through `resolve_path` / `classify_write_path`, which handle `..`, symlinks, and canonicalization by walking parents of the resolved path.
 

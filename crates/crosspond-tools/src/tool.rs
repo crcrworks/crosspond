@@ -26,6 +26,10 @@ pub struct ToolContext {
     pub allow_external: bool,
     /// Search provider API key (Exa for now). `Debug` redacts the value.
     pub search_api_key: Option<String>,
+    /// Host-injected username for `fill_credential`. `Debug` redacts the value.
+    pub fill_username: Option<String>,
+    /// Host-injected password for `fill_credential`. `Debug` redacts the value.
+    pub fill_password: Option<String>,
     /// Read-only Knowledge Vault lookup. Absent when no vault is configured.
     pub knowledge: Option<Arc<dyn KnowledgeBackend>>,
 }
@@ -54,6 +58,8 @@ impl std::fmt::Debug for ToolContext {
                 "search_api_key",
                 &self.search_api_key.as_ref().map(|_| "***"),
             )
+            .field("fill_username", &self.fill_username.as_ref().map(|_| "***"))
+            .field("fill_password", &self.fill_password.as_ref().map(|_| "***"))
             .field("knowledge", &self.knowledge.as_ref().map(|_| "set"))
             .finish()
     }

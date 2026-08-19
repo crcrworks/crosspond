@@ -56,6 +56,7 @@ struct LiveNode {
     token: Option<String>,
     label: String,
     secure: bool,
+    focused: bool,
 }
 
 struct WindowRecord {
@@ -195,6 +196,24 @@ impl CuaHost {
         Ok(format!("Set {}.\n\n{tree}", node.label))
     }
 
+    pub(crate) fn set_secure_value(&self, node_id: &str, value: &str) -> Result<String, ToolError> {
+        let id = parse_node_id(node_id)?;
+        let live = self.live_state()?;
+        let node = live.nodes.get(&id).cloned().ok_or_else(stale_node)?;
+        let mut arguments = json!({
+            "pid": live.pid,
+            "window_id": live.window_id,
+            "value": value
+        });
+        attach_element(&mut arguments, &live, id, node.token.as_deref())?;
+        let result = self.call("set_value", arguments)?;
+        tool_error(&result)?;
+        std::thread::sleep(Duration::from_millis(50));
+        let parsed = self.window_state(live.pid, &live.app_name, false)?;
+        let _ = self.store_and_render(live.pid, parsed)?;
+        Ok("Filled a password field.".into())
+    }
+
     pub(crate) fn describe_node(&self, node_id: &str) -> Option<String> {
         let id = node_id.parse().ok()?;
         let live = self.inner.live.lock().ok()?;
@@ -213,6 +232,14 @@ impl CuaHost {
         live.as_ref()
             .and_then(|state| state.nodes.get(&id))
             .is_some_and(|node| node.secure)
+    }
+
+    pub(crate) fn focused_is_secure(&self) -> bool {
+        let Ok(live) = self.inner.live.lock() else {
+            return false;
+        };
+        live.as_ref()
+            .is_some_and(|state| state.nodes.values().any(|node| node.focused && node.secure))
     }
 
     pub(crate) fn list_apps(&self) -> Result<String, ToolError> {
@@ -321,6 +348,19 @@ impl CuaHost {
 
     pub(crate) fn type_text(&self, text: &str, node_id: Option<&str>) -> Result<String, ToolError> {
         let live = self.live_state()?;
+        if let Some(node_id) = node_id {
+            let id = parse_node_id(node_id)?;
+            let node = live.nodes.get(&id).cloned().ok_or_else(stale_node)?;
+            if node.secure {
+                return Err(ToolError::Failed(
+                    "won't type into a password field; use fill_credential".into(),
+                ));
+            }
+        } else if live.nodes.values().any(|node| node.focused && node.secure) {
+            return Err(ToolError::Failed(
+                "won't type into a password field; use fill_credential".into(),
+            ));
+        }
         let mut arguments = json!({
             "pid": live.pid,
             "window_id": live.window_id,
@@ -1084,6 +1124,7 @@ fn outline_from_elements(elements: &[CuaElement]) -> (Vec<AxOutlineNode>, HashMa
                     .filter(|title| !title.is_empty())
                     .unwrap_or_else(|| element.role.clone()),
                 secure,
+                focused: element.focused,
             },
         );
         nodes.insert(

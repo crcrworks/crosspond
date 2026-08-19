@@ -46,6 +46,14 @@ pub enum AgentEvent {
         title: String,
         description: String,
     },
+    /// Ask the user for a username/password. Values must not appear here.
+    CredentialRequired {
+        task_id: TaskId,
+        approval_id: ApprovalId,
+        title: String,
+        credential_ref: String,
+        save_offered: bool,
+    },
     ArtifactCreated {
         task_id: TaskId,
         display_name: String,
@@ -86,5 +94,25 @@ mod tests {
         assert_eq!(json["type"], "artifact_created");
         assert_eq!(json["display_name"], "notes.md");
         assert!(json.get("path").is_none());
+    }
+
+    #[test]
+    fn credential_required_serializes_labels_only() {
+        let event = AgentEvent::CredentialRequired {
+            task_id: TaskId::new(),
+            approval_id: crate::command::ApprovalId::new(),
+            title: "Enter login for lab.fileserver".into(),
+            credential_ref: "lab.fileserver".into(),
+            save_offered: true,
+        };
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "credential_required");
+        assert_eq!(json["credential_ref"], "lab.fileserver");
+        assert_eq!(json["save_offered"].as_bool(), Some(true));
+        assert!(json.get("username").is_none());
+        assert!(json.get("password").is_none());
+        let text = json.to_string();
+        assert!(!text.contains("hunter2"));
+        assert!(!text.contains("labuser"));
     }
 }

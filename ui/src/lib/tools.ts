@@ -22,6 +22,8 @@ export function toolActivityLabel(name: string): string {
 			return 'Pressing a control…';
 		case 'ui_set_value':
 			return 'Filling a field…';
+		case 'fill_credential':
+			return 'Filling a login…';
 		case 'ui_click':
 			return 'Clicking…';
 		case 'ui_type':
@@ -87,6 +89,8 @@ export function toolDoneLabel(name: string): string {
 			return 'Pressed a control';
 		case 'ui_set_value':
 			return 'Filled a field';
+		case 'fill_credential':
+			return 'Filled a login';
 		case 'ui_click':
 			return 'Clicked';
 		case 'ui_type':
@@ -163,6 +167,8 @@ export function toolVisual(name: string): ToolVisual {
 			return { icon: '/icons/pointer.svg', tone: 'blue' };
 		case 'ui_set_value':
 			return { icon: '/icons/text.svg', tone: 'blue' };
+		case 'fill_credential':
+			return { icon: '/icons/text.svg', tone: 'yellow' };
 		case 'calendar_events':
 			return { icon: '/icons/calendar.svg', tone: 'yellow' };
 		case 'knowledge_search':

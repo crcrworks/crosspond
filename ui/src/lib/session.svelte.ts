@@ -36,6 +36,12 @@ export class LauncherSession {
 		title: string;
 		description: string;
 	} | null>(null);
+	pendingCredential = $state<{
+		id: string;
+		title: string;
+		credentialRef: string;
+		saveOffered: boolean;
+	} | null>(null);
 	artifacts = $state<string[]>([]);
 	receipt = $state<Receipt | null>(null);
 	activity = $state<LiveActivity>({ kind: 'thinking' });
@@ -92,6 +98,7 @@ export class LauncherSession {
 		this.currentTask = null;
 		this.currentConversation = null;
 		this.pendingApproval = null;
+		this.pendingCredential = null;
 		this.artifacts = [];
 		this.receipt = null;
 		this.activity = { kind: 'thinking' };
@@ -164,6 +171,15 @@ export class LauncherSession {
 				};
 				this.state = 'waiting_approval';
 				break;
+			case 'credential_required':
+				this.pendingCredential = {
+					id: event.approval_id,
+					title: event.title,
+					credentialRef: event.credential_ref,
+					saveOffered: event.save_offered
+				};
+				this.state = 'waiting_approval';
+				break;
 			case 'task_completed':
 				if (!this.transcript.hasAssistantTextSinceLastUser() && event.summary.trim() !== '') {
 					this.transcript.pushText(event.summary);
@@ -194,6 +210,7 @@ export class LauncherSession {
 		this.receipt = null;
 		this.overlay = 'none';
 		this.pendingApproval = null;
+		this.pendingCredential = null;
 		this.activity = { kind: 'thinking' };
 		this.state = 'preparing_context';
 		this.input = '';
@@ -211,6 +228,7 @@ export class LauncherSession {
 		this.currentConversation = view.id;
 		this.currentTask = null;
 		this.pendingApproval = null;
+		this.pendingCredential = null;
 		this.artifacts = [...view.artifact_names];
 		this.receipt = view.receipt;
 		this.activity = { kind: 'thinking' };
@@ -232,6 +250,7 @@ export class LauncherSession {
 
 	private settle() {
 		this.pendingApproval = null;
+		this.pendingCredential = null;
 		this.transcript.finishRunningTools();
 		this.#toolStarts = [];
 		for (const timer of this.#finishTimers.values()) clearTimeout(timer);

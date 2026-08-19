@@ -32,14 +32,14 @@ describe('LauncherSession completion', () => {
 			type: 'credential_required',
 			task_id: 'task-1',
 			approval_id: 'cred-1',
-			title: 'Sign in to GitHub',
-			credential_ref: 'vault:github',
+			title: 'Enter login for lab.fileserver',
+			credential_ref: 'lab.fileserver',
 			save_offered: true
 		});
 		expect(session.pendingCredential).toEqual({
 			id: 'cred-1',
-			title: 'Sign in to GitHub',
-			credentialRef: 'vault:github',
+			title: 'Enter login for lab.fileserver',
+			credentialRef: 'lab.fileserver',
 			saveOffered: true
 		});
 		expect(session.state).toBe('waiting_approval');

@@ -122,6 +122,22 @@ pub fn reject(id: ApprovalId, state: State<AppState>) {
 }
 
 #[tauri::command]
+pub fn submit_credential(
+    id: ApprovalId,
+    username: String,
+    password: String,
+    save: bool,
+    state: State<AppState>,
+) {
+    state.commands.send(RuntimeCommand::SubmitCredential {
+        id,
+        username: SecretString::new(username),
+        password: SecretString::new(password),
+        save,
+    });
+}
+
+#[tauri::command]
 pub fn cancel(state: State<AppState>) {
     if let Some(task_id) = state.lock_inner().current_task {
         state.commands.send(RuntimeCommand::Cancel(task_id));
@@ -178,7 +194,7 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
     let provider_key_stored = provider_key_is_set(&*state.secrets);
     let exa_key_stored = state
         .secrets
-        .get(&SecretKey::EXA_API_KEY)
+        .get(&SecretKey::exa_api_key())
         .ok()
         .flatten()
         .is_some_and(|key| !key.is_empty());
@@ -299,8 +315,8 @@ pub fn save_secret(kind: String, value: String, state: State<AppState>) -> Resul
         return Ok(());
     }
     let key = match kind.as_str() {
-        "provider" => SecretKey::PROVIDER_API_KEY,
-        "exa" => SecretKey::EXA_API_KEY,
+        "provider" => SecretKey::provider_api_key(),
+        "exa" => SecretKey::exa_api_key(),
         _ => return Err("unknown secret".into()),
     };
     state

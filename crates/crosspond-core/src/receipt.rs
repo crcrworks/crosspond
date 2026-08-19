@@ -70,6 +70,7 @@ pub fn receipt_action_line(name: &str, text: &str) -> Option<String> {
         }
         "ui_type" => Some("Typed text".into()),
         "ui_set_value" => Some("Set a field value".into()),
+        "fill_credential" => Some("Filled a login".into()),
         "run_command" => Some("Ran a command".into()),
         "open_url" => Some("Opened a URL".into()),
         "calendar_events" => Some("Read calendar events".into()),
@@ -113,6 +114,7 @@ pub fn tool_ui_summary(name: &str, input: &Value) -> String {
         "calendar_events" => calendar_range(input),
         "ui_hotkey" => keys_summary(input),
         "ui_type" | "ui_set_value" | "ui_press" | "ui_click" | "ui_scroll" => String::new(),
+        "fill_credential" => string_field(input, "credential_ref"),
         _ => String::new(),
     }
 }
@@ -211,6 +213,13 @@ mod tests {
             Some("Typed text".into())
         );
         assert_eq!(
+            receipt_action_line(
+                "fill_credential",
+                "Filled login for lab.fileserver. hunter2"
+            ),
+            Some("Filled a login".into())
+        );
+        assert_eq!(
             receipt_action_line("write_file", "Wrote output/hello.txt"),
             Some("Wrote output/hello.txt".into())
         );
@@ -226,6 +235,16 @@ mod tests {
         assert_eq!(
             tool_ui_summary("ui_set_value", &serde_json::json!({"value": "secret"})),
             ""
+        );
+        assert_eq!(
+            tool_ui_summary(
+                "fill_credential",
+                &serde_json::json!({
+                    "credential_ref": "lab.fileserver",
+                    "password": "hunter2"
+                })
+            ),
+            "lab.fileserver"
         );
         assert_eq!(
             tool_ui_summary(

@@ -46,6 +46,7 @@ pub struct KnowledgeRecord {
     pub tags: Vec<String>,
     pub body: String,
     pub path: String,
+    pub credential_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -171,7 +172,7 @@ impl Tool for KnowledgeRead {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "knowledge_read".into(),
-            description: "Read one Knowledge Vault note by id. Use after knowledge_search.".into(),
+            description: "Read one Knowledge Vault note by id. Use after knowledge_search. If credential_ref is present, call fill_credential instead of asking the user to paste a password.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -194,6 +195,11 @@ impl Tool for KnowledgeRead {
         }
         if !note.tags.is_empty() {
             text.push_str(&format!("tags: {}\n", note.tags.join(", ")));
+        }
+        if let Some(credential_ref) = &note.credential_ref {
+            text.push_str(&format!(
+                "credential_ref: {credential_ref}\nUse fill_credential with this pointer. Never ask the user to paste a password in chat.\n"
+            ));
         }
         text.push('\n');
         text.push_str(&note.body);
@@ -486,14 +492,24 @@ mod tests {
         }
 
         fn read(&self, id: &str) -> Result<KnowledgeRecord, String> {
+            let credential_ref = (id == "cp_files").then(|| "lab.fileserver".to_string());
             Ok(KnowledgeRecord {
                 id: id.into(),
-                title: "Check Lab Assignment".into(),
-                kind: "procedure".into(),
+                title: if id == "cp_files" {
+                    "Lab File Server".into()
+                } else {
+                    "Check Lab Assignment".into()
+                },
+                kind: if id == "cp_files" {
+                    "resource".into()
+                } else {
+                    "procedure".into()
+                },
                 aliases: vec!["研究室の課題確認".into()],
                 tags: vec!["lab".into()],
                 body: "Enable VPN first.\n".into(),
                 path: "procedures/Check Lab Assignment.md".into(),
+                credential_ref,
             })
         }
 
@@ -567,6 +583,17 @@ mod tests {
             .unwrap();
         assert!(result.text.contains("Enable VPN first"));
         assert!(result.text.contains("研究室の課題確認"));
+    }
+
+    #[test]
+    fn read_exposes_credential_ref_pointer_only() {
+        let result = KnowledgeRead
+            .execute(&ctx(), json!({ "id": "cp_files" }))
+            .unwrap();
+        assert!(result.text.contains("credential_ref: lab.fileserver"));
+        assert!(result.text.contains("fill_credential"));
+        assert!(!result.text.contains("hunter2"));
+        assert!(!result.text.contains("labuser"));
     }
 
     #[test]

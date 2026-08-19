@@ -10,6 +10,27 @@ use crate::receipt::{Receipt, tool_ui_summary};
 
 const TOOL_PLACEHOLDER: &str = "Tool finished.";
 
+/// Drop secret-shaped keys the model must never pass on `fill_credential`.
+pub(crate) fn redact_sensitive_tool_arguments(calls: &mut [ToolCall]) {
+    for call in calls {
+        if call.name != "fill_credential" {
+            continue;
+        }
+        let Ok(mut value) = serde_json::from_str::<Value>(&call.arguments) else {
+            continue;
+        };
+        let Some(obj) = value.as_object_mut() else {
+            continue;
+        };
+        obj.remove("username");
+        obj.remove("password");
+        obj.remove("value");
+        if let Ok(text) = serde_json::to_string(&value) {
+            call.arguments = text;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TranscriptBlock {
@@ -511,6 +532,26 @@ mod tests {
         assert!(restored.iter().all(|message| message.images.is_empty()));
         assert_eq!(restored[2].content, TOOL_PLACEHOLDER);
         assert!(!restored[1].tool_calls[0].arguments.contains("hunter2"));
+    }
+
+    #[test]
+    fn redact_fill_credential_drops_secret_keys() {
+        let mut calls = vec![ToolCall {
+            id: "c1".into(),
+            name: "fill_credential".into(),
+            arguments: json!({
+                "credential_ref": "lab.fileserver",
+                "username": "labuser",
+                "password": "hunter2",
+                "username_node_id": "2"
+            })
+            .to_string(),
+        }];
+        redact_sensitive_tool_arguments(&mut calls);
+        assert!(calls[0].arguments.contains("lab.fileserver"));
+        assert!(calls[0].arguments.contains("username_node_id"));
+        assert!(!calls[0].arguments.contains("labuser"));
+        assert!(!calls[0].arguments.contains("hunter2"));
     }
 
     #[test]

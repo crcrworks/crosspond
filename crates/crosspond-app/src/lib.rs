@@ -69,6 +69,7 @@ pub fn run() {
             commands::start_task,
             commands::approve,
             commands::reject,
+            commands::submit_credential,
             commands::cancel,
             commands::reset_session,
             commands::hide_launcher,

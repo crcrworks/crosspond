@@ -118,7 +118,7 @@ pub fn risk_for_tool(name: &str, scope: PathScope, input: &serde_json::Value) ->
         | "knowledge_find_procedure" => RiskLevel::ReadOnly,
         "knowledge_ingest" | "knowledge_propose_update" => RiskLevel::WorkspaceWrite,
         "knowledge_read_later" | "knowledge_archive_source" => RiskLevel::WorkspaceWrite,
-        "open_app" | "focus_app" | "ui_type" | "ui_hotkey" | "ui_scroll" => {
+        "open_app" | "focus_app" | "ui_type" | "ui_hotkey" | "ui_scroll" | "fill_credential" => {
             RiskLevel::ComputerAction
         }
         _ => risk_for_tool_scope(name, scope),
@@ -217,6 +217,14 @@ mod tests {
         assert_eq!(
             evaluate(risk_for_tool(
                 "ui_set_value",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "fill_credential",
                 PathScope::Workspace,
                 &empty_input()
             )),
@@ -341,6 +349,10 @@ mod tests {
         );
         assert_eq!(
             risk_for_tool("ui_hotkey", PathScope::Workspace, &empty_input()),
+            RiskLevel::ComputerAction
+        );
+        assert_eq!(
+            risk_for_tool("fill_credential", PathScope::Workspace, &empty_input()),
             RiskLevel::ComputerAction
         );
     }

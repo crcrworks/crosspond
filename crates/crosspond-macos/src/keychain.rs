@@ -24,8 +24,8 @@ impl SecretStore for MacOsKeychainSecretStore {
             use security_framework_sys::base::errSecItemNotFound;
 
             match generic_password(PasswordOptions::new_generic_password(
-                key.service,
-                key.account,
+                &key.service,
+                &key.account,
             )) {
                 Ok(bytes) => {
                     let value = String::from_utf8(bytes)
@@ -54,8 +54,8 @@ impl SecretStore for MacOsKeychainSecretStore {
         #[cfg(target_os = "macos")]
         {
             security_framework::passwords::set_generic_password(
-                key.service,
-                key.account,
+                &key.service,
+                &key.account,
                 value.expose().as_bytes(),
             )
             .map_err(map_backend)
@@ -75,7 +75,8 @@ impl SecretStore for MacOsKeychainSecretStore {
         {
             use security_framework_sys::base::errSecItemNotFound;
 
-            match security_framework::passwords::delete_generic_password(key.service, key.account) {
+            match security_framework::passwords::delete_generic_password(&key.service, &key.account)
+            {
                 Ok(()) => Ok(()),
                 Err(err) if err.code() == errSecItemNotFound => Ok(()),
                 Err(err) => Err(map_backend(err)),
@@ -94,8 +95,8 @@ mod tests {
     fn missing_item_is_none_not_an_error() {
         let store = MacOsKeychainSecretStore;
         let key = SecretKey {
-            service: "com.crosspond.app.test",
-            account: "missing.item.should.not.exist",
+            service: "com.crosspond.app.test".into(),
+            account: "missing.item.should.not.exist".into(),
         };
         let _ = store.delete(&key);
         let value = store.get(&key).expect("get");

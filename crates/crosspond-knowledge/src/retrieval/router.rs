@@ -384,6 +384,7 @@ mod tests {
             trust: TrustLevel::User,
             relations,
             resource_kind: resource_kind.map(str::to_string),
+            credential_ref: None,
             body: body.into(),
             relative_path: None,
             url: None,

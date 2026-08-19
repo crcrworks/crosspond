@@ -76,6 +76,8 @@
 			<input
 				bind:value={password}
 				type="password"
+				autocomplete="off"
+				spellcheck={false}
 				class="rounded-md border px-2 py-1"
 				style:border-color="var(--border)"
 				style:background="var(--bg)"
