@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composerExtraHeight, shouldSyncLauncherSize } from './launcher-size';
+import { composerExtraHeight, shouldSyncLauncherSize, ONBOARDING_EXTRA_HEIGHT } from './launcher-size';
 
 describe('shouldSyncLauncherSize', () => {
 	it('syncs when shrinking back to the compact bar', () => {
@@ -24,5 +24,12 @@ describe('composerExtraHeight', () => {
 	it('grows with wrapped lines and caps at the max field height', () => {
 		expect(composerExtraHeight(64)).toBe(40);
 		expect(composerExtraHeight(200)).toBe(136);
+	});
+});
+
+describe('ONBOARDING_EXTRA_HEIGHT', () => {
+	it('grows the compact bar enough for the ready copy and Open button', () => {
+		expect(ONBOARDING_EXTRA_HEIGHT).toBe(80);
+		expect(shouldSyncLauncherSize(true, true)).toBe(true);
 	});
 });

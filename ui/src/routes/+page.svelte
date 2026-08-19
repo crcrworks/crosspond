@@ -29,7 +29,7 @@
 	import TranscriptView from '$lib/components/TranscriptView.svelte';
 	import { LauncherSession } from '$lib/session.svelte';
 	import { firstUserTitle } from '$lib/transcript';
-	import { shouldSyncLauncherSize } from '$lib/launcher-size';
+	import { shouldSyncLauncherSize, ONBOARDING_EXTRA_HEIGHT } from '$lib/launcher-size';
 	import {
 		MENTION_CHIP_ROW,
 		MENTION_MENU_HEIGHT,
@@ -38,7 +38,7 @@
 		takeInlineMentions
 	} from '$lib/mentions';
 	import type { AgentEvent, ComputerApproval, LauncherShown } from '$lib/types';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	const session = new LauncherSession();
 	let textarea: HTMLTextAreaElement | undefined = $state();
@@ -95,19 +95,32 @@
 		if (textarea) textarea.style.height = 'auto';
 	}
 
-	function syncLauncherWindow(_node: HTMLDivElement) {
-		const compact = session.compact;
+	function syncLauncherWindow() {
 		const composing = session.composing || mentionOpen || modeMenuOpen || pickerOpen;
 		const inConversation = session.inConversation;
-		const badges = session.overlay === 'onboarding' || chatLayout ? 0 : session.badges.length;
+		const onboarding = session.overlay === 'onboarding';
+		if (onboarding) {
+			void setUiFlags(false, composing, false, true);
+			if (shouldSyncLauncherSize(true, appliedCompact)) {
+				appliedCompact = true;
+				void syncLauncherSize(true, 0, ONBOARDING_EXTRA_HEIGHT);
+			}
+			return;
+		}
+		const compact = session.compact;
+		const badges = chatLayout ? 0 : session.badges.length;
 		const extra = extraHeight;
-		void setUiFlags(compact, composing, inConversation);
+		void setUiFlags(compact, composing, inConversation, false);
 		if (!shouldSyncLauncherSize(compact, appliedCompact)) {
 			return;
 		}
 		appliedCompact = compact;
 		void syncLauncherSize(compact, badges, extra);
 	}
+
+	$effect(() => {
+		syncLauncherWindow();
+	});
 
 	function stickTranscript(node: HTMLDivElement) {
 		session.rev;
@@ -141,9 +154,11 @@
 				hotkeyTokens = shown.launcher_hotkey.tokens;
 				session.applyShown(shown.badges, shown.onboarding, shown.ready, shown.visible);
 				void refreshHistory();
-				if (shown.visible) queueMicrotask(() => textarea?.focus());
+				if (shown.visible) {
+					void tick().then(() => textarea?.focus());
+				}
 			});
-			queueMicrotask(() => textarea?.focus());
+			void tick().then(() => textarea?.focus());
 		})();
 		return () => {
 			unlistenEvent?.();
@@ -295,6 +310,12 @@
 		await openSettings();
 	}
 
+	async function openCommandBar() {
+		session.finishOnboarding();
+		await tick();
+		textarea?.focus();
+	}
+
 	async function onApproval(mode: ComputerApproval) {
 		session.computerApproval = await setComputerApproval(mode);
 	}
@@ -303,7 +324,6 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div
-	{@attach syncLauncherWindow}
 	class={['launcher', dockPrompt && 'dock-prompt']}
 	data-tauri-drag-region="deep"
 >
@@ -324,6 +344,16 @@
 	{/if}
 	{#if session.overlay === 'onboarding'}
 		<div class="shrink-0 px-4 py-3 text-sm">Welcome to Crosspond</div>
+		<div class="px-4 pb-4">
+			<Onboarding
+				ready={session.onboardingReady}
+				hint={session.onboardingHint}
+				{hotkeyTokens}
+				onsettings={() => void openSettings()}
+				oncontinue={() => void continueOnboarding()}
+				ondone={() => void openCommandBar()}
+			/>
+		</div>
 	{:else}
 		<div
 			class={[
@@ -361,7 +391,7 @@
 			{/each}
 		</div>
 	{/if}
-	{#if expanded}
+	{#if expanded && session.overlay !== 'onboarding'}
 		<div
 			{@attach stickTranscript}
 			class="transcript-pane min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-2"
@@ -373,16 +403,7 @@
 				stickToBottom = distance < 64;
 			}}
 		>
-			{#if session.overlay === 'onboarding'}
-				<Onboarding
-					ready={session.onboardingReady}
-					hint={session.onboardingHint}
-					{hotkeyTokens}
-					onsettings={() => void openSettings()}
-					oncontinue={() => void continueOnboarding()}
-					ondone={() => void hideLauncher()}
-				/>
-			{:else if session.overlay === 'history'}
+			{#if session.overlay === 'history'}
 				<HistoryPanel
 					entries={session.history}
 					onselect={(id) => void openPast(id)}

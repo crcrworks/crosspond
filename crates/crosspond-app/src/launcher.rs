@@ -14,8 +14,43 @@ fn provider_ready(state: &AppState) -> bool {
 pub const WINDOW_WIDTH: f64 = 640.0;
 pub const IDLE_HEIGHT: f64 = 112.0;
 pub const RESULT_HEIGHT: f64 = 560.0;
+/// Extra height for the first-launch overlay on top of the compact bar.
+/// Keep in sync with `ONBOARDING_EXTRA_HEIGHT` in `ui/src/lib/launcher-size.ts`.
+pub const ONBOARDING_EXTRA: f64 = 80.0;
 const BADGE_LINE_HEIGHT: f64 = 20.0;
 const TOP_MARGIN: f64 = 96.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LauncherHotkeyAction {
+    Ignore,
+    Show,
+    Hide,
+    RevealCommandBar,
+}
+
+/// The ready overlay is already the launcher window. Toggle would hide it,
+/// which is the opposite of "press this shortcut anywhere."
+pub(crate) fn launcher_hotkey_action(
+    capturing: bool,
+    claimed_visible: bool,
+    window_is_key: bool,
+    onboarding: bool,
+    onboarding_ready: bool,
+) -> LauncherHotkeyAction {
+    if capturing {
+        return LauncherHotkeyAction::Ignore;
+    }
+    if claimed_visible && window_is_key {
+        if onboarding {
+            if onboarding_ready {
+                return LauncherHotkeyAction::RevealCommandBar;
+            }
+            return LauncherHotkeyAction::Ignore;
+        }
+        return LauncherHotkeyAction::Hide;
+    }
+    LauncherHotkeyAction::Show
+}
 
 pub fn idle_height(badge_lines: usize) -> f64 {
     IDLE_HEIGHT + BADGE_LINE_HEIGHT * badge_lines as f64
@@ -167,8 +202,9 @@ pub(crate) fn should_hide_compact_on_blur(
     composing: bool,
     app_active: bool,
     extra_windows: bool,
+    onboarding: bool,
 ) -> bool {
-    !window_is_key && compact && !composing && !app_active && !extra_windows
+    !window_is_key && compact && !composing && !app_active && !extra_windows && !onboarding
 }
 
 pub fn hide_compact_if_unfocused(app: &AppHandle) {
@@ -182,6 +218,7 @@ pub fn hide_compact_if_unfocused(app: &AppHandle) {
         inner.composing,
         application_is_active(),
         settings_is_open(app),
+        inner.onboarding,
     ) {
         drop(inner);
         hide(app);
@@ -192,22 +229,31 @@ pub fn toggle(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
-    if state.lock_inner().capturing_hotkey {
-        return;
-    }
     let window = launcher_window(app);
     let window_key = window
         .as_ref()
         .and_then(|window| window.is_focused().ok())
         .unwrap_or(false);
-    let claimed_visible = state.lock_inner().visible;
-    if claimed_visible && window_key {
-        hide(app);
-    } else {
-        if claimed_visible && !window_key {
-            eprintln!("crosspond: launcher marked visible but window was not key; showing");
+    let inner = state.lock_inner();
+    let action = launcher_hotkey_action(
+        inner.capturing_hotkey,
+        inner.visible,
+        window_key,
+        inner.onboarding,
+        provider_ready(&state),
+    );
+    let claimed_visible = inner.visible;
+    drop(inner);
+    match action {
+        LauncherHotkeyAction::Ignore => {}
+        LauncherHotkeyAction::Hide => hide(app),
+        LauncherHotkeyAction::Show => {
+            if claimed_visible && !window_key {
+                eprintln!("crosspond: launcher marked visible but window was not key; showing");
+            }
+            show(app);
         }
-        show(app);
+        LauncherHotkeyAction::RevealCommandBar => reveal_command_bar(app),
     }
 }
 
@@ -232,6 +278,9 @@ pub fn show(app: &AppHandle) {
 
     let mut inner = state.lock_inner();
     inner.visible = true;
+    if needs_onboarding {
+        inner.onboarding = true;
+    }
     if let Some(ambient) = ambient {
         inner.ambient = ambient;
     }
@@ -243,7 +292,11 @@ pub fn show(app: &AppHandle) {
     position_launcher(&window);
     // Invalidate in-flight UI resizes, then apply immediately (already on main).
     let _ = next_resize_seq(app);
-    resize_launcher(&window, compact || needs_onboarding, badges.len(), 0.0);
+    if needs_onboarding {
+        resize_launcher(&window, true, 0, ONBOARDING_EXTRA);
+    } else {
+        resize_launcher(&window, compact, badges.len(), 0.0);
+    }
     let _ = window.show();
     let _ = window.set_focus();
 
@@ -254,6 +307,38 @@ pub fn show(app: &AppHandle) {
             badges,
             onboarding: needs_onboarding,
             ready,
+            visible: true,
+            launcher_hotkey: launcher_hotkey_view(app),
+        },
+    );
+}
+
+fn reveal_command_bar(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let mut inner = state.lock_inner();
+    inner.visible = true;
+    inner.onboarding = false;
+    inner.compact = !inner.in_conversation;
+    let badges = inner.ambient.badge_lines();
+    let compact = inner.compact;
+    drop(inner);
+
+    if let Some(window) = launcher_window(app) {
+        apply_transparency(&window);
+        position_launcher(&window);
+        let _ = next_resize_seq(app);
+        resize_launcher(&window, compact, badges.len(), 0.0);
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let _ = app.emit(
+        "launcher-shown",
+        LauncherShown {
+            badges,
+            onboarding: false,
+            ready: true,
             visible: true,
             launcher_hotkey: launcher_hotkey_view(app),
         },
@@ -340,32 +425,70 @@ pub fn start_hotkey_loop(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        IDLE_HEIGHT, RESULT_HEIGHT, idle_height, keep_user_expanded_size, launcher_height,
+        IDLE_HEIGHT, LauncherHotkeyAction, ONBOARDING_EXTRA, RESULT_HEIGHT, idle_height,
+        keep_user_expanded_size, launcher_height, launcher_hotkey_action,
         should_hide_compact_on_blur, stale_resize_seq,
     };
 
     #[test]
     fn compact_bar_hides_when_the_user_leaves_the_app() {
         assert!(should_hide_compact_on_blur(
-            false, true, false, false, false
+            false, true, false, false, false, false
         ));
     }
 
     #[test]
     fn compact_bar_stays_when_ime_or_settings_take_key() {
         assert!(!should_hide_compact_on_blur(
-            false, true, false, true, false
+            false, true, false, true, false, false
         ));
         assert!(!should_hide_compact_on_blur(
-            false, true, true, false, false
+            false, true, true, false, false, false
         ));
         assert!(!should_hide_compact_on_blur(
-            false, true, false, false, true
+            false, true, false, false, true, false
         ));
-        assert!(!should_hide_compact_on_blur(true, true, false, true, false));
         assert!(!should_hide_compact_on_blur(
-            false, false, false, false, false
+            true, true, false, true, false, false
         ));
+        assert!(!should_hide_compact_on_blur(
+            false, false, false, false, false, false
+        ));
+        assert!(!should_hide_compact_on_blur(
+            false, true, false, false, false, true
+        ));
+    }
+
+    #[test]
+    fn hotkey_on_ready_overlay_reveals_the_command_bar() {
+        assert_eq!(
+            launcher_hotkey_action(false, true, true, true, true),
+            LauncherHotkeyAction::RevealCommandBar
+        );
+        assert_eq!(
+            launcher_hotkey_action(false, true, true, true, false),
+            LauncherHotkeyAction::Ignore
+        );
+        assert_eq!(
+            launcher_hotkey_action(false, true, true, false, true),
+            LauncherHotkeyAction::Hide
+        );
+        assert_eq!(
+            launcher_hotkey_action(false, false, false, false, true),
+            LauncherHotkeyAction::Show
+        );
+        assert_eq!(
+            launcher_hotkey_action(true, true, true, true, true),
+            LauncherHotkeyAction::Ignore
+        );
+    }
+
+    #[test]
+    fn onboarding_window_is_compact_plus_extra() {
+        assert_eq!(
+            launcher_height(true, 0, ONBOARDING_EXTRA),
+            IDLE_HEIGHT + ONBOARDING_EXTRA
+        );
     }
 
     #[test]
