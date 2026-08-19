@@ -25,7 +25,11 @@ pub fn make_ns_window_transparent(ns_window: *mut c_void) {
             | NSWindowCollectionBehavior::IgnoresCycle
             | NSWindowCollectionBehavior::Transient,
     );
+    // Same WindowServer shadow as a decorated NSWindow. Clip first so the
+    // alpha used for the shadow follows the 12px corners, not the full rect.
     clip_rounded_content_view(window);
+    window.setHasShadow(true);
+    window.invalidateShadow();
 }
 
 fn clip_rounded_content_view(window: &NSWindow) {

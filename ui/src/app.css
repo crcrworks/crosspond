@@ -22,6 +22,7 @@ body {
 .launcher {
 	box-sizing: border-box;
 	display: flex;
+	position: relative;
 	height: 100%;
 	width: 100%;
 	flex-direction: column;
@@ -30,8 +31,18 @@ body {
 	border-radius: var(--radius);
 	background: var(--bg);
 	color: var(--text);
-	box-shadow: var(--launcher-edge);
 	isolation: isolate;
+}
+
+/* Window-frame stroke. Overlay so full-bleed children cannot cover it. */
+.launcher::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	z-index: 10;
+	border-radius: inherit;
+	box-shadow: inset 0 0 0 1px var(--window-stroke);
+	pointer-events: none;
 }
 
 kbd {
@@ -478,7 +489,7 @@ kbd {
 		--danger: #d47876;
 		--ok: #8fb892;
 		--shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
-		--launcher-edge: none;
+		--window-stroke: rgba(255, 255, 255, 0.1);
 		--kbd-bg: #2a2926;
 		--prompt-border: rgba(255, 255, 255, 0.08);
 		--prompt-border-focus: rgba(255, 255, 255, 0.16);
@@ -516,7 +527,7 @@ kbd {
 		--danger: #9f2f2d;
 		--ok: #346538;
 		--shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-		--launcher-edge: inset 0 0 0 1px var(--border);
+		--window-stroke: rgba(0, 0, 0, 0.16);
 		--kbd-bg: #f7f6f3;
 		--prompt-border: #eaeaea;
 		--prompt-border-focus: #cfcbc4;
