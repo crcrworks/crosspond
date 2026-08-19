@@ -405,6 +405,14 @@ pub fn chat_completions_url(base_url: &str) -> String {
     }
 }
 
+pub fn models_url(base_url: &str) -> String {
+    let completions = chat_completions_url(base_url);
+    match completions.strip_suffix("/chat/completions") {
+        Some(prefix) => format!("{prefix}/models"),
+        None => format!("{}/models", base_url.trim().trim_end_matches('/')),
+    }
+}
+
 fn has_openai_v1_prefix(base: &str) -> bool {
     base.ends_with("/v1") || base.contains("/v1/")
 }
@@ -444,7 +452,7 @@ fn drain_sse(
     }
 }
 
-fn split_sse_frame(buffer: &mut String) -> Option<String> {
+pub(crate) fn split_sse_frame(buffer: &mut String) -> Option<String> {
     let (idx, sep_len) = buffer
         .find("\r\n\r\n")
         .map(|i| (i, 4))
@@ -454,7 +462,7 @@ fn split_sse_frame(buffer: &mut String) -> Option<String> {
     Some(frame)
 }
 
-fn emit_split_piece(
+pub(crate) fn emit_split_piece(
     events: &UnboundedSender<ModelEvent>,
     piece: SplitPiece,
     got_text: &mut bool,
@@ -473,18 +481,18 @@ fn emit_split_piece(
 }
 
 #[derive(Default)]
-struct ThinkSplitter {
+pub(crate) struct ThinkSplitter {
     in_think: bool,
     pending: String,
 }
 
-enum SplitPiece {
+pub(crate) enum SplitPiece {
     Text(String),
     Think(String),
 }
 
 impl ThinkSplitter {
-    fn push(&mut self, chunk: &str) -> Vec<SplitPiece> {
+    pub(crate) fn push(&mut self, chunk: &str) -> Vec<SplitPiece> {
         if chunk.is_empty() {
             return Vec::new();
         }
@@ -518,7 +526,7 @@ impl ThinkSplitter {
         out
     }
 
-    fn flush(&mut self) -> Vec<SplitPiece> {
+    pub(crate) fn flush(&mut self) -> Vec<SplitPiece> {
         if self.pending.is_empty() {
             return Vec::new();
         }
@@ -731,6 +739,29 @@ mod tests {
     }
 
     #[test]
+    fn chat_completions_json_omits_reasoning_effort() {
+        let body = ChatRequestBody {
+            model: "gpt-4o-mini".into(),
+            messages: vec![WireMessage {
+                role: "user",
+                content: WireContent::Text("hi".into()),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            }],
+            stream: true,
+            max_tokens: None,
+            tools: Vec::new(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(!json.contains("effort"));
+        assert!(!json.contains("reasoning"));
+        assert_eq!(
+            models_url("https://api.openai.com/v1"),
+            "https://api.openai.com/v1/models"
+        );
+    }
+
+    #[test]
     fn parses_sse_text_deltas() {
         let mut buffer = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n\
              data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n\
@@ -822,6 +853,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -848,6 +880,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("write a file")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -875,6 +908,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -899,6 +933,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -932,6 +967,7 @@ mod tests {
                 model: String::new(),
                 messages: vec![Message::user("hi")],
                 tools: Vec::new(),
+                reasoning_effort: None,
             },
             tx,
         );

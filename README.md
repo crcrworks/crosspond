@@ -2,7 +2,7 @@
 
 Command bar for your computer agent. macOS only.
 
-Phase 13 adds a Chrome extension so Chromium pages use DOM snapshots and refs (`browser_snapshot` / `browser_click`) instead of Accessibility or screenshots. Native apps still use the Phase 11 Whole-Mac tools. Phase 12 receipts, history, and onboarding stay.
+Phase 13 adds a Chrome extension so Chromium pages use DOM snapshots and refs (`browser_snapshot` / `browser_click`) instead of Accessibility or screenshots. Native apps still use the Phase 11 Whole-Mac tools. Phase 12 receipts, history, and onboarding stay. Settings can sign in with ChatGPT Plus/Pro and keep several OpenAI Compatible endpoints; pick the model in the launcher.
 
 ## Run
 
@@ -17,13 +17,13 @@ That runs the Tauri 2 host (`crates/crosspond-app`) and the SvelteKit Vite serve
 
 Then:
 
-1. On first launch, Crosspond opens a welcome. Press **⌘,** (or **Open Settings**) and set Base URL, model, and API key. Optionally add an Exa API key for `web_search`. The Knowledge Vault path defaults to `~/Documents/Crosspond`; change it in Settings if you want a different folder.
-2. Click **Save**, then **Test Connection**, then **Continue**.
+1. On first launch, Crosspond opens a welcome. Press **⌘,** (or **Open Settings**) and open the **AI** tab: sign in with ChatGPT Plus/Pro and/or add one or more OpenAI Compatible endpoints (name, Base URL, API key). You can use both at once. Optionally add an Exa API key on the **Search** tab. The Knowledge Vault path defaults to `~/Documents/Crosspond` (**Knowledge** tab).
+2. Click **Save** / **Test** on each provider, then **Continue**. On **Crosspond is ready**, click **Open** (or press the launcher shortcut) to show the command bar. Pick the model (and ChatGPT effort) under the launcher prompt. If port 1455 is already in use (often Codex CLI), paste the ChatGPT redirect URL to finish sign-in.
 3. Grant Accessibility, Screen Recording, or Calendars later from Settings → Permissions, or when a tool needs them. Finder selection may also prompt for Automation.
-4. Select text in another app, or files in Finder — or leave Safari / Chrome in front.
-5. Press **Option + Space** (change this in Settings). A badge should show the app and “Selected text: N chars” or “N selected files”.
-6. For Chromium, load the unpacked extension from Settings (chrome://extensions → Developer mode → Load unpacked → `extension/chrome`). Then ask to click something on the current page; Crosspond uses `browser_snapshot` rather than screenshots.
-7. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), or **Press the Continue button** in a native app. UI actions, shell, external files, and a new browser site show an **Allow** / **Cancel** card first unless the chip is **Auto** (new sites still ask). After a task, the summary stays in the conversation and artifacts get **Show in Finder**; **History** opens a past conversation so you can follow up.
+4. Select text in another app, or files in Finder — or leave Safari / Chrome / Helium in front.
+5. Press **Option + Space** (change this in Settings) to show the bar from any app. A badge should show the app and “Selected text: N chars” or “N selected files”.
+6. For Chromium, load the unpacked extension from Settings → Browser (chrome://extensions → Developer mode → Load unpacked → `extension/chrome`). Then ask to click something on the current page; Crosspond uses `browser_snapshot` rather than screenshots.
+7. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in a native app, or ask to click something visible in a browser page. UI actions, shell, external files, and a new browser site show an **Allow** / **Cancel** card first unless the chip is **Auto** (new sites still ask). After a task, the summary stays in the conversation and artifacts get **Show in Finder**; **History** opens a past conversation so you can follow up.
 
 **Escape** or **Stop** cancels the whole task while it is running. Approval **Cancel** rejects only that action. Hiding the window keeps work running and keeps the conversation; press **New** to start fresh.
 

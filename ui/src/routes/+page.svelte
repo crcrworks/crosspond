@@ -29,7 +29,7 @@
 	import TranscriptView from '$lib/components/TranscriptView.svelte';
 	import { LauncherSession } from '$lib/session.svelte';
 	import { firstUserTitle } from '$lib/transcript';
-	import { shouldSyncLauncherSize } from '$lib/launcher-size';
+	import { shouldSyncLauncherSize, ONBOARDING_EXTRA_HEIGHT } from '$lib/launcher-size';
 	import {
 		MENTION_CHIP_ROW,
 		MENTION_MENU_HEIGHT,
@@ -38,15 +38,15 @@
 		takeInlineMentions
 	} from '$lib/mentions';
 	import type { AgentEvent, ComputerApproval, LauncherShown } from '$lib/types';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	const session = new LauncherSession();
 	let textarea: HTMLTextAreaElement | undefined = $state();
 	let textExtra = $state(0);
 	let modeMenuOpen = $state(false);
+	let pickerOpen = $state(false);
 	let mentionOpen = $state(false);
 	let stickToBottom = $state(true);
-	let scroller: HTMLDivElement | undefined = $state();
 	let hotkeyTokens = $state<string[]>(['Option', 'Space']);
 
 	const chatLayout = $derived(
@@ -56,8 +56,7 @@
 	const extraHeight = $derived(
 		textExtra +
 			(session.mentions.length > 0 ? MENTION_CHIP_ROW : 0) +
-			(session.compact && mentionOpen ? MENTION_MENU_HEIGHT : 0) +
-			(session.compact && modeMenuOpen && !mentionOpen ? 120 : 0)
+			(session.compact && mentionOpen ? MENTION_MENU_HEIGHT : 0)
 	);
 	const canSubmit = $derived(
 		session.state === 'idle' ||
@@ -90,18 +89,28 @@
 
 	function resetComposerSize() {
 		modeMenuOpen = false;
+		pickerOpen = false;
 		mentionOpen = false;
 		textExtra = 0;
 		if (textarea) textarea.style.height = 'auto';
 	}
 
-	function resize() {
-		const compact = session.compact;
-		const composing = session.composing || mentionOpen || modeMenuOpen;
+	function syncLauncherWindow() {
+		const composing = session.composing || mentionOpen || modeMenuOpen || pickerOpen;
 		const inConversation = session.inConversation;
-		const badges = session.overlay === 'onboarding' || chatLayout ? 0 : session.badges.length;
+		const onboarding = session.overlay === 'onboarding';
+		if (onboarding) {
+			void setUiFlags(false, composing, false, true);
+			if (shouldSyncLauncherSize(true, appliedCompact)) {
+				appliedCompact = true;
+				void syncLauncherSize(true, 0, ONBOARDING_EXTRA_HEIGHT);
+			}
+			return;
+		}
+		const compact = session.compact;
+		const badges = chatLayout ? 0 : session.badges.length;
 		const extra = extraHeight;
-		void setUiFlags(compact, composing, inConversation);
+		void setUiFlags(compact, composing, inConversation, false);
 		if (!shouldSyncLauncherSize(compact, appliedCompact)) {
 			return;
 		}
@@ -110,15 +119,15 @@
 	}
 
 	$effect(() => {
-		resize();
+		syncLauncherWindow();
 	});
 
-	$effect(() => {
+	function stickTranscript(node: HTMLDivElement) {
 		session.rev;
-		if (stickToBottom && scroller) {
-			scroller.scrollTop = scroller.scrollHeight;
+		if (stickToBottom) {
+			node.scrollTop = node.scrollHeight;
 		}
-	});
+	}
 
 	onMount(() => {
 		let unlistenEvent: (() => void) | undefined;
@@ -145,9 +154,11 @@
 				hotkeyTokens = shown.launcher_hotkey.tokens;
 				session.applyShown(shown.badges, shown.onboarding, shown.ready, shown.visible);
 				void refreshHistory();
-				if (shown.visible) queueMicrotask(() => textarea?.focus());
+				if (shown.visible) {
+					void tick().then(() => textarea?.focus());
+				}
 			});
-			queueMicrotask(() => textarea?.focus());
+			void tick().then(() => textarea?.focus());
 		})();
 		return () => {
 			unlistenEvent?.();
@@ -278,7 +289,7 @@
 			void hideLauncher();
 			return;
 		}
-		if (event.key === 'ArrowUp' && !modeMenuOpen && !mentionOpen && session.input.length === 0 && session.overlay === 'none' && session.mentions.length === 0) {
+		if (event.key === 'ArrowUp' && !modeMenuOpen && !pickerOpen && !mentionOpen && session.input.length === 0 && session.overlay === 'none' && session.mentions.length === 0) {
 			event.preventDefault();
 			void onHistory();
 		}
@@ -286,13 +297,19 @@
 
 	async function continueOnboarding() {
 		const loaded = await loadSettings();
-		if (loaded.provider_key_stored) {
+		if (loaded.provider_ready) {
 			session.onboardingReady = true;
 			session.onboardingHint = null;
 			return;
 		}
-		session.onboardingHint = 'Add an API key in Settings first.';
+		session.onboardingHint = 'Sign in with ChatGPT or add an API key in Settings first.';
 		await openSettings();
+	}
+
+	async function openCommandBar() {
+		session.finishOnboarding();
+		await tick();
+		textarea?.focus();
 	}
 
 	async function onApproval(mode: ComputerApproval) {
@@ -302,7 +319,10 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class={['launcher', dockPrompt && 'dock-prompt']} data-tauri-drag-region="deep">
+<div
+	class={['launcher', dockPrompt && 'dock-prompt']}
+	data-tauri-drag-region="deep"
+>
 	{#if showHeader}
 		<ConversationHeader
 			liveTitle={session.inConversation ? (liveTitle ?? 'Chat') : null}
@@ -320,12 +340,21 @@
 	{/if}
 	{#if session.overlay === 'onboarding'}
 		<div class="shrink-0 px-4 py-3 text-sm">Welcome to Crosspond</div>
+		<div class="px-4 pb-4">
+			<Onboarding
+				ready={session.onboardingReady}
+				hint={session.onboardingHint}
+				{hotkeyTokens}
+				onsettings={() => void openSettings()}
+				oncontinue={() => void continueOnboarding()}
+				ondone={() => void openCommandBar()}
+			/>
+		</div>
 	{:else}
 		<div
 			class={[
 				'prompt-slot',
-				expanded ? 'docked' : 'seamless',
-				!expanded && session.badges.length === 0 && !modeMenuOpen && !mentionOpen && 'fill'
+				expanded ? 'docked' : 'seamless'
 			]}
 			data-tauri-drag-region
 		>
@@ -334,6 +363,7 @@
 				bind:value={session.input}
 				bind:textarea
 				bind:menuOpen={modeMenuOpen}
+				bind:pickerOpen
 				bind:mentionOpen
 				bind:mentions={session.mentions}
 				placeholder={session.placeholder}
@@ -357,27 +387,19 @@
 			{/each}
 		</div>
 	{/if}
-	{#if expanded}
+	{#if expanded && session.overlay !== 'onboarding'}
 		<div
-			bind:this={scroller}
+			{@attach stickTranscript}
 			class="transcript-pane min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-2"
 			data-tauri-drag-region="deep"
-			onscroll={() => {
-				if (!scroller) return;
-				const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+			onscroll={(event) => {
+				const node = event.currentTarget;
+				if (!(node instanceof HTMLDivElement)) return;
+				const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
 				stickToBottom = distance < 64;
 			}}
 		>
-			{#if session.overlay === 'onboarding'}
-				<Onboarding
-					ready={session.onboardingReady}
-					hint={session.onboardingHint}
-					{hotkeyTokens}
-					onsettings={() => void openSettings()}
-					oncontinue={() => void continueOnboarding()}
-					ondone={() => void hideLauncher()}
-				/>
-			{:else if session.overlay === 'history'}
+			{#if session.overlay === 'history'}
 				<HistoryPanel
 					entries={session.history}
 					onselect={(id) => void openPast(id)}

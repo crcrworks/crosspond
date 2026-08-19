@@ -40,7 +40,7 @@ Do not guess Tauri 2 APIs. Confirm against the pinned crate versions in the work
 
 The frontend is Svelte 5 + SvelteKit 2 in SPA mode (`@sveltejs/adapter-static` with `fallback: 'index.html'`, `ssr = false`). Do not add SvelteKit server routes or `load` functions that must run at build time against Tauri APIs.
 
-The WebView must never receive API keys, selected text, Finder paths, screenshot bytes, or calendar notes. Ambient UI gets `badge_lines()` only. `ContextCapsule` stays in Rust `AppState`.
+The WebView must never receive API keys, ChatGPT OAuth tokens, JWTs, account ids, selected text, Finder paths, screenshot bytes, or calendar notes. Ambient UI gets `badge_lines()` only. Settings may show `chatgpt_signed_in: bool`. `ContextCapsule` stays in Rust `AppState`.
 
 Hide and show the launcher with per-window `hide()` / `show()`. Do not hide the whole app.
 
@@ -48,7 +48,7 @@ WKWebView owns Japanese IME. Compact-bar click-away still skips hide while the a
 
 ## Secrets
 
-Never persist API keys in `config.json`, `.env`, SQLite, logs, task history, or the Knowledge Vault. Store them in Keychain via `SecretStore`. `SecretString` must not derive `Debug`. Do not log selected text, Finder paths, Accessibility field values (especially passwords), screenshot bytes, or calendar event notes/bodies. Vault notes may only store `credential_ref` pointers, never secret values.
+Never persist API keys or ChatGPT OAuth tokens in `config.json`, `.env`, SQLite, logs, task history, or the Knowledge Vault. Store them in Keychain via `SecretStore` (`provider.api_key` for the default Compatible endpoint, `provider.api_key.{id}` for additional endpoints, `exa.api_key`, `provider.chatgpt_oauth`). `SecretString` must not derive `Debug`. Do not log selected text, Finder paths, Accessibility field values (especially passwords), screenshot bytes, calendar event notes/bodies, or ChatGPT tokens/JWTs. Vault notes may only store `credential_ref` pointers, never secret values. Model lists are fetched in Rust (`GET {base}/models` or Codex `/codex/models`); the WebView receives ids and labels only. `reasoning.effort` is sent on Codex Responses only.
 
 ## Cursor Cloud specific instructions
 

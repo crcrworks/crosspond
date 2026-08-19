@@ -4,6 +4,8 @@ pub enum ModelError {
     Unauthorized,
     #[error("rate limited")]
     RateLimited,
+    #[error("usage limited")]
+    UsageLimited,
     #[error("invalid request: {0}")]
     InvalidRequest(String),
     #[error("network: {0}")]
@@ -21,6 +23,10 @@ impl ModelError {
             Self::RateLimited => {
                 "The AI provider rate-limited this request. Try again in a moment.".into()
             }
+            Self::UsageLimited => {
+                "ChatGPT usage limit reached. Try again after the 5-hour or weekly window resets."
+                    .into()
+            }
             Self::InvalidRequest(detail) => {
                 format!("The AI provider rejected the request. {detail}")
             }
@@ -34,6 +40,9 @@ impl ModelError {
 
     pub fn from_status(status: u16, body: &str) -> Self {
         let snippet = truncate_error_body(body);
+        if looks_like_usage_limit(status, body) {
+            return Self::UsageLimited;
+        }
         match status {
             401 | 403 => Self::Unauthorized,
             429 => Self::RateLimited,
@@ -41,6 +50,16 @@ impl ModelError {
             _ => Self::Provider(format!("{status}: {snippet}")),
         }
     }
+}
+
+fn looks_like_usage_limit(status: u16, body: &str) -> bool {
+    if status != 404 && status != 429 {
+        return false;
+    }
+    let haystack = body.to_ascii_lowercase();
+    haystack.contains("usage_limit_reached")
+        || haystack.contains("usage_not_included")
+        || haystack.contains("usage limit")
 }
 
 fn truncate_error_body(body: &str) -> String {
@@ -72,5 +91,17 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn maps_chatgpt_usage_limit_without_dumping_body() {
+        let err = ModelError::from_status(
+            404,
+            r#"{"error":{"code":"usage_limit_reached","message":"quota exhausted until Friday"}}"#,
+        );
+        assert!(matches!(err, ModelError::UsageLimited));
+        assert!(err.user_message().contains("5-hour"));
+        assert!(!err.user_message().contains("Friday"));
+        assert!(!err.user_message().contains("quota exhausted"));
     }
 }

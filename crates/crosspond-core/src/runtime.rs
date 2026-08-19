@@ -9,8 +9,8 @@ use crosspond_knowledge::{
     VaultRepository, VaultWatcher, WatchMode, index_db_path, looks_like_read_later, parse_note_id,
 };
 use crosspond_model::{
-    ImagePart, Message, ModelError, ModelEvent, ModelProvider, ModelRequest, ProviderBuilder, Role,
-    ToolCall, ToolDefinition, default_provider_builder, keep_latest_images,
+    ImagePart, Message, ModelError, ModelEvent, ModelProvider, ModelRequest, ProviderAuth,
+    ProviderBuilder, Role, ToolCall, ToolDefinition, default_provider_builder, keep_latest_images,
 };
 use crosspond_tools::{
     KnowledgeBackend, PathScope, ScratchReason, ScratchSpace, ToolContext, ToolRegistry,
@@ -35,11 +35,13 @@ use crate::receipt::{
     Receipt, append_event_log, receipt_action_line, tool_ui_summary, write_receipt, write_task_meta,
 };
 use crate::scratch::{FsScratchSpaceManager, ScratchSpaceManager, default_tasks_root};
-use crate::secret::{SecretKey, SecretStore};
+use crate::secret::{SecretChatGptTokenStore, SecretKey, SecretStore, load_chatgpt_tokens};
 
 /// Shown when the user tries to chat before saving an API key.
 pub const MISSING_API_KEY_MESSAGE: &str =
     "Add an API key in Settings (⌘,) before sending a request.";
+pub const MISSING_CHATGPT_MESSAGE: &str =
+    "Sign in with ChatGPT in Settings (⌘,) before sending a request.";
 
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -309,6 +311,7 @@ async fn run_loop(mut runtime: Runtime) {
             }
             RuntimeCommand::ResumeSession(id) => runtime.resume_session(id),
             RuntimeCommand::TestConnection => runtime.spawn_test_connection(),
+            RuntimeCommand::TestCompat { id } => runtime.spawn_test_connection_for(Some(id)),
             RuntimeCommand::ReloadKnowledge => runtime.sync_knowledge(),
             RuntimeCommand::Cancel(_) | RuntimeCommand::Approve(_) | RuntimeCommand::Reject(_) => {}
         }
@@ -340,19 +343,32 @@ impl Runtime {
     }
 
     fn spawn_test_connection(&self) {
+        self.spawn_test_connection_for(None);
+    }
+
+    fn spawn_test_connection_for(&self, source: Option<String>) {
         let events = self.events.clone();
         let config = Arc::clone(&self.config);
         let secrets = Arc::clone(&self.secrets);
         let build = self.build.clone();
         tokio::spawn(async move {
-            let (ok, message) = match load_provider(&*config, &*secrets, build) {
+            let source_id = source
+                .clone()
+                .or_else(|| config.load().ok().map(|loaded| loaded.selected.source))
+                .unwrap_or_default();
+            let (ok, message) = match load_provider_for(&*config, secrets, build, source.as_deref())
+            {
                 Ok(provider) => match provider.test_connection().await {
                     Ok(()) => (true, "Connected.".to_string()),
                     Err(err) => (false, err.user_message()),
                 },
                 Err(message) => (false, message),
             };
-            let _ = events.send(AgentEvent::ConnectionTested { ok, message });
+            let _ = events.send(AgentEvent::ConnectionTested {
+                source: source_id,
+                ok,
+                message,
+            });
         });
     }
 
@@ -370,15 +386,16 @@ impl Runtime {
             return;
         }
 
-        let provider = match load_provider(&*self.config, &*self.secrets, self.build.clone()) {
-            Ok(provider) => provider,
-            Err(message) => {
-                let _ = self
-                    .events
-                    .send(AgentEvent::TaskFailed { task_id, message });
-                return;
-            }
-        };
+        let provider =
+            match load_provider(&*self.config, Arc::clone(&self.secrets), self.build.clone()) {
+                Ok(provider) => provider,
+                Err(message) => {
+                    let _ = self
+                        .events
+                        .send(AgentEvent::TaskFailed { task_id, message });
+                    return;
+                }
+            };
 
         let config = match self.config.load() {
             Ok(config) => config,
@@ -520,6 +537,7 @@ impl Runtime {
             images: screen_images,
             tool_calls: Vec::new(),
             tool_call_id: None,
+            encrypted_reasoning: None,
         });
 
         let tool_defs = model_tools(&self.tools);
@@ -542,8 +560,20 @@ impl Runtime {
                 return;
             }
 
+            let effort = if config.selected.is_chatgpt() {
+                Some(config.reasoning_effort.as_str())
+            } else {
+                None
+            };
             let outcome = self
-                .run_model_step(&provider, &config.model, &messages, &tool_defs, task_id)
+                .run_model_step(
+                    &provider,
+                    config.selected_model(),
+                    effort,
+                    &messages,
+                    &tool_defs,
+                    task_id,
+                )
                 .await;
 
             match outcome {
@@ -584,9 +614,13 @@ impl Runtime {
                     reasoning,
                     reasoning_ms,
                     calls,
+                    encrypted_reasoning,
                 } => {
                     persist_step_progress(&task_dir, &reasoning, reasoning_ms, &assistant_text);
-                    messages.push(Message::assistant_tool_calls(assistant_text, calls.clone()));
+                    messages.push(
+                        Message::assistant_tool_calls(assistant_text, calls.clone())
+                            .with_encrypted_reasoning(encrypted_reasoning),
+                    );
                     for call in calls {
                         if let Some(reset) = self.drain_control(task_id) {
                             self.finish_cancelled(
@@ -712,9 +746,13 @@ impl Runtime {
                     text: summary,
                     reasoning,
                     reasoning_ms,
+                    encrypted_reasoning,
                 } => {
                     persist_step_progress(&task_dir, &reasoning, reasoning_ms, &summary);
-                    messages.push(Message::assistant(summary.clone()));
+                    messages.push(
+                        Message::assistant(summary.clone())
+                            .with_encrypted_reasoning(encrypted_reasoning),
+                    );
                     self.session = messages
                         .into_iter()
                         .filter(|message| message.role != Role::System)
@@ -982,6 +1020,7 @@ impl Runtime {
                     reset = true;
                 }
                 Ok(RuntimeCommand::TestConnection) => self.spawn_test_connection(),
+                Ok(RuntimeCommand::TestCompat { id }) => self.spawn_test_connection_for(Some(id)),
                 Ok(_) => {}
                 Err(_) => break,
             }
@@ -1000,7 +1039,7 @@ impl Runtime {
         }
         context.search_api_key = self
             .secrets
-            .get(&SecretKey::EXA_API_KEY)
+            .get(&SecretKey::exa_api_key())
             .ok()
             .flatten()
             .filter(|key| !key.is_empty())
@@ -1214,6 +1253,7 @@ impl Runtime {
                     return ApprovalWait::Cancelled { reset: true };
                 }
                 Some(RuntimeCommand::TestConnection) => self.spawn_test_connection(),
+                Some(RuntimeCommand::TestCompat { id }) => self.spawn_test_connection_for(Some(id)),
                 Some(RuntimeCommand::Approve(_))
                 | Some(RuntimeCommand::Reject(_))
                 | Some(RuntimeCommand::Cancel(_))
@@ -1228,6 +1268,7 @@ impl Runtime {
         &mut self,
         provider: &Arc<dyn ModelProvider>,
         model: &str,
+        effort: Option<&str>,
         messages: &[Message],
         tools: &[ToolDefinition],
         task_id: TaskId,
@@ -1240,6 +1281,7 @@ impl Runtime {
                 model: model.to_string(),
                 messages: request_messages,
                 tools: tools.to_vec(),
+                reasoning_effort: effort.map(str::to_string),
             },
             delta_tx,
         );
@@ -1248,6 +1290,7 @@ impl Runtime {
         let mut reasoning = String::new();
         let mut reasoning_started: Option<Instant> = None;
         let mut tool_calls = Vec::new();
+        let mut encrypted_reasoning = None;
         let mut cancelled = false;
         let mut reset = false;
 
@@ -1272,6 +1315,9 @@ impl Runtime {
                                 }
                             }
                             ModelEvent::ToolCall(call) => tool_calls.push(call),
+                            ModelEvent::EncryptedReasoning(value) => {
+                                encrypted_reasoning = Some(value);
+                            }
                         }
                     }
                     match result {
@@ -1281,6 +1327,7 @@ impl Runtime {
                                 reasoning,
                                 reasoning_ms: reasoning_started.map(|started| started.elapsed().as_millis() as u64),
                                 calls: tool_calls,
+                                encrypted_reasoning,
                             };
                         }
                         Ok(()) if assembled.trim().is_empty() => {
@@ -1291,6 +1338,7 @@ impl Runtime {
                                 text: assembled,
                                 reasoning,
                                 reasoning_ms: reasoning_started.map(|started| started.elapsed().as_millis() as u64),
+                                encrypted_reasoning,
                             };
                         }
                         Err(err) => return StepOutcome::Failed(err.user_message()),
@@ -1314,6 +1362,9 @@ impl Runtime {
                             }
                         }
                         Some(ModelEvent::ToolCall(call)) => tool_calls.push(call),
+                        Some(ModelEvent::EncryptedReasoning(value)) => {
+                            encrypted_reasoning = Some(value);
+                        }
                         None => {}
                     }
                 }
@@ -1326,6 +1377,9 @@ impl Runtime {
                             reset = true;
                         }
                         Some(RuntimeCommand::TestConnection) => self.spawn_test_connection(),
+                        Some(RuntimeCommand::TestCompat { id }) => {
+                            self.spawn_test_connection_for(Some(id))
+                        }
                         Some(RuntimeCommand::StartTask(_))
                         | Some(RuntimeCommand::Cancel(_))
                         | Some(RuntimeCommand::Approve(_))
@@ -1403,12 +1457,14 @@ enum StepOutcome {
         text: String,
         reasoning: String,
         reasoning_ms: Option<u64>,
+        encrypted_reasoning: Option<String>,
     },
     ToolCalls {
         assistant_text: String,
         reasoning: String,
         reasoning_ms: Option<u64>,
         calls: Vec<ToolCall>,
+        encrypted_reasoning: Option<String>,
     },
     Failed(String),
     Cancelled {
@@ -1493,17 +1549,59 @@ async fn execute_tool(
 
 fn load_provider(
     config: &dyn ConfigStore,
-    secrets: &dyn SecretStore,
+    secrets: Arc<dyn SecretStore>,
     build: ProviderBuilder,
 ) -> Result<Arc<dyn ModelProvider>, String> {
+    load_provider_for(config, secrets, build, None)
+}
+
+fn load_provider_for(
+    config: &dyn ConfigStore,
+    secrets: Arc<dyn SecretStore>,
+    build: ProviderBuilder,
+    source: Option<&str>,
+) -> Result<Arc<dyn ModelProvider>, String> {
     let config = config.load().map_err(|err| err.to_string())?;
+    let source = source.unwrap_or(config.selected.source.as_str());
+    if source == crate::config::CHATGPT_SOURCE {
+        let tokens = load_chatgpt_tokens(&*secrets).map_err(|err| err.to_string())?;
+        let Some(tokens) = tokens else {
+            return Err(MISSING_CHATGPT_MESSAGE.into());
+        };
+        let model = if config.selected.is_chatgpt() {
+            config.selected.model.as_str()
+        } else {
+            crate::config::DEFAULT_CHATGPT_MODEL
+        };
+        return Ok(build(
+            model,
+            ProviderAuth::ChatGptOAuth {
+                tokens,
+                store: Arc::new(SecretChatGptTokenStore::new(secrets)),
+            },
+        ));
+    }
+    let endpoint = config
+        .compat(source)
+        .ok_or_else(|| "Unknown OpenAI Compatible endpoint.".to_string())?;
     let key = secrets
-        .get(&SecretKey::PROVIDER_API_KEY)
+        .get(&SecretKey::provider_api_key_for(source))
         .map_err(|err| err.to_string())?;
     let Some(key) = key.filter(|key| !key.is_empty()) else {
         return Err(MISSING_API_KEY_MESSAGE.into());
     };
-    Ok(build(&config.base_url, &config.model, key.expose()))
+    let model = if config.selected.source == source {
+        config.selected.model.as_str()
+    } else {
+        crate::config::DEFAULT_COMPAT_MODEL
+    };
+    Ok(build(
+        model,
+        ProviderAuth::ApiKey {
+            base_url: endpoint.base_url.clone(),
+            api_key: key.expose().to_string(),
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -1511,7 +1609,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use crosspond_model::{EchoProvider, ModelError, ModelProvider, Role};
+    use crosspond_model::{EchoProvider, ModelError, ModelProvider, ProviderAuth, Role};
     use tokio::sync::mpsc;
 
     use super::*;
@@ -1532,13 +1630,16 @@ mod tests {
     };
 
     fn echo_builder() -> ProviderBuilder {
-        Arc::new(|_, _, _| Arc::new(EchoProvider::new(Duration::from_millis(80))))
+        Arc::new(|_, _| Arc::new(EchoProvider::new(Duration::from_millis(80))))
     }
 
     fn seeded_secrets() -> Arc<MemorySecretStore> {
         let secrets = MemorySecretStore::default();
         secrets
-            .set(&SecretKey::PROVIDER_API_KEY, &SecretString::new("sk-test"))
+            .set(
+                &SecretKey::provider_api_key(),
+                &SecretString::new("sk-test"),
+            )
             .unwrap();
         Arc::new(secrets)
     }
@@ -1806,7 +1907,7 @@ mod tests {
         let captured = Arc::clone(&requests);
         let build: ProviderBuilder = {
             let captured = Arc::clone(&captured);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&captured),
@@ -1869,7 +1970,7 @@ mod tests {
         let captured = Arc::clone(&requests);
         let build: ProviderBuilder = {
             let captured = Arc::clone(&captured);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&captured),
@@ -1958,7 +2059,7 @@ mod tests {
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
             let phase = Arc::clone(&phase);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(TeachThenEchoProvider {
                     requests: Arc::clone(&requests),
                     phase: Arc::clone(&phase),
@@ -2044,7 +2145,7 @@ mod tests {
         let phase = Arc::new(Mutex::new(0u8));
         let build: ProviderBuilder = {
             let phase = Arc::clone(&phase);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(TeachThenEchoProvider {
                     requests: Arc::new(Mutex::new(Vec::new())),
                     phase: Arc::clone(&phase),
@@ -2222,7 +2323,7 @@ mod tests {
         );
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&requests),
@@ -2302,7 +2403,7 @@ mod tests {
         );
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&requests),
@@ -2373,7 +2474,7 @@ mod tests {
         );
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&requests),
@@ -2424,7 +2525,7 @@ mod tests {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&requests),
@@ -2584,12 +2685,168 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chatgpt_codex_without_oauth_asks_to_sign_in() {
+        let (runtime, _tmp) = test_runtime(
+            echo_builder(),
+            Arc::new(MemorySecretStore::default()),
+            ToolRegistry::new(),
+        );
+        let mut config = runtime.config.load().unwrap();
+        config.selected = crate::config::SelectedModel::chatgpt("gpt-5.6-luna");
+        runtime.config.save(&config).unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "hello",
+            )))
+            .unwrap();
+        let failed = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskFailed { .. })
+        })
+        .await;
+        match failed {
+            AgentEvent::TaskFailed { message, .. } => {
+                assert_eq!(message, MISSING_CHATGPT_MESSAGE);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn chatgpt_codex_runs_without_api_key() {
+        let secrets = MemorySecretStore::default();
+        crate::secret::save_chatgpt_tokens(
+            &secrets,
+            &crosspond_model::ChatGptOAuthTokens {
+                access: "access".into(),
+                refresh: "refresh".into(),
+                expires_at: 1,
+                account_id: "acct".into(),
+            },
+        )
+        .unwrap();
+        let (runtime, _tmp) = test_runtime(echo_builder(), Arc::new(secrets), ToolRegistry::new());
+        let mut config = runtime.config.load().unwrap();
+        config.selected = crate::config::SelectedModel::chatgpt("gpt-5.6-luna");
+        runtime.config.save(&config).unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "hello",
+            )))
+            .unwrap();
+        let completed = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(matches!(completed, AgentEvent::TaskCompleted { .. }));
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn compat_key_without_chatgpt_starts() {
+        let (runtime, _tmp) = test_runtime(echo_builder(), seeded_secrets(), ToolRegistry::new());
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "hello",
+            )))
+            .unwrap();
+        let completed = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(matches!(completed, AgentEvent::TaskCompleted { .. }));
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn chatgpt_selected_without_oauth_fails_even_with_compat_key() {
+        let (runtime, _tmp) = test_runtime(echo_builder(), seeded_secrets(), ToolRegistry::new());
+        let mut config = runtime.config.load().unwrap();
+        config.selected = crate::config::SelectedModel::chatgpt("gpt-5.6-luna");
+        runtime.config.save(&config).unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "hello",
+            )))
+            .unwrap();
+        let failed = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskFailed { .. })
+        })
+        .await;
+        match failed {
+            AgentEvent::TaskFailed { message, .. } => {
+                assert_eq!(message, MISSING_CHATGPT_MESSAGE);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[test]
+    fn selected_compat_uses_matching_keychain_account() {
+        let secrets = MemorySecretStore::default();
+        secrets
+            .set(
+                &SecretKey::provider_api_key_for("default"),
+                &SecretString::new("sk-default"),
+            )
+            .unwrap();
+        secrets
+            .set(
+                &SecretKey::provider_api_key_for("compat-2"),
+                &SecretString::new("sk-other"),
+            )
+            .unwrap();
+        let captured = Arc::new(Mutex::new(None::<String>));
+        let build: ProviderBuilder = {
+            let captured = Arc::clone(&captured);
+            Arc::new(move |_, auth| {
+                if let ProviderAuth::ApiKey { api_key, .. } = &auth {
+                    *captured.lock().expect("lock") = Some(api_key.clone());
+                }
+                Arc::new(EchoProvider::new(Duration::from_millis(1)))
+            })
+        };
+        let store = MemoryConfigStore::default();
+        let mut config = store.load().unwrap();
+        config
+            .openai_compat
+            .push(crate::config::OpenaiCompatEndpoint {
+                id: "compat-2".into(),
+                name: "Local".into(),
+                base_url: "http://127.0.0.1:1234/v1".into(),
+            });
+        config.selected = crate::config::SelectedModel::compat("compat-2", "qwen");
+        store.save(&config).unwrap();
+        load_provider(&store, Arc::new(secrets), build).unwrap();
+        assert_eq!(captured.lock().expect("lock").as_deref(), Some("sk-other"));
+    }
+
+    #[tokio::test]
     async fn follow_up_includes_prior_turn() {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&requests);
         let build: ProviderBuilder = {
             let captured = Arc::clone(&captured);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&captured),
@@ -2660,7 +2917,7 @@ mod tests {
         let captured = Arc::clone(&requests);
         let build: ProviderBuilder = {
             let captured = Arc::clone(&captured);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&captured),
@@ -2725,7 +2982,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_loop_writes_scratch_file() {
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(ScriptedProvider::new()));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(ScriptedProvider::new()));
         let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
@@ -2788,7 +3045,7 @@ mod tests {
         .to_string();
         let build: ProviderBuilder = {
             let arguments = arguments.clone();
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(TwoTurnToolProvider {
                     arguments: arguments.clone(),
                     turn: Mutex::new(0),
@@ -2848,7 +3105,7 @@ mod tests {
         .to_string();
         let build: ProviderBuilder = {
             let arguments = arguments.clone();
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(TwoTurnToolProvider {
                     arguments: arguments.clone(),
                     turn: Mutex::new(0),
@@ -2895,7 +3152,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_stops_unbounded_tool_loop() {
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(AlwaysToolProvider));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(AlwaysToolProvider));
         let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
@@ -2937,7 +3194,7 @@ mod tests {
         let captured = Arc::clone(&requests);
         let build: ProviderBuilder = {
             let captured = Arc::clone(&captured);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&captured),
@@ -3009,7 +3266,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(SnapshotThenPressProvider::new()));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(SnapshotThenPressProvider::new()));
         let (runtime, _tmp) = test_runtime(build, seeded_secrets(), tools);
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
@@ -3071,7 +3328,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(SnapshotThenPressProvider::new()));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(SnapshotThenPressProvider::new()));
         let (runtime, tmp) = test_runtime(build, seeded_secrets(), tools);
         runtime
             .config
@@ -3178,7 +3435,7 @@ mod tests {
         .to_string();
         let build: ProviderBuilder = {
             let arguments = arguments.clone();
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(NamedToolThenDoneProvider::new(
                     "run_command",
                     arguments.clone(),
@@ -3232,7 +3489,7 @@ mod tests {
         .to_string();
         let build: ProviderBuilder = {
             let arguments = arguments.clone();
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(NamedToolThenDoneProvider::new(
                     "run_command",
                     arguments.clone(),
@@ -3286,7 +3543,7 @@ mod tests {
         .to_string();
         let build: ProviderBuilder = {
             let arguments = arguments.clone();
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(NamedToolThenDoneProvider::new(
                     "write_file",
                     arguments.clone(),
@@ -3336,7 +3593,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| {
+        let build: ProviderBuilder = Arc::new(|_, _| {
             Arc::new(SnapshotThenPressProvider::with_press_arguments(
                 r#"{"node_id":4,"ask_user":false}"#,
             ))
@@ -3381,7 +3638,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| {
+        let build: ProviderBuilder = Arc::new(|_, _| {
             Arc::new(SnapshotThenPressProvider::with_press_arguments(
                 r#"{"node_id":4,"ask_user":true}"#,
             ))
@@ -3433,7 +3690,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(SnapshotThenPressProvider::new()));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(SnapshotThenPressProvider::new()));
         let (runtime, _tmp) = test_runtime(build, seeded_secrets(), tools);
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
@@ -3474,7 +3731,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(SnapshotThenPressProvider::new()));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(SnapshotThenPressProvider::new()));
         let (runtime, _tmp) = test_runtime(build, seeded_secrets(), tools);
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));

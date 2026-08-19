@@ -5,6 +5,7 @@ mod commands;
 mod events;
 mod launcher;
 mod navigation;
+mod oauth;
 mod state;
 
 use std::sync::Arc;
@@ -80,11 +81,22 @@ pub fn run() {
             commands::open_settings,
             commands::load_settings,
             commands::save_config,
+            commands::save_compat,
+            commands::add_compat,
+            commands::delete_compat,
+            commands::save_selected,
+            commands::save_effort,
+            commands::list_models,
             commands::set_launcher_hotkey,
             commands::pause_launcher_hotkey,
             commands::resume_launcher_hotkey,
             commands::save_secret,
+            commands::start_chatgpt_login,
+            commands::complete_chatgpt_login,
+            commands::cancel_chatgpt_login,
+            commands::sign_out_chatgpt,
             commands::test_connection,
+            commands::test_compat_connection,
             commands::list_history,
             commands::open_conversation,
             commands::cycle_computer_approval,
@@ -115,8 +127,11 @@ pub fn run() {
                 launcher::position_launcher(&window);
             }
 
-            let needs_onboarding =
-                !crosspond_core::provider_key_is_set(&*app.state::<AppState>().secrets);
+            let state = app.state::<AppState>();
+            let needs_onboarding = !crosspond_core::provider_is_ready(
+                &state.config.load().unwrap_or_default(),
+                &*state.secrets,
+            );
             if start_visible || needs_onboarding {
                 launcher::show(app.handle());
             }

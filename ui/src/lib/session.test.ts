@@ -57,3 +57,43 @@ describe('LauncherSession completion', () => {
 		});
 	});
 });
+
+describe('LauncherSession onboarding', () => {
+	it('keeps the ready overlay until the user opens the command bar', () => {
+		const session = new LauncherSession();
+		session.enterOnboarding(false);
+		session.applyEvent({
+			type: 'connection_tested',
+			source: 'chatgpt',
+			ok: true,
+			message: 'ok'
+		});
+		expect(session.overlay).toBe('onboarding');
+		expect(session.onboardingReady).toBe(true);
+		expect(session.compact).toBe(false);
+	});
+
+	it('Open finishes onboarding and reveals the compact command bar', () => {
+		const session = new LauncherSession();
+		session.enterOnboarding(true);
+		session.finishOnboarding();
+		expect(session.overlay).toBe('none');
+		expect(session.compact).toBe(true);
+	});
+
+	it('a later show with a saved key leaves onboarding instead of trapping on ready', () => {
+		const session = new LauncherSession();
+		session.enterOnboarding(true);
+		session.applyShown([], false, true, true);
+		expect(session.overlay).toBe('none');
+		expect(session.compact).toBe(true);
+	});
+
+	it('hiding the ready overlay does not drop onboarding until the next show', () => {
+		const session = new LauncherSession();
+		session.enterOnboarding(true);
+		session.applyShown([], false, true, false);
+		expect(session.overlay).toBe('onboarding');
+		expect(session.visible).toBe(false);
+	});
+});
