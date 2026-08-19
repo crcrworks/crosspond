@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crosspond_core::{HotkeyEvent, provider_key_is_set};
+use crosspond_core::{HotkeyEvent, HotkeyView, provider_key_is_set};
 use crosspond_macos::{application_is_active, yield_to_other_app};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
@@ -87,6 +87,15 @@ pub struct LauncherShown {
     pub onboarding: bool,
     pub ready: bool,
     pub visible: bool,
+    pub launcher_hotkey: HotkeyView,
+}
+
+fn launcher_hotkey_view(app: &AppHandle) -> HotkeyView {
+    app.try_state::<AppState>()
+        .and_then(|state| state.config.load().ok())
+        .unwrap_or_default()
+        .launcher_hotkey
+        .view()
 }
 
 pub fn launcher_window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -239,6 +248,7 @@ pub fn show(app: &AppHandle) {
             onboarding: needs_onboarding,
             ready,
             visible: true,
+            launcher_hotkey: launcher_hotkey_view(app),
         },
     );
 }
@@ -267,6 +277,7 @@ pub fn hide(app: &AppHandle) {
             onboarding: false,
             ready: true,
             visible: false,
+            launcher_hotkey: launcher_hotkey_view(app),
         },
     );
 }
@@ -293,6 +304,7 @@ pub fn recollect_ambient(app: &AppHandle) {
             onboarding: false,
             ready: true,
             visible: true,
+            launcher_hotkey: launcher_hotkey_view(app),
         },
     );
 }

@@ -48,7 +48,7 @@ Polish: a human-readable receipt after each task, recent task history, and first
 
 - **Receipt** — after a task, the launcher keeps the summary in the conversation and lists artifacts with **Show in Finder**. Receipts stay on disk as `receipt.json` (no secrets, calendar notes, command output, or typed text). Changed action lines are not shown in the launcher.
 - **History** — **History** (or ↑ when the input is empty) lists recent conversations from `~/.crosspond/tasks/`, grouped by `conversation_id`. Opening an item shows the same transcript as the live chat (user turns, work steps, commentary, receipt) and the follow-up field continues that thread. **New** still starts a blank session.
-- **Onboarding** — first launch with no API key shows a welcome and Settings. Do not prompt for Accessibility yet. After a key is saved: “Press Option + Space anywhere.”
+- **Onboarding** — first launch with no API key shows a welcome and Settings. Do not prompt for Accessibility yet. After a key is saved: “Press Option + Space anywhere” (or whatever shortcut is set in Settings).
 - **Mentions** — type `@` (or `＠`) in the compact bar to attach `@query` (search accumulated knowledge), `@save` (ingest), `@later` (unread Source), `@screen` (screenshot the ambient window), `@app` (running apps from NSWorkspace), `@files`, `@calendar`, or `@web`. Mentions are optional; ambient context and the Knowledge Brief still run without them. The WebView only sees kinds and app names — not note bodies, paths, or screenshot bytes.
 
 Demo: first launch → Settings → Option + Space → do work → see the transcript → hide → Option + Space → History → open a past conversation and follow up.

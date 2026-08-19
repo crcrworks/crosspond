@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crosspond_core::{
-    AppConfig, ApprovalId, ComputerApprovalMode, ConversationId, ConversationView,
-    MISSING_API_KEY_MESSAGE, Mention, Receipt, RuntimeCommand, SecretKey, SecretString,
-    StartTaskRequest, TaskId, conversation_artifact_path, default_tasks_root, default_vault_path,
-    history_group_label, history_title, list_recent_tasks, open_conversation as load_conversation,
-    parse_vault_path_input, provider_key_is_set,
+    AppConfig, ApprovalId, ComputerApprovalMode, ConversationId, ConversationView, HotkeyView,
+    LauncherHotkey, MISSING_API_KEY_MESSAGE, Mention, Receipt, RuntimeCommand, SecretKey,
+    SecretString, StartTaskRequest, TaskId, conversation_artifact_path, default_tasks_root,
+    default_vault_path, history_group_label, history_title, list_recent_tasks,
+    open_conversation as load_conversation, parse_vault_path_input, provider_key_is_set,
 };
 use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
 use serde::Serialize;
@@ -20,6 +20,7 @@ use crate::state::AppState;
 pub struct Bootstrap {
     pub needs_onboarding: bool,
     pub computer_approval: ComputerApprovalMode,
+    pub launcher_hotkey: HotkeyView,
     pub badges: Vec<String>,
     pub visible: bool,
 }
@@ -34,6 +35,7 @@ pub struct SettingsView {
     pub exa_key_stored: bool,
     pub permissions: PermissionSnapshot,
     pub computer_approval: ComputerApprovalMode,
+    pub launcher_hotkey: HotkeyView,
 }
 
 #[derive(Serialize)]
@@ -50,13 +52,11 @@ pub struct HistoryItem {
 #[tauri::command]
 pub fn bootstrap(state: State<AppState>) -> Bootstrap {
     let inner = state.lock_inner();
+    let config = state.config.load().unwrap_or_default();
     Bootstrap {
         needs_onboarding: !provider_key_is_set(&*state.secrets),
-        computer_approval: state
-            .config
-            .load()
-            .map(|config| config.computer_approval)
-            .unwrap_or_default(),
+        computer_approval: config.computer_approval,
+        launcher_hotkey: config.launcher_hotkey.view(),
         badges: inner.ambient.badge_lines(),
         visible: inner.visible,
     }
@@ -192,6 +192,7 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
         exa_key_stored,
         permissions: PermissionSnapshot::current(),
         computer_approval: loaded.computer_approval,
+        launcher_hotkey: loaded.launcher_hotkey.view(),
     }
 }
 
@@ -218,6 +219,35 @@ pub fn save_config(
     state.config.save(&config).map_err(|err| err.to_string())?;
     state.commands.send(RuntimeCommand::ReloadKnowledge);
     Ok(())
+}
+
+#[tauri::command]
+pub fn set_launcher_hotkey(
+    spec: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<HotkeyView, String> {
+    let parsed = LauncherHotkey::parse(&spec).map_err(|err| err.to_string())?;
+    apply_hotkey_on_main_thread(&app, &parsed)?;
+    let mut config = state.config.load().unwrap_or_default();
+    config.launcher_hotkey = parsed.clone();
+    state.config.save(&config).map_err(|err| err.to_string())?;
+    Ok(parsed.view())
+}
+
+fn apply_hotkey_on_main_thread(app: &AppHandle, spec: &LauncherHotkey) -> Result<(), String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spec = spec.clone();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let result = handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "app not ready".to_string())
+            .and_then(|state| state.lock_hotkey().set_hotkey(&spec));
+        let _ = tx.send(result);
+    })
+    .map_err(|err| err.to_string())?;
+    rx.recv().map_err(|err| err.to_string())?
 }
 
 #[tauri::command]

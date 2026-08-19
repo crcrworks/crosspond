@@ -82,4 +82,8 @@ impl GlobalHotkeyService for NoopHotkey {
     fn poll(&self) -> Option<crosspond_core::HotkeyEvent> {
         None
     }
+
+    fn set_hotkey(&mut self, _spec: &crosspond_core::LauncherHotkey) -> Result<(), String> {
+        Err("global hotkeys are not available".into())
+    }
 }
