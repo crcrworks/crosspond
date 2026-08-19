@@ -2184,7 +2184,7 @@ mod tests {
             let system = &captured[0][0].content;
             assert!(system.contains("User mentions"));
             assert!(system.contains("Look at that image before acting"));
-            assert!(!system.contains("ui_press"));
+            assert!(!system.contains("Do not only describe the screen"));
             assert!(!system.contains('\u{89}'));
         }
         let events = std::fs::read_to_string(
