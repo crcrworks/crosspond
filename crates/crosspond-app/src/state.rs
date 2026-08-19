@@ -7,6 +7,11 @@ use crosspond_core::{
     GlobalHotkeyService, SecretStore, TaskId,
 };
 
+pub struct PendingChatGptLogin {
+    pub verifier: String,
+    pub state: String,
+}
+
 pub struct AppState {
     pub commands: CommandSender,
     pub config: Arc<dyn ConfigStore>,
@@ -14,6 +19,7 @@ pub struct AppState {
     pub collector: Arc<dyn ContextCollector>,
     pub hotkey: Mutex<Box<dyn GlobalHotkeyService>>,
     pub inner: Mutex<InnerState>,
+    pub pending_chatgpt: Mutex<Option<PendingChatGptLogin>>,
     _runtime: JoinHandle<()>,
 }
 
@@ -59,6 +65,7 @@ impl AppState {
                 resize_seq: 0,
                 capturing_hotkey: false,
             }),
+            pending_chatgpt: Mutex::new(None),
             _runtime: runtime,
         }
     }
@@ -69,6 +76,12 @@ impl AppState {
 
     pub fn lock_hotkey(&self) -> std::sync::MutexGuard<'_, Box<dyn GlobalHotkeyService>> {
         self.hotkey.lock().unwrap_or_else(|err| err.into_inner())
+    }
+
+    pub fn lock_pending_chatgpt(&self) -> std::sync::MutexGuard<'_, Option<PendingChatGptLogin>> {
+        self.pending_chatgpt
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
     }
 }
 

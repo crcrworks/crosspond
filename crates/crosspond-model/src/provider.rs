@@ -50,13 +50,30 @@ impl std::fmt::Debug for ImagePart {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Message {
     pub role: Role,
     pub content: String,
     pub images: Vec<ImagePart>,
     pub tool_calls: Vec<ToolCall>,
     pub tool_call_id: Option<String>,
+    pub encrypted_reasoning: Option<String>,
+}
+
+impl std::fmt::Debug for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Message")
+            .field("role", &self.role)
+            .field("content", &self.content)
+            .field("images", &self.images)
+            .field("tool_calls", &self.tool_calls)
+            .field("tool_call_id", &self.tool_call_id)
+            .field(
+                "encrypted_reasoning",
+                &self.encrypted_reasoning.as_ref().map(|_| "***"),
+            )
+            .finish()
+    }
 }
 
 impl Message {
@@ -67,6 +84,7 @@ impl Message {
             images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            encrypted_reasoning: None,
         }
     }
 
@@ -77,6 +95,7 @@ impl Message {
             images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            encrypted_reasoning: None,
         }
     }
 
@@ -87,6 +106,7 @@ impl Message {
             images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            encrypted_reasoning: None,
         }
     }
 
@@ -97,6 +117,7 @@ impl Message {
             images: Vec::new(),
             tool_calls,
             tool_call_id: None,
+            encrypted_reasoning: None,
         }
     }
 
@@ -107,6 +128,7 @@ impl Message {
             images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: Some(tool_call_id.into()),
+            encrypted_reasoning: None,
         }
     }
 
@@ -121,7 +143,13 @@ impl Message {
             images,
             tool_calls: Vec::new(),
             tool_call_id: Some(tool_call_id.into()),
+            encrypted_reasoning: None,
         }
+    }
+
+    pub fn with_encrypted_reasoning(mut self, encrypted: Option<String>) -> Self {
+        self.encrypted_reasoning = encrypted.filter(|value| !value.is_empty());
+        self
     }
 }
 
@@ -160,6 +188,7 @@ pub enum ModelEvent {
     TextDelta(String),
     ReasoningDelta(String),
     ToolCall(ToolCall),
+    EncryptedReasoning(String),
 }
 
 pub trait ModelProvider: Send + Sync {
@@ -173,8 +202,13 @@ pub trait ModelProvider: Send + Sync {
 }
 
 pub fn default_provider_builder() -> crate::ProviderBuilder {
-    std::sync::Arc::new(|base_url, model, api_key| {
-        Arc::new(OpenAiCompatibleProvider::new(base_url, model, api_key))
+    std::sync::Arc::new(|model, auth| match auth {
+        crate::ProviderAuth::ApiKey { base_url, api_key } => {
+            Arc::new(OpenAiCompatibleProvider::new(base_url, model, api_key))
+        }
+        crate::ProviderAuth::ChatGptOAuth { tokens, store } => {
+            Arc::new(crate::ChatGptCodexProvider::new(model, tokens, store))
+        }
     })
 }
 
@@ -248,5 +282,14 @@ mod tests {
         assert!(messages[0].content.contains("screenshot omitted"));
         assert_eq!(messages[2].images.len(), 1);
         assert_eq!(messages[2].images[0].bytes, vec![2, 2]);
+    }
+
+    #[test]
+    fn debug_redacts_encrypted_reasoning() {
+        let message =
+            Message::assistant("ok").with_encrypted_reasoning(Some("enc-secret-blob".into()));
+        let rendered = format!("{message:?}");
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("enc-secret-blob"));
     }
 }

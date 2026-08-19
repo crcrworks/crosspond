@@ -50,8 +50,20 @@ export function loadSettings() {
 	return invoke<SettingsView>('load_settings');
 }
 
-export function saveConfig(baseUrl: string, model: string, vaultPath: string) {
-	return invoke('save_config', { baseUrl, model, vaultPath });
+export function saveConfig(baseUrl: string, model: string, vaultPath: string, provider: SettingsView['provider']) {
+	return invoke('save_config', { baseUrl, model, vaultPath, provider });
+}
+
+export function startChatgptLogin() {
+	return invoke<{ mode: 'browser' | 'manual'; authorize_url: string }>('start_chatgpt_login');
+}
+
+export function completeChatgptLogin(redirect: string) {
+	return invoke('complete_chatgpt_login', { redirect });
+}
+
+export function signOutChatgpt() {
+	return invoke('sign_out_chatgpt');
 }
 
 export function setLauncherHotkey(spec: string) {

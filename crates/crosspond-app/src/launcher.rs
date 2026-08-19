@@ -1,11 +1,15 @@
 use std::time::Duration;
 
-use crosspond_core::{HotkeyEvent, HotkeyView, provider_key_is_set};
+use crosspond_core::{HotkeyEvent, HotkeyView, provider_is_ready};
 use crosspond_macos::{application_is_active, yield_to_other_app};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 
 use crate::state::AppState;
+
+fn provider_ready(state: &AppState) -> bool {
+    provider_is_ready(&state.config.load().unwrap_or_default(), &*state.secrets)
+}
 
 pub const WINDOW_WIDTH: f64 = 640.0;
 pub const IDLE_HEIGHT: f64 = 108.0;
@@ -217,7 +221,7 @@ pub fn show(app: &AppHandle) {
 
     let already_visible = state.lock_inner().visible;
     let in_conversation = state.lock_inner().in_conversation;
-    let needs_onboarding = !provider_key_is_set(&*state.secrets);
+    let needs_onboarding = !provider_ready(&state);
 
     // Collect before Crosspond becomes frontmost, otherwise "this" is ourselves.
     let ambient = if !already_visible && !needs_onboarding && !in_conversation {
@@ -243,7 +247,7 @@ pub fn show(app: &AppHandle) {
     let _ = window.show();
     let _ = window.set_focus();
 
-    let ready = provider_key_is_set(&*state.secrets);
+    let ready = provider_ready(&state);
     let _ = app.emit(
         "launcher-shown",
         LauncherShown {
@@ -289,7 +293,7 @@ pub fn recollect_ambient(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
-    if !provider_key_is_set(&*state.secrets) {
+    if !provider_ready(&state) {
         return;
     }
     if !state.lock_inner().visible {

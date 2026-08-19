@@ -62,7 +62,10 @@ export type SettingsView = {
 	model: string;
 	vault_path: string;
 	default_vault_path: string;
+	provider: 'openai_compatible' | 'chatgpt_codex';
 	provider_key_stored: boolean;
+	chatgpt_signed_in: boolean;
+	provider_ready: boolean;
 	exa_key_stored: boolean;
 	permissions: {
 		accessibility: boolean;

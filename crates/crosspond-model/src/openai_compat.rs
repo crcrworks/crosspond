@@ -444,7 +444,7 @@ fn drain_sse(
     }
 }
 
-fn split_sse_frame(buffer: &mut String) -> Option<String> {
+pub(crate) fn split_sse_frame(buffer: &mut String) -> Option<String> {
     let (idx, sep_len) = buffer
         .find("\r\n\r\n")
         .map(|i| (i, 4))
@@ -454,7 +454,7 @@ fn split_sse_frame(buffer: &mut String) -> Option<String> {
     Some(frame)
 }
 
-fn emit_split_piece(
+pub(crate) fn emit_split_piece(
     events: &UnboundedSender<ModelEvent>,
     piece: SplitPiece,
     got_text: &mut bool,
@@ -473,18 +473,18 @@ fn emit_split_piece(
 }
 
 #[derive(Default)]
-struct ThinkSplitter {
+pub(crate) struct ThinkSplitter {
     in_think: bool,
     pending: String,
 }
 
-enum SplitPiece {
+pub(crate) enum SplitPiece {
     Text(String),
     Think(String),
 }
 
 impl ThinkSplitter {
-    fn push(&mut self, chunk: &str) -> Vec<SplitPiece> {
+    pub(crate) fn push(&mut self, chunk: &str) -> Vec<SplitPiece> {
         if chunk.is_empty() {
             return Vec::new();
         }
@@ -518,7 +518,7 @@ impl ThinkSplitter {
         out
     }
 
-    fn flush(&mut self) -> Vec<SplitPiece> {
+    pub(crate) fn flush(&mut self) -> Vec<SplitPiece> {
         if self.pending.is_empty() {
             return Vec::new();
         }

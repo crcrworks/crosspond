@@ -35,7 +35,8 @@ Option+Space
         │                      @vault-query tells the model to knowledge_search then knowledge_read
         │                      inject Knowledge Brief when vault_path is set
         │                      (procedure follow plan: requires → uses → computer tools)
-        │                      OpenAI-compatible stream (text + images)
+        │                      OpenAI-compatible stream, or ChatGPT Codex Responses
+        │                      (text + images; OAuth tokens never leave Rust)
         │                      knowledge_search / knowledge_read /
         │                        knowledge_neighbors / knowledge_backlinks /
         │                        knowledge_find_procedure (auto; no note bodies in logs)
@@ -78,7 +79,7 @@ Option+Space
         │                      completed
         ▼
  Command window / Settings
- First launch (no API key): onboarding, then Settings. No Accessibility prompt.
+ First launch (no API key / ChatGPT session): onboarding, then Settings. No Accessibility prompt.
  History reads ~/.crosspond/tasks/ grouped by conversation_id
  (task.json + events.jsonl + session.json + receipt.json).
  Opening a conversation hydrates the transcript and ResumeSession.
@@ -96,7 +97,7 @@ Computer tools default to the **ambient** frontmost pid from when the launcher o
 
 Node ids are integers for the latest Accessibility snapshot generation. A new snapshot or a successful UI action invalidates old ids.
 
-Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`, `vault_path`, `launcher_hotkey`). API keys are only in Keychain (`com.crosspond.app` / `provider.api_key`, and optionally `exa.api_key`). Config and keys are loaded fresh on each StartTask and Test Connection. `launcher_hotkey` is a shortcut spec such as `alt+Space` (default, Option+Space). Changing it in Settings re-registers the global hotkey immediately. `computer_approval` is `manual` (ask before UI actions, shell, external files, and non-http URLs), `auto` (run every tool without asking), or `agent` (the model sets `ask_user` per computer-action call; omitted/`true` asks, `false` runs; shell, external files, and non-http URLs still require Allow). The launcher input row cycles the mode. **History** lists recent conversations. Opening one restores the transcript and a sanitized model history so a follow-up continues that thread. **New** sends `ResetSession`, which drops follow-up history, ambient context, and any session scratch handle. Hiding the launcher keeps any in-flight task running and preserves the conversation so the next show can continue chatting. Past conversations remain under `~/.crosspond/tasks/`. Legacy `~/.crosspond/workspaces/` directories are left untouched.
+Non-secret config is `~/.crosspond/config.json` (`provider`, `base_url`, `model`, `computer_approval`, `vault_path`, `launcher_hotkey`). `provider` is `openai_compatible` (default) or `chatgpt_codex`. API keys and ChatGPT OAuth tokens are only in Keychain (`com.crosspond.app` / `provider.api_key`, optional `exa.api_key`, and `provider.chatgpt_oauth` as one JSON blob). Config and secrets are loaded fresh on each StartTask and Test Connection. The WebView may see `chatgpt_signed_in: bool` and a short status string — never access tokens, refresh tokens, JWTs, or account ids. Encrypted Codex reasoning (`encrypted_content`) stays on in-memory `Message` objects for the live session; it is omitted from `events.jsonl`, `session.json`, receipts, `Debug`, and the WebView. `launcher_hotkey` is a shortcut spec such as `alt+Space` (default, Option+Space). Changing it in Settings re-registers the global hotkey immediately. `computer_approval` is `manual` (ask before UI actions, shell, external files, and non-http URLs), `auto` (run every tool without asking), or `agent` (the model sets `ask_user` per computer-action call; omitted/`true` asks, `false` runs; shell, external files, and non-http URLs still require Allow). The launcher input row cycles the mode. **History** lists recent conversations. Opening one restores the transcript and a sanitized model history so a follow-up continues that thread. **New** sends `ResetSession`, which drops follow-up history, ambient context, and any session scratch handle. Hiding the launcher keeps any in-flight task running and preserves the conversation so the next show can continue chatting. Past conversations remain under `~/.crosspond/tasks/`. Legacy `~/.crosspond/workspaces/` directories are left untouched.
 
 Tasks do not create a working directory on start. A scratch space under `~/.crosspond/scratch/<task-id>/` is created only when a file, download, or shell tool actually needs one (or when Finder selections are staged into `input/`). Follow-up turns in the same session reuse that scratch. Empty temporary scratches are removed when the task ends. Each submit still writes `~/.crosspond/tasks/<task-id>/` (`task.json` with `conversation_id`, UI-safe `events.jsonl`, sanitized `session.json`, `receipt.json`). Follow-up turns in the same conversation share that id. ResumeSession loads the latest sanitized session for the conversation; tool bodies, screenshot bytes, and raw tool arguments are not restored.
 
@@ -110,7 +111,13 @@ The launcher window is created once (`visible: false`) and toggled; it is not de
 
 The compact idle command bar (no message sent yet, no History/onboarding overlay) hides when Crosspond is no longer the active app. An expanded conversation stays visible. Hide is skipped when Settings is also open. Hide is also skipped while Japanese IME (or another in-app palette) has key without deactivating the app — WKWebView owns IME, and IME candidate windows typically keep the app active. The WebView also reports the `@` mention picker and the computer-approval menu as composing so click-away does not hide mid-pick. The compact window grows for mention chips and the picker list; `@` / `＠` stay in a textarea (not contenteditable) so WKWebView keeps IME.
 
-First launch with no API key shows the launcher in onboarding and opens Settings from there. Accessibility is not requested until the user uses selected text or computer tools.
+First launch with no provider ready (no API key, and not signed in with ChatGPT) shows the launcher in onboarding and opens Settings from there. Accessibility is not requested until the user uses selected text or computer tools.
+
+## ChatGPT Codex OAuth
+
+`chatgpt_codex` is an optional second provider. It reuses the public OAuth client shipped with Codex CLI (`app_EMoamEEZ73f0CkXaXp7hrann`) and talks only to `https://chatgpt.com/backend-api/codex/responses`. Tokens must not be sent to `api.openai.com`. This is not an official third-party ChatGPT API; Crosspond uses it for personal Plus/Pro sessions only and must not resell or multiplex one login. Crosspond keeps its own system prompt and tool names (no OpenCode Codex-bridge prompt).
+
+Login lives in `crosspond-app`: PKCE, then `tauri-plugin-opener` to the authorize URL, then a localhost listener on `127.0.0.1:1455`. If that port is already bound (often Codex CLI), Settings shows the URL and the user pastes the redirect. Sign-out deletes the Keychain blob and switches back to `openai_compatible` when ChatGPT was selected. Token refresh is implemented in `crosspond-model` via a small `ChatGptTokenStore` that core backs with Keychain.
 
 ## Hotkeys
 

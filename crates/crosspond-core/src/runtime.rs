@@ -9,8 +9,8 @@ use crosspond_knowledge::{
     VaultRepository, VaultWatcher, WatchMode, index_db_path, looks_like_read_later, parse_note_id,
 };
 use crosspond_model::{
-    ImagePart, Message, ModelError, ModelEvent, ModelProvider, ModelRequest, ProviderBuilder, Role,
-    ToolCall, ToolDefinition, default_provider_builder, keep_latest_images,
+    ImagePart, Message, ModelError, ModelEvent, ModelProvider, ModelRequest, ProviderAuth,
+    ProviderBuilder, Role, ToolCall, ToolDefinition, default_provider_builder, keep_latest_images,
 };
 use crosspond_tools::{
     KnowledgeBackend, PathScope, ScratchReason, ScratchSpace, ToolContext, ToolRegistry,
@@ -34,11 +34,13 @@ use crate::receipt::{
     Receipt, append_event_log, receipt_action_line, tool_ui_summary, write_receipt, write_task_meta,
 };
 use crate::scratch::{FsScratchSpaceManager, ScratchSpaceManager, default_tasks_root};
-use crate::secret::{SecretKey, SecretStore};
+use crate::secret::{SecretChatGptTokenStore, SecretKey, SecretStore, load_chatgpt_tokens};
 
 /// Shown when the user tries to chat before saving an API key.
 pub const MISSING_API_KEY_MESSAGE: &str =
     "Add an API key in Settings (⌘,) before sending a request.";
+pub const MISSING_CHATGPT_MESSAGE: &str =
+    "Sign in with ChatGPT in Settings (⌘,) before sending a request.";
 
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -328,7 +330,7 @@ impl Runtime {
         let secrets = Arc::clone(&self.secrets);
         let build = self.build.clone();
         tokio::spawn(async move {
-            let (ok, message) = match load_provider(&*config, &*secrets, build) {
+            let (ok, message) = match load_provider(&*config, secrets, build) {
                 Ok(provider) => match provider.test_connection().await {
                     Ok(()) => (true, "Connected.".to_string()),
                     Err(err) => (false, err.user_message()),
@@ -353,15 +355,16 @@ impl Runtime {
             return;
         }
 
-        let provider = match load_provider(&*self.config, &*self.secrets, self.build.clone()) {
-            Ok(provider) => provider,
-            Err(message) => {
-                let _ = self
-                    .events
-                    .send(AgentEvent::TaskFailed { task_id, message });
-                return;
-            }
-        };
+        let provider =
+            match load_provider(&*self.config, Arc::clone(&self.secrets), self.build.clone()) {
+                Ok(provider) => provider,
+                Err(message) => {
+                    let _ = self
+                        .events
+                        .send(AgentEvent::TaskFailed { task_id, message });
+                    return;
+                }
+            };
 
         let config = match self.config.load() {
             Ok(config) => config,
@@ -503,6 +506,7 @@ impl Runtime {
             images: screen_images,
             tool_calls: Vec::new(),
             tool_call_id: None,
+            encrypted_reasoning: None,
         });
 
         let tool_defs = model_tools(&self.tools);
@@ -567,9 +571,13 @@ impl Runtime {
                     reasoning,
                     reasoning_ms,
                     calls,
+                    encrypted_reasoning,
                 } => {
                     persist_step_progress(&task_dir, &reasoning, reasoning_ms, &assistant_text);
-                    messages.push(Message::assistant_tool_calls(assistant_text, calls.clone()));
+                    messages.push(
+                        Message::assistant_tool_calls(assistant_text, calls.clone())
+                            .with_encrypted_reasoning(encrypted_reasoning),
+                    );
                     for call in calls {
                         if let Some(reset) = self.drain_control(task_id) {
                             self.finish_cancelled(
@@ -695,9 +703,13 @@ impl Runtime {
                     text: summary,
                     reasoning,
                     reasoning_ms,
+                    encrypted_reasoning,
                 } => {
                     persist_step_progress(&task_dir, &reasoning, reasoning_ms, &summary);
-                    messages.push(Message::assistant(summary.clone()));
+                    messages.push(
+                        Message::assistant(summary.clone())
+                            .with_encrypted_reasoning(encrypted_reasoning),
+                    );
                     self.session = messages
                         .into_iter()
                         .filter(|message| message.role != Role::System)
@@ -1183,6 +1195,7 @@ impl Runtime {
         let mut reasoning = String::new();
         let mut reasoning_started: Option<Instant> = None;
         let mut tool_calls = Vec::new();
+        let mut encrypted_reasoning = None;
         let mut cancelled = false;
         let mut reset = false;
 
@@ -1207,6 +1220,9 @@ impl Runtime {
                                 }
                             }
                             ModelEvent::ToolCall(call) => tool_calls.push(call),
+                            ModelEvent::EncryptedReasoning(value) => {
+                                encrypted_reasoning = Some(value);
+                            }
                         }
                     }
                     match result {
@@ -1216,6 +1232,7 @@ impl Runtime {
                                 reasoning,
                                 reasoning_ms: reasoning_started.map(|started| started.elapsed().as_millis() as u64),
                                 calls: tool_calls,
+                                encrypted_reasoning,
                             };
                         }
                         Ok(()) if assembled.trim().is_empty() => {
@@ -1226,6 +1243,7 @@ impl Runtime {
                                 text: assembled,
                                 reasoning,
                                 reasoning_ms: reasoning_started.map(|started| started.elapsed().as_millis() as u64),
+                                encrypted_reasoning,
                             };
                         }
                         Err(err) => return StepOutcome::Failed(err.user_message()),
@@ -1249,6 +1267,9 @@ impl Runtime {
                             }
                         }
                         Some(ModelEvent::ToolCall(call)) => tool_calls.push(call),
+                        Some(ModelEvent::EncryptedReasoning(value)) => {
+                            encrypted_reasoning = Some(value);
+                        }
                         None => {}
                     }
                 }
@@ -1338,12 +1359,14 @@ enum StepOutcome {
         text: String,
         reasoning: String,
         reasoning_ms: Option<u64>,
+        encrypted_reasoning: Option<String>,
     },
     ToolCalls {
         assistant_text: String,
         reasoning: String,
         reasoning_ms: Option<u64>,
         calls: Vec<ToolCall>,
+        encrypted_reasoning: Option<String>,
     },
     Failed(String),
     Cancelled {
@@ -1428,17 +1451,40 @@ async fn execute_tool(
 
 fn load_provider(
     config: &dyn ConfigStore,
-    secrets: &dyn SecretStore,
+    secrets: Arc<dyn SecretStore>,
     build: ProviderBuilder,
 ) -> Result<Arc<dyn ModelProvider>, String> {
     let config = config.load().map_err(|err| err.to_string())?;
-    let key = secrets
-        .get(&SecretKey::PROVIDER_API_KEY)
-        .map_err(|err| err.to_string())?;
-    let Some(key) = key.filter(|key| !key.is_empty()) else {
-        return Err(MISSING_API_KEY_MESSAGE.into());
-    };
-    Ok(build(&config.base_url, &config.model, key.expose()))
+    match config.provider {
+        crate::config::ProviderKind::OpenaiCompatible => {
+            let key = secrets
+                .get(&SecretKey::PROVIDER_API_KEY)
+                .map_err(|err| err.to_string())?;
+            let Some(key) = key.filter(|key| !key.is_empty()) else {
+                return Err(MISSING_API_KEY_MESSAGE.into());
+            };
+            Ok(build(
+                &config.model,
+                ProviderAuth::ApiKey {
+                    base_url: config.base_url,
+                    api_key: key.expose().to_string(),
+                },
+            ))
+        }
+        crate::config::ProviderKind::ChatGptCodex => {
+            let tokens = load_chatgpt_tokens(&*secrets).map_err(|err| err.to_string())?;
+            let Some(tokens) = tokens else {
+                return Err(MISSING_CHATGPT_MESSAGE.into());
+            };
+            Ok(build(
+                &config.model,
+                ProviderAuth::ChatGptOAuth {
+                    tokens,
+                    store: Arc::new(SecretChatGptTokenStore::new(secrets)),
+                },
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1467,7 +1513,7 @@ mod tests {
     };
 
     fn echo_builder() -> ProviderBuilder {
-        Arc::new(|_, _, _| Arc::new(EchoProvider::new(Duration::from_millis(80))))
+        Arc::new(|_, _| Arc::new(EchoProvider::new(Duration::from_millis(80))))
     }
 
     fn seeded_secrets() -> Arc<MemorySecretStore> {
@@ -1724,7 +1770,7 @@ mod tests {
         let captured = Arc::clone(&requests);
         let build: ProviderBuilder = {
             let captured = Arc::clone(&captured);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&captured),
@@ -1787,7 +1833,7 @@ mod tests {
         let captured = Arc::clone(&requests);
         let build: ProviderBuilder = {
             let captured = Arc::clone(&captured);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&captured),
@@ -1876,7 +1922,7 @@ mod tests {
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
             let phase = Arc::clone(&phase);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(TeachThenEchoProvider {
                     requests: Arc::clone(&requests),
                     phase: Arc::clone(&phase),
@@ -1962,7 +2008,7 @@ mod tests {
         let phase = Arc::new(Mutex::new(0u8));
         let build: ProviderBuilder = {
             let phase = Arc::clone(&phase);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(TeachThenEchoProvider {
                     requests: Arc::new(Mutex::new(Vec::new())),
                     phase: Arc::clone(&phase),
@@ -2140,7 +2186,7 @@ mod tests {
         );
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&requests),
@@ -2220,7 +2266,7 @@ mod tests {
         );
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&requests),
@@ -2291,7 +2337,7 @@ mod tests {
         );
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&requests),
@@ -2342,7 +2388,7 @@ mod tests {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let build: ProviderBuilder = {
             let requests = Arc::clone(&requests);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&requests),
@@ -2502,12 +2548,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chatgpt_codex_without_oauth_asks_to_sign_in() {
+        let (runtime, _tmp) = test_runtime(
+            echo_builder(),
+            Arc::new(MemorySecretStore::default()),
+            ToolRegistry::new(),
+        );
+        let mut config = runtime.config.load().unwrap();
+        config.provider = crate::config::ProviderKind::ChatGptCodex;
+        runtime.config.save(&config).unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "hello",
+            )))
+            .unwrap();
+        let failed = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskFailed { .. })
+        })
+        .await;
+        match failed {
+            AgentEvent::TaskFailed { message, .. } => {
+                assert_eq!(message, MISSING_CHATGPT_MESSAGE);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn chatgpt_codex_runs_without_api_key() {
+        let secrets = MemorySecretStore::default();
+        crate::secret::save_chatgpt_tokens(
+            &secrets,
+            &crosspond_model::ChatGptOAuthTokens {
+                access: "access".into(),
+                refresh: "refresh".into(),
+                expires_at: 1,
+                account_id: "acct".into(),
+            },
+        )
+        .unwrap();
+        let (runtime, _tmp) = test_runtime(echo_builder(), Arc::new(secrets), ToolRegistry::new());
+        let mut config = runtime.config.load().unwrap();
+        config.provider = crate::config::ProviderKind::ChatGptCodex;
+        runtime.config.save(&config).unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "hello",
+            )))
+            .unwrap();
+        let completed = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(matches!(completed, AgentEvent::TaskCompleted { .. }));
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn follow_up_includes_prior_turn() {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&requests);
         let build: ProviderBuilder = {
             let captured = Arc::clone(&captured);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&captured),
@@ -2578,7 +2692,7 @@ mod tests {
         let captured = Arc::clone(&requests);
         let build: ProviderBuilder = {
             let captured = Arc::clone(&captured);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&captured),
@@ -2643,7 +2757,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_loop_writes_scratch_file() {
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(ScriptedProvider::new()));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(ScriptedProvider::new()));
         let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
@@ -2706,7 +2820,7 @@ mod tests {
         .to_string();
         let build: ProviderBuilder = {
             let arguments = arguments.clone();
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(TwoTurnToolProvider {
                     arguments: arguments.clone(),
                     turn: Mutex::new(0),
@@ -2766,7 +2880,7 @@ mod tests {
         .to_string();
         let build: ProviderBuilder = {
             let arguments = arguments.clone();
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(TwoTurnToolProvider {
                     arguments: arguments.clone(),
                     turn: Mutex::new(0),
@@ -2813,7 +2927,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_stops_unbounded_tool_loop() {
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(AlwaysToolProvider));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(AlwaysToolProvider));
         let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
@@ -2855,7 +2969,7 @@ mod tests {
         let captured = Arc::clone(&requests);
         let build: ProviderBuilder = {
             let captured = Arc::clone(&captured);
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(RecordingProvider {
                     delay: Duration::from_millis(10),
                     requests: Arc::clone(&captured),
@@ -2927,7 +3041,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(SnapshotThenPressProvider::new()));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(SnapshotThenPressProvider::new()));
         let (runtime, _tmp) = test_runtime(build, seeded_secrets(), tools);
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
@@ -2989,7 +3103,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(SnapshotThenPressProvider::new()));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(SnapshotThenPressProvider::new()));
         let (runtime, tmp) = test_runtime(build, seeded_secrets(), tools);
         runtime
             .config
@@ -3096,7 +3210,7 @@ mod tests {
         .to_string();
         let build: ProviderBuilder = {
             let arguments = arguments.clone();
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(NamedToolThenDoneProvider::new(
                     "run_command",
                     arguments.clone(),
@@ -3150,7 +3264,7 @@ mod tests {
         .to_string();
         let build: ProviderBuilder = {
             let arguments = arguments.clone();
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(NamedToolThenDoneProvider::new(
                     "run_command",
                     arguments.clone(),
@@ -3204,7 +3318,7 @@ mod tests {
         .to_string();
         let build: ProviderBuilder = {
             let arguments = arguments.clone();
-            Arc::new(move |_, _, _| {
+            Arc::new(move |_, _| {
                 Arc::new(NamedToolThenDoneProvider::new(
                     "write_file",
                     arguments.clone(),
@@ -3254,7 +3368,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| {
+        let build: ProviderBuilder = Arc::new(|_, _| {
             Arc::new(SnapshotThenPressProvider::with_press_arguments(
                 r#"{"node_id":4,"ask_user":false}"#,
             ))
@@ -3299,7 +3413,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| {
+        let build: ProviderBuilder = Arc::new(|_, _| {
             Arc::new(SnapshotThenPressProvider::with_press_arguments(
                 r#"{"node_id":4,"ask_user":true}"#,
             ))
@@ -3351,7 +3465,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(SnapshotThenPressProvider::new()));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(SnapshotThenPressProvider::new()));
         let (runtime, _tmp) = test_runtime(build, seeded_secrets(), tools);
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
@@ -3392,7 +3506,7 @@ mod tests {
         let tools = test_computer_registry(Arc::new(RecordingAx {
             pressed: Arc::clone(&pressed),
         }));
-        let build: ProviderBuilder = Arc::new(|_, _, _| Arc::new(SnapshotThenPressProvider::new()));
+        let build: ProviderBuilder = Arc::new(|_, _| Arc::new(SnapshotThenPressProvider::new()));
         let (runtime, _tmp) = test_runtime(build, seeded_secrets(), tools);
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));

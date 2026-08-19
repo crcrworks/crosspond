@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { listen } from '@tauri-apps/api/event';
 	import {
+		completeChatgptLogin,
 		loadSettings,
 		openSystemSettings,
 		pauseLauncherHotkey,
@@ -8,6 +9,8 @@
 		saveConfig,
 		saveSecret,
 		setLauncherHotkey,
+		signOutChatgpt,
+		startChatgptLogin,
 		testConnection
 	} from '$lib/api';
 	import Badge from '$lib/components/Badge.svelte';
@@ -18,13 +21,18 @@
 	import { onMount } from 'svelte';
 
 	let settings = $state<SettingsView | null>(null);
+	let provider = $state<SettingsView['provider']>('openai_compatible');
 	let baseUrl = $state('');
 	let model = $state('');
 	let vaultPath = $state('');
 	let apiKey = $state('');
 	let exaKey = $state('');
+	let redirectUrl = $state('');
 	let saveStatus = $state<string | null>(null);
 	let testStatus = $state<{ ok: boolean; message: string } | null>(null);
+	let loginStatus = $state<{ ok: boolean; message: string } | null>(null);
+	let loginMode = $state<'idle' | 'browser' | 'manual'>('idle');
+	let authorizeUrl = $state('');
 	let recording = $state(false);
 	let draftTokens = $state<string[]>([]);
 	let hotkeyError = $state<string | null>(null);
@@ -37,6 +45,7 @@
 		void (async () => {
 			const loaded = await loadSettings();
 			settings = loaded;
+			provider = loaded.provider;
 			baseUrl = loaded.base_url;
 			model = loaded.model;
 			vaultPath = loaded.vault_path;
@@ -49,19 +58,40 @@
 		}).then((fn) => {
 			unlisten = fn;
 		});
+		let unlistenLogin: (() => void) | undefined;
+		void listen<{ ok: boolean; message: string }>('chatgpt-login', (event) => {
+			loginStatus = event.payload;
+			loginMode = 'idle';
+			if (event.payload.ok) {
+				void loadSettings().then((loaded) => {
+					settings = loaded;
+					provider = loaded.provider;
+					model = loaded.model;
+				});
+			}
+		}).then((fn) => {
+			unlistenLogin = fn;
+		});
 		return () => {
 			unlisten?.();
+			unlistenLogin?.();
 			void resumeLauncherHotkey();
 		};
 	});
 
 	async function persist() {
-		await saveConfig(baseUrl, model, vaultPath);
-		await saveSecret('provider', apiKey);
-		await saveSecret('exa', exaKey);
-		if (apiKey.trim()) apiKey = '';
-		if (exaKey.trim()) exaKey = '';
+		await saveConfig(baseUrl, model, vaultPath, provider);
+		if (apiKey.trim()) {
+			await saveSecret('provider', apiKey);
+			apiKey = '';
+		}
+		if (exaKey.trim()) {
+			await saveSecret('exa', exaKey);
+			exaKey = '';
+		}
 		settings = await loadSettings();
+		provider = settings.provider;
+		model = settings.model;
 		vaultPath = settings.vault_path;
 	}
 
@@ -84,6 +114,58 @@
 			await testConnection();
 		} catch (error) {
 			testStatus = { ok: false, message: String(error) };
+		}
+	}
+
+	async function chooseProvider(next: SettingsView['provider']) {
+		provider = next;
+		loginStatus = null;
+		loginMode = 'idle';
+		if (next === 'chatgpt_codex' && model === 'gpt-4o-mini') {
+			model = 'gpt-5.2';
+		}
+	}
+
+	async function onChatgptLogin() {
+		loginStatus = null;
+		try {
+			await persist();
+			const started = await startChatgptLogin();
+			authorizeUrl = started.authorize_url;
+			loginMode = started.mode === 'manual' ? 'manual' : 'browser';
+			if (started.mode === 'browser') {
+				loginStatus = { ok: true, message: 'Waiting for ChatGPT sign-in in the browser…' };
+			}
+		} catch (error) {
+			loginStatus = { ok: false, message: String(error) };
+			loginMode = 'idle';
+		}
+	}
+
+	async function onChatgptComplete() {
+		loginStatus = null;
+		try {
+			await completeChatgptLogin(redirectUrl);
+			redirectUrl = '';
+			loginMode = 'idle';
+			settings = await loadSettings();
+			provider = settings.provider;
+			model = settings.model;
+			loginStatus = { ok: true, message: 'Signed in with ChatGPT.' };
+		} catch (error) {
+			loginStatus = { ok: false, message: String(error) };
+		}
+	}
+
+	async function onChatgptSignOut() {
+		loginStatus = null;
+		try {
+			await signOutChatgpt();
+			settings = await loadSettings();
+			provider = settings.provider;
+			loginStatus = { ok: true, message: 'Signed out of ChatGPT.' };
+		} catch (error) {
+			loginStatus = { ok: false, message: String(error) };
 		}
 	}
 
@@ -204,18 +286,31 @@
 		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">AI</div>
 		<div class="flex flex-col gap-1">
 			<div class="text-sm text-[var(--muted)]">Provider</div>
-			<div>OpenAI Compatible</div>
+			<div class="flex flex-row gap-2">
+				<Button
+					label="OpenAI Compatible"
+					variant={provider === 'openai_compatible' ? 'primary' : 'ghost'}
+					onclick={() => void chooseProvider('openai_compatible')}
+				/>
+				<Button
+					label="ChatGPT Plus/Pro"
+					variant={provider === 'chatgpt_codex' ? 'primary' : 'ghost'}
+					onclick={() => void chooseProvider('chatgpt_codex')}
+				/>
+			</div>
 		</div>
-		<label class="flex flex-col gap-1">
-			<span class="text-sm text-[var(--muted)]">Base URL</span>
-			<input
-				bind:value={baseUrl}
-				class="rounded-md border px-2 py-1"
-				style:border-color="var(--border)"
-				style:background="var(--bg)"
-			/>
-		</label>
-		<div class="text-sm text-[var(--muted)]">Must include /v1, e.g. http://127.0.0.1:1234/v1</div>
+		{#if provider === 'openai_compatible'}
+			<label class="flex flex-col gap-1">
+				<span class="text-sm text-[var(--muted)]">Base URL</span>
+				<input
+					bind:value={baseUrl}
+					class="rounded-md border px-2 py-1"
+					style:border-color="var(--border)"
+					style:background="var(--bg)"
+				/>
+			</label>
+			<div class="text-sm text-[var(--muted)]">Must include /v1, e.g. http://127.0.0.1:1234/v1</div>
+		{/if}
 		<label class="flex flex-col gap-1">
 			<span class="text-sm text-[var(--muted)]">Model</span>
 			<input
@@ -225,19 +320,56 @@
 				style:background="var(--bg)"
 			/>
 		</label>
-		<label class="flex flex-col gap-1">
-			<span class="text-sm text-[var(--muted)]">API Key</span>
-			<input
-				bind:value={apiKey}
-				type="password"
-				placeholder={settings?.provider_key_stored
-					? '••••••••  stored in Keychain'
-					: 'Required — stored in Keychain'}
-				class="rounded-md border px-2 py-1"
-				style:border-color="var(--border)"
-				style:background="var(--bg)"
-			/>
-		</label>
+		{#if provider === 'openai_compatible'}
+			<label class="flex flex-col gap-1">
+				<span class="text-sm text-[var(--muted)]">API Key</span>
+				<input
+					bind:value={apiKey}
+					type="password"
+					placeholder={settings?.provider_key_stored
+						? '••••••••  stored in Keychain'
+						: 'Required — stored in Keychain'}
+					class="rounded-md border px-2 py-1"
+					style:border-color="var(--border)"
+					style:background="var(--bg)"
+				/>
+			</label>
+		{:else}
+			<div class="text-sm text-[var(--muted)]">
+				Uses your ChatGPT Plus/Pro subscription through Codex. Tokens stay in Keychain.
+			</div>
+			{#if settings?.chatgpt_signed_in}
+				<div class="text-sm">ChatGPT session stored in Keychain.</div>
+				<Button label="Sign out" onclick={() => void onChatgptSignOut()} />
+			{:else}
+				<Button
+					label="Sign in with ChatGPT"
+					onclick={() => void onChatgptLogin()}
+					variant="primary"
+				/>
+			{/if}
+			{#if loginMode === 'manual'}
+				<div class="text-sm text-[var(--muted)]">
+					Port 1455 is busy (often Codex CLI). Open this URL, then paste the redirect:
+				</div>
+				<div class="text-sm break-all font-mono">{authorizeUrl}</div>
+				<label class="flex flex-col gap-1">
+					<span class="text-sm text-[var(--muted)]">Redirect URL</span>
+					<input
+						bind:value={redirectUrl}
+						class="rounded-md border px-2 py-1"
+						style:border-color="var(--border)"
+						style:background="var(--bg)"
+					/>
+				</label>
+				<Button label="Complete sign-in" onclick={() => void onChatgptComplete()} />
+			{/if}
+			{#if loginStatus}
+				<div class="text-sm" style:color={loginStatus.ok ? 'var(--ok)' : 'var(--danger)'}
+					>{loginStatus.message}</div
+				>
+			{/if}
+		{/if}
 		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
 			Search
 		</div>

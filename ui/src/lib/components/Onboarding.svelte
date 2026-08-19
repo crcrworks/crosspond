@@ -31,7 +31,8 @@
 	<div class="flex flex-col gap-3 pt-2">
 		<div class="text-sm">Bring your own AI.</div>
 		<div class="text-sm text-[var(--muted)]">
-			Set a provider, model, and API key in Settings. Accessibility is not required for chat.
+			Set a provider in Settings — API key, or ChatGPT Plus/Pro sign-in. Accessibility is not
+			required for chat.
 		</div>
 		{#if hint}
 			<div class="text-sm text-[var(--danger)]">{hint}</div>

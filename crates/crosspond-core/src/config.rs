@@ -8,6 +8,7 @@ use crate::policy::ComputerApprovalMode;
 
 /// Default Knowledge Vault folder. Not under `~/.crosspond`.
 pub const DEFAULT_VAULT_RELATIVE: &str = "Documents/Crosspond";
+pub const DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2";
 
 pub fn home_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into()))
@@ -53,6 +54,8 @@ pub fn parse_vault_path_input(input: &str) -> PathBuf {
 pub enum ProviderKind {
     #[default]
     OpenaiCompatible,
+    #[serde(rename = "chatgpt_codex")]
+    ChatGptCodex,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -189,7 +192,23 @@ mod tests {
         assert_eq!(loaded.launcher_hotkey, LauncherHotkey::default());
         assert!(loaded.vault_path.is_none());
         assert!(!text.contains("vault_path"));
+        assert!(!text.contains("chatgpt_oauth"));
+        assert!(!text.contains("access_token"));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn chatgpt_codex_provider_round_trips() {
+        let parsed: AppConfig = serde_json::from_str(
+            r#"{"provider":"chatgpt_codex","base_url":"https://api.openai.com/v1","model":"gpt-5.2"}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.provider, ProviderKind::ChatGptCodex);
+        assert_eq!(parsed.model, "gpt-5.2");
+        let text = serde_json::to_string(&parsed).unwrap();
+        assert!(text.contains("chatgpt_codex"));
+        assert!(!text.contains("access"));
+        assert!(!text.contains("refresh"));
     }
 
     #[test]

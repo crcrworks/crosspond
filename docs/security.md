@@ -2,7 +2,7 @@
 
 ## Secrets
 
-API keys go to macOS Keychain via `SecretStore`. They must not appear in:
+API keys and ChatGPT OAuth tokens go to macOS Keychain via `SecretStore`. They must not appear in:
 
 - `config.json`
 - `.env`
@@ -16,6 +16,9 @@ The Keychain items use service `com.crosspond.app`:
 
 - `provider.api_key` — OpenAI-compatible provider key
 - `exa.api_key` — Exa API key for `web_search`
+- `provider.chatgpt_oauth` — one JSON blob `{ access, refresh, expires_at, account_id }` for ChatGPT Plus/Pro. Written atomically so refresh cannot split access/refresh. `SecretString` must not derive `Debug`.
+
+ChatGPT login reuses Codex CLI’s public OAuth client. It is not an official third-party subscription API. Use it for a single person’s Plus/Pro session; do not resell or share one login across users. The authorize redirect is `http://localhost:1455/auth/callback`. If port 1455 is busy, Settings falls back to pasting the redirect URL. The WebView must never receive access tokens, refresh tokens, JWTs, or ChatGPT account ids — only `chatgpt_signed_in` and a short status. Codex encrypted reasoning stays in the in-memory session and must not be written to `events.jsonl`, `session.json`, receipts, logs, or `Debug`.
 
 Provider HTTP errors shown in the UI are short status-based messages. Raw provider JSON is not dumped to the user or to logs.
 

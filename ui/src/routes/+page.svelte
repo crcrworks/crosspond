@@ -286,12 +286,12 @@
 
 	async function continueOnboarding() {
 		const loaded = await loadSettings();
-		if (loaded.provider_key_stored) {
+		if (loaded.provider_ready) {
 			session.onboardingReady = true;
 			session.onboardingHint = null;
 			return;
 		}
-		session.onboardingHint = 'Add an API key in Settings first.';
+		session.onboardingHint = 'Sign in with ChatGPT or add an API key in Settings first.';
 		await openSettings();
 	}
 

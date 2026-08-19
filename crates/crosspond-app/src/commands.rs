@@ -3,10 +3,11 @@ use std::process::Command;
 
 use crosspond_core::{
     AppConfig, ApprovalId, ComputerApprovalMode, ConversationId, ConversationView, HotkeyView,
-    LauncherHotkey, MISSING_API_KEY_MESSAGE, Mention, Receipt, RuntimeCommand, SecretKey,
-    SecretString, StartTaskRequest, TaskId, conversation_artifact_path, default_tasks_root,
-    default_vault_path, history_group_label, history_title, list_recent_tasks,
-    open_conversation as load_conversation, parse_vault_path_input, provider_key_is_set,
+    LauncherHotkey, MISSING_API_KEY_MESSAGE, MISSING_CHATGPT_MESSAGE, Mention, Receipt,
+    RuntimeCommand, SecretKey, SecretString, StartTaskRequest, TaskId, conversation_artifact_path,
+    default_tasks_root, default_vault_path, history_group_label, history_title, list_recent_tasks,
+    open_conversation as load_conversation, parse_vault_path_input, provider_is_ready,
+    provider_key_is_set,
 };
 use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
 use serde::Serialize;
@@ -31,7 +32,10 @@ pub struct SettingsView {
     pub model: String,
     pub vault_path: String,
     pub default_vault_path: String,
+    pub provider: String,
     pub provider_key_stored: bool,
+    pub chatgpt_signed_in: bool,
+    pub provider_ready: bool,
     pub exa_key_stored: bool,
     pub permissions: PermissionSnapshot,
     pub computer_approval: ComputerApprovalMode,
@@ -54,7 +58,7 @@ pub fn bootstrap(state: State<AppState>) -> Bootstrap {
     let inner = state.lock_inner();
     let config = state.config.load().unwrap_or_default();
     Bootstrap {
-        needs_onboarding: !provider_key_is_set(&*state.secrets),
+        needs_onboarding: !provider_is_ready(&config, &*state.secrets),
         computer_approval: config.computer_approval,
         launcher_hotkey: config.launcher_hotkey.view(),
         badges: inner.ambient.badge_lines(),
@@ -80,8 +84,12 @@ pub fn start_task(
     if prompt.is_empty() && mentions.is_empty() {
         return Err("prompt is empty".into());
     }
-    if !provider_key_is_set(&*state.secrets) {
-        return Err(MISSING_API_KEY_MESSAGE.into());
+    if !provider_is_ready(&state.config.load().unwrap_or_default(), &*state.secrets) {
+        let config = state.config.load().unwrap_or_default();
+        return Err(match config.provider {
+            crosspond_core::ProviderKind::ChatGptCodex => MISSING_CHATGPT_MESSAGE.into(),
+            crosspond_core::ProviderKind::OpenaiCompatible => MISSING_API_KEY_MESSAGE.into(),
+        });
     }
     let task_id = TaskId::new();
     let mut inner = state.lock_inner();
@@ -183,12 +191,19 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
         .unwrap_or_else(default_vault_path)
         .display()
         .to_string();
+    let chatgpt_signed_in = crosspond_core::chatgpt_oauth_is_set(&*state.secrets);
     SettingsView {
         base_url: loaded.base_url,
         model: loaded.model,
         vault_path,
         default_vault_path: default_vault_path().display().to_string(),
+        provider: match loaded.provider {
+            crosspond_core::ProviderKind::ChatGptCodex => "chatgpt_codex".into(),
+            crosspond_core::ProviderKind::OpenaiCompatible => "openai_compatible".into(),
+        },
         provider_key_stored,
+        chatgpt_signed_in,
+        provider_ready: provider_is_ready(&loaded, &*state.secrets),
         exa_key_stored,
         permissions: PermissionSnapshot::current(),
         computer_approval: loaded.computer_approval,
@@ -201,6 +216,7 @@ pub fn save_config(
     base_url: String,
     model: String,
     vault_path: String,
+    provider: Option<String>,
     state: State<AppState>,
 ) -> Result<(), String> {
     let mut config = state.config.load().unwrap_or_default();
@@ -215,6 +231,9 @@ pub fn save_config(
     } else {
         model.trim().to_string()
     };
+    if let Some(provider) = provider {
+        crate::oauth::apply_saved_provider(&mut config, &provider);
+    }
     config.vault_path = Some(parse_vault_path_input(&vault_path));
     state.config.save(&config).map_err(|err| err.to_string())?;
     state.commands.send(RuntimeCommand::ReloadKnowledge);
@@ -303,6 +322,28 @@ pub fn save_secret(kind: String, value: String, state: State<AppState>) -> Resul
         .secrets
         .set(&key, &SecretString::new(value))
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn start_chatgpt_login(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<crate::oauth::ChatGptLoginStart, String> {
+    crate::oauth::start_login(&app, &state)
+}
+
+#[tauri::command]
+pub fn complete_chatgpt_login(
+    redirect: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<(), String> {
+    crate::oauth::complete_login(&app, &state, &redirect)
+}
+
+#[tauri::command]
+pub fn sign_out_chatgpt(state: State<AppState>) -> Result<(), String> {
+    crate::oauth::sign_out(&state)
 }
 
 #[tauri::command]
