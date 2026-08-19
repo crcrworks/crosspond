@@ -1049,6 +1049,17 @@ mod tests {
         assert!(err.user_message().contains("usage limit"));
     }
 
+    #[tokio::test]
+    async fn test_connection_accepts_models_list() {
+        let base = serve_http(
+            200,
+            "application/json",
+            br#"{"data":[{"id":"gpt-5.6-luna"}]}"#,
+        );
+        let provider = provider_at(&format!("{base}/codex/responses"), &format!("{base}/token"));
+        provider.test_connection().await.unwrap();
+    }
+
     fn jwt_with_account(account: &str) -> String {
         let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
         let payload = serde_json::json!({

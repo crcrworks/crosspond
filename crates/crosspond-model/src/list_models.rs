@@ -155,23 +155,33 @@ pub async fn fetch_compat_models_at(
     parse_models_json(&text)
 }
 
+fn chatgpt_models_url(url: &str) -> String {
+    if url.contains("client_version=") {
+        url.to_string()
+    } else if url.contains('?') {
+        format!("{url}&client_version={CODEX_CLIENT_VERSION}")
+    } else {
+        format!("{url}?client_version={CODEX_CLIENT_VERSION}")
+    }
+}
+
 pub async fn fetch_chatgpt_models(
     tokens: &ChatGptOAuthTokens,
 ) -> Result<Vec<ListedModel>, ModelError> {
-    let url = format!("{CODEX_MODELS_URL}?client_version={CODEX_CLIENT_VERSION}");
-    fetch_chatgpt_models_at(&url, tokens).await
+    fetch_chatgpt_models_at(CODEX_MODELS_URL, tokens).await
 }
 
 pub async fn fetch_chatgpt_models_at(
     url: &str,
     tokens: &ChatGptOAuthTokens,
 ) -> Result<Vec<ListedModel>, ModelError> {
+    let url = chatgpt_models_url(url);
     let http = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .build()
         .map_err(|err| ModelError::Network(err.to_string()))?;
     let response = http
-        .get(url)
+        .get(&url)
         .bearer_auth(&tokens.access)
         .header("chatgpt-account-id", &tokens.account_id)
         .header("OpenAI-Beta", "responses=experimental")
@@ -263,6 +273,22 @@ mod tests {
         assert_eq!(models[0].id, "qwen2.5");
     }
 
+    #[test]
+    fn chatgpt_models_url_requires_client_version_query() {
+        assert_eq!(
+            chatgpt_models_url("https://chatgpt.com/backend-api/codex/models"),
+            "https://chatgpt.com/backend-api/codex/models?client_version=0.144.1"
+        );
+        assert_eq!(
+            chatgpt_models_url("https://example/models?foo=1"),
+            "https://example/models?foo=1&client_version=0.144.1"
+        );
+        assert_eq!(
+            chatgpt_models_url("https://example/models?client_version=0.144.1"),
+            "https://example/models?client_version=0.144.1"
+        );
+    }
+
     #[tokio::test]
     async fn fetch_chatgpt_models_sends_version_header() {
         let body = br#"{"data":[{"id":"gpt-5.6-luna"}]}"#;
@@ -278,6 +304,8 @@ mod tests {
             .unwrap();
         assert_eq!(models[0].id, "gpt-5.6-luna");
         let request = captured.lock().expect("capture").clone();
+        let first_line = request.lines().next().unwrap_or_default();
+        assert!(first_line.contains("client_version=0.144.1"));
         assert!(
             request
                 .to_ascii_lowercase()
