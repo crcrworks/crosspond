@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crosspond_core::{
     AppConfig, ProviderKind, REDIRECT_URI, TOKEN_URL, create_authorization_flow,
@@ -85,17 +85,29 @@ pub fn sign_out(state: &AppState) -> Result<(), String> {
 
 fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String, String> {
     listener
-        .set_read_timeout(Some(CALLBACK_TIMEOUT))
+        .set_nonblocking(true)
         .map_err(|err| err.to_string())?;
-    let (mut stream, _) = listener.accept().map_err(|err| {
-        if err.kind() == std::io::ErrorKind::TimedOut
-            || err.kind() == std::io::ErrorKind::WouldBlock
-        {
-            "ChatGPT sign-in timed out".into()
-        } else {
-            err.to_string()
+    let deadline = Instant::now() + CALLBACK_TIMEOUT;
+    let (mut stream, _) = loop {
+        match listener.accept() {
+            Ok(accepted) => break accepted,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                if Instant::now() >= deadline {
+                    return Err("ChatGPT sign-in timed out".into());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(err) => return Err(err.to_string()),
         }
-    })?;
+    };
+    stream
+        .set_nonblocking(false)
+        .map_err(|err| err.to_string())?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf).unwrap_or(0);
     let request = String::from_utf8_lossy(&buf[..n]);

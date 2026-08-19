@@ -196,6 +196,7 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
         .display()
         .to_string();
     let chatgpt_signed_in = crosspond_core::chatgpt_oauth_is_set(&*state.secrets);
+    let provider_ready = provider_is_ready(&loaded, &*state.secrets);
     SettingsView {
         base_url: loaded.base_url,
         model: loaded.model,
@@ -207,7 +208,7 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
         },
         provider_key_stored,
         chatgpt_signed_in,
-        provider_ready: provider_is_ready(&loaded, &*state.secrets),
+        provider_ready,
         exa_key_stored,
         permissions: PermissionSnapshot::current(),
         computer_approval: loaded.computer_approval,
