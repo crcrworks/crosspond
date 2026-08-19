@@ -114,7 +114,7 @@ kbd {
 }
 
 .prompt.seamless .prompt-stack {
-	gap: 0;
+	gap: 2px;
 }
 
 .prompt.docked {
@@ -223,12 +223,6 @@ kbd {
 	align-items: center;
 	gap: 2px;
 	width: 100%;
-}
-
-.prompt.seamless .prompt-pickers {
-	margin-top: 4px;
-	padding-top: 4px;
-	border-top: 1px solid var(--border);
 }
 
 .prompt-pickers-end {
