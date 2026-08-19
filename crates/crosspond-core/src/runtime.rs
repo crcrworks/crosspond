@@ -2562,6 +2562,67 @@ mod tests {
         let _ = tmp;
     }
 
+    #[tokio::test]
+    async fn browser_mention_routes_without_screenshot() {
+        let pids = Arc::new(Mutex::new(Vec::new()));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let tools = computer_and_screenshot_registry(
+            Arc::new(RecordingAx {
+                pressed: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(TestShot {
+                pids: Arc::clone(&pids),
+            }),
+            Arc::new(TestApps),
+            Arc::new(TestInput),
+            Arc::new(TestCalendar),
+        );
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&requests),
+                })
+            })
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), tools);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                mentions: vec![Mention::Browser],
+                ..StartTaskRequest::new(task_id, "Continue を押して")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        assert!(pids.lock().expect("lock").is_empty());
+        {
+            let captured = requests.lock().expect("lock");
+            let user = captured[0]
+                .iter()
+                .find(|message| message.role == Role::User)
+                .expect("user");
+            assert!(user.images.is_empty());
+            assert!(user.content.contains("Continue"));
+            let system = &captured[0][0].content;
+            assert!(system.contains("User mentions"));
+            assert!(system.contains("browser_snapshot"));
+            assert!(system.contains("browser_click"));
+            assert!(!system.contains("Look at that image before acting"));
+        }
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
     fn scratch_dir(tmp: &Path, task_id: TaskId) -> PathBuf {
         tmp.join("scratch").join(task_id.to_string())
     }
