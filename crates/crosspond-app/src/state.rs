@@ -4,7 +4,7 @@ use std::thread::JoinHandle;
 
 use crosspond_core::{
     CommandSender, ConfigStore, ContextCapsule, ContextCollector, ConversationId,
-    GlobalHotkeyService, SecretStore, TaskId,
+    GlobalHotkeyService, SecretStore, TaskId, provider_key_is_set,
 };
 
 pub struct AppState {
@@ -26,6 +26,8 @@ pub struct InnerState {
     pub in_conversation: bool,
     pub compact: bool,
     pub composing: bool,
+    /// First-launch overlay is up. Hotkey should reveal the bar, not hide.
+    pub onboarding: bool,
     /// Latest launcher resize request. Older queued resizes are dropped.
     pub resize_seq: u64,
     /// Settings is capturing a new shortcut; ignore launcher toggles.
@@ -41,6 +43,7 @@ impl AppState {
         hotkey: Box<dyn GlobalHotkeyService>,
         runtime: JoinHandle<()>,
     ) -> Self {
+        let onboarding = !provider_key_is_set(&*secrets);
         Self {
             commands,
             config,
@@ -56,6 +59,7 @@ impl AppState {
                 in_conversation: false,
                 compact: true,
                 composing: false,
+                onboarding,
                 resize_seq: 0,
                 capturing_hotkey: false,
             }),
