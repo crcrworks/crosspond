@@ -2,15 +2,19 @@
 	let {
 		label,
 		onclick,
-		variant = 'ghost'
+		variant = 'ghost',
+		type = 'button',
+		disabled = false
 	}: {
 		label: string;
-		onclick: () => void;
+		onclick?: () => void;
 		variant?: 'ghost' | 'primary' | 'danger';
+		type?: 'button' | 'submit';
+		disabled?: boolean;
 	} = $props();
 </script>
 
-<button type="button" class={['btn', variant]} {onclick}>
+<button {type} class={['btn', variant]} {onclick} {disabled}>
 	{label}
 </button>
 
@@ -37,9 +41,18 @@
 		color: var(--button-primary-text);
 	}
 
-	.primary:hover {
+	.primary:hover:not(:disabled) {
 		background: var(--button-primary-hover);
 		border-color: var(--button-primary-hover);
+	}
+
+	.btn:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+
+	.btn:disabled:active {
+		transform: none;
 	}
 
 	.danger {

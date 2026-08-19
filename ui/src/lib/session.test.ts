@@ -25,6 +25,26 @@ describe('LauncherSession completion', () => {
 		expect(session.receipt?.actions).toEqual(['Clicked Continue']);
 	});
 
+	it('stores a pending credential from credential_required', () => {
+		const session = new LauncherSession();
+		session.beginTask('task-1', 'conv-1', 'Log in');
+		session.applyEvent({
+			type: 'credential_required',
+			task_id: 'task-1',
+			approval_id: 'cred-1',
+			title: 'Sign in to GitHub',
+			credential_ref: 'vault:github',
+			save_offered: true
+		});
+		expect(session.pendingCredential).toEqual({
+			id: 'cred-1',
+			title: 'Sign in to GitHub',
+			credentialRef: 'vault:github',
+			saveOffered: true
+		});
+		expect(session.state).toBe('waiting_approval');
+	});
+
 	it('restoreConversation shows the past transcript as a follow-up chat', () => {
 		const session = new LauncherSession();
 		session.restoreConversation({
