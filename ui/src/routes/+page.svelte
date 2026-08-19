@@ -29,7 +29,7 @@
 	import TranscriptView from '$lib/components/TranscriptView.svelte';
 	import { LauncherSession } from '$lib/session.svelte';
 	import { firstUserTitle } from '$lib/transcript';
-	import { shouldSyncLauncherSize } from '$lib/launcher-size';
+	import { PICKER_MENU_HEIGHT, PICKER_ROW_HEIGHT, shouldSyncLauncherSize } from '$lib/launcher-size';
 	import {
 		MENTION_CHIP_ROW,
 		MENTION_MENU_HEIGHT,
@@ -44,9 +44,9 @@
 	let textarea: HTMLTextAreaElement | undefined = $state();
 	let textExtra = $state(0);
 	let modeMenuOpen = $state(false);
+	let pickerOpen = $state(false);
 	let mentionOpen = $state(false);
 	let stickToBottom = $state(true);
-	let scroller: HTMLDivElement | undefined = $state();
 	let hotkeyTokens = $state<string[]>(['Option', 'Space']);
 
 	const chatLayout = $derived(
@@ -55,9 +55,10 @@
 	const expanded = $derived(!session.compact);
 	const extraHeight = $derived(
 		textExtra +
+			PICKER_ROW_HEIGHT +
 			(session.mentions.length > 0 ? MENTION_CHIP_ROW : 0) +
 			(session.compact && mentionOpen ? MENTION_MENU_HEIGHT : 0) +
-			(session.compact && modeMenuOpen && !mentionOpen ? 120 : 0)
+			(session.compact && (modeMenuOpen || pickerOpen) && !mentionOpen ? PICKER_MENU_HEIGHT : 0)
 	);
 	const canSubmit = $derived(
 		session.state === 'idle' ||
@@ -90,14 +91,15 @@
 
 	function resetComposerSize() {
 		modeMenuOpen = false;
+		pickerOpen = false;
 		mentionOpen = false;
 		textExtra = 0;
 		if (textarea) textarea.style.height = 'auto';
 	}
 
-	function resize() {
+	function syncLauncherWindow(_node: HTMLDivElement) {
 		const compact = session.compact;
-		const composing = session.composing || mentionOpen || modeMenuOpen;
+		const composing = session.composing || mentionOpen || modeMenuOpen || pickerOpen;
 		const inConversation = session.inConversation;
 		const badges = session.overlay === 'onboarding' || chatLayout ? 0 : session.badges.length;
 		const extra = extraHeight;
@@ -109,16 +111,12 @@
 		void syncLauncherSize(compact, badges, extra);
 	}
 
-	$effect(() => {
-		resize();
-	});
-
-	$effect(() => {
+	function stickTranscript(node: HTMLDivElement) {
 		session.rev;
-		if (stickToBottom && scroller) {
-			scroller.scrollTop = scroller.scrollHeight;
+		if (stickToBottom) {
+			node.scrollTop = node.scrollHeight;
 		}
-	});
+	}
 
 	onMount(() => {
 		let unlistenEvent: (() => void) | undefined;
@@ -256,6 +254,10 @@
 				modeMenuOpen = false;
 				return;
 			}
+			if (pickerOpen) {
+				pickerOpen = false;
+				return;
+			}
 			if (mentionOpen) {
 				mentionOpen = false;
 				return;
@@ -278,7 +280,7 @@
 			void hideLauncher();
 			return;
 		}
-		if (event.key === 'ArrowUp' && !modeMenuOpen && !mentionOpen && session.input.length === 0 && session.overlay === 'none' && session.mentions.length === 0) {
+		if (event.key === 'ArrowUp' && !modeMenuOpen && !pickerOpen && !mentionOpen && session.input.length === 0 && session.overlay === 'none' && session.mentions.length === 0) {
 			event.preventDefault();
 			void onHistory();
 		}
@@ -302,7 +304,11 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class={['launcher', dockPrompt && 'dock-prompt']} data-tauri-drag-region="deep">
+<div
+	{@attach syncLauncherWindow}
+	class={['launcher', dockPrompt && 'dock-prompt']}
+	data-tauri-drag-region="deep"
+>
 	{#if showHeader}
 		<ConversationHeader
 			liveTitle={session.inConversation ? (liveTitle ?? 'Chat') : null}
@@ -325,7 +331,7 @@
 			class={[
 				'prompt-slot',
 				expanded ? 'docked' : 'seamless',
-				!expanded && session.badges.length === 0 && !modeMenuOpen && !mentionOpen && 'fill'
+				!expanded && session.badges.length === 0 && !modeMenuOpen && !pickerOpen && !mentionOpen && 'fill'
 			]}
 			data-tauri-drag-region
 		>
@@ -334,6 +340,7 @@
 				bind:value={session.input}
 				bind:textarea
 				bind:menuOpen={modeMenuOpen}
+				bind:pickerOpen
 				bind:mentionOpen
 				bind:mentions={session.mentions}
 				placeholder={session.placeholder}
@@ -359,12 +366,13 @@
 	{/if}
 	{#if expanded}
 		<div
-			bind:this={scroller}
+			{@attach stickTranscript}
 			class="transcript-pane min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-2"
 			data-tauri-drag-region="deep"
-			onscroll={() => {
-				if (!scroller) return;
-				const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+			onscroll={(event) => {
+				const node = event.currentTarget;
+				if (!(node instanceof HTMLDivElement)) return;
+				const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
 				stickToBottom = distance < 64;
 			}}
 		>

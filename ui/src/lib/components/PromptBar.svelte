@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { APPROVAL_MODES, approvalLabel } from '$lib/tools';
+	import { listModels, saveEffort, saveSelected } from '$lib/api';
 	import { composerExtraHeight } from '$lib/launcher-size';
+	import { EFFORTS, effortLabel } from '$lib/models';
 	import {
 		chipLabel,
 		filterCatalog,
@@ -9,7 +11,7 @@
 		type Mention,
 		type MentionCatalogItem
 	} from '$lib/mentions';
-	import type { ComputerApproval } from '$lib/types';
+	import type { ComputerApproval, ModelGroup, ReasoningEffort, SelectedModel } from '$lib/types';
 	import Chevron from './Chevron.svelte';
 	import Icon from './Icon.svelte';
 
@@ -20,6 +22,7 @@
 		value = $bindable(''),
 		textarea = $bindable<HTMLTextAreaElement | undefined>(undefined),
 		menuOpen = $bindable(false),
+		pickerOpen = $bindable(false),
 		mentionOpen = $bindable(false),
 		mentions = $bindable<Mention[]>([]),
 		placeholder,
@@ -38,6 +41,7 @@
 		value: string;
 		textarea?: HTMLTextAreaElement;
 		menuOpen: boolean;
+		pickerOpen: boolean;
 		mentionOpen: boolean;
 		mentions: Mention[];
 		placeholder: string;
@@ -63,13 +67,117 @@
 	let appsLoading = $state(false);
 	let appsLoadId = 0;
 	let composing = $state(false);
+	let groups = $state<ModelGroup[]>([]);
+	let selected = $state<SelectedModel>({ source: 'default', model: 'gpt-4o-mini' });
+	let effort = $state<ReasoningEffort>('medium');
+	let modelMenuOpen = $state(false);
+	let effortMenuOpen = $state(false);
+	let customOpen = $state(false);
+	let customModel = $state('');
+	let customSource = $state('default');
 	const docked = $derived(variant === 'docked');
 	const sendReady = $derived(canSubmit && (value.trim().length > 0 || mentions.length > 0));
-	const kindItems = $derived(filterCatalog(stage === 'kinds' ? stageQuery : ''));
+	const activeStage = $derived(mentionOpen ? stage : null);
+	const kindItems = $derived(filterCatalog(activeStage === 'kinds' ? stageQuery : ''));
 	const filteredApps = $derived(
 		appHits.filter((name) => name.toLowerCase().includes(stageQuery.trim().toLowerCase()))
 	);
-	const mentionCount = $derived(stage === 'kinds' ? kindItems.length : filteredApps.length);
+	const mentionCount = $derived(activeStage === 'kinds' ? kindItems.length : filteredApps.length);
+	const chatgptSelected = $derived(selected.source === 'chatgpt');
+	const modelButtonLabel = $derived(selected.model || 'Model');
+	const showModelMenu = $derived(pickerOpen && modelMenuOpen);
+	const showEffortMenu = $derived(pickerOpen && effortMenuOpen && chatgptSelected);
+	const showCustom = $derived(pickerOpen && customOpen);
+
+	function closePickers() {
+		modelMenuOpen = false;
+		effortMenuOpen = false;
+		customOpen = false;
+		pickerOpen = false;
+	}
+
+	async function refreshModels() {
+		try {
+			const catalog = await listModels();
+			groups = catalog.groups;
+			selected = catalog.selected;
+			effort = catalog.reasoning_effort;
+		} catch {
+			groups = [];
+		}
+	}
+
+	async function chooseModel(source: string, model: string) {
+		closePickers();
+		selected = { source, model };
+		try {
+			selected = await saveSelected(source, model);
+		} catch {
+			/* keep local selection */
+		}
+	}
+
+	function chooseCustom(source: string) {
+		modelMenuOpen = false;
+		effortMenuOpen = false;
+		customSource = source;
+		customModel = selected.source === source ? selected.model : '';
+		customOpen = true;
+		pickerOpen = true;
+	}
+
+	async function commitCustom() {
+		const model = customModel.trim();
+		if (!model) {
+			customOpen = false;
+			return;
+		}
+		await chooseModel(customSource, model);
+		customOpen = false;
+	}
+
+	async function chooseEffort(next: ReasoningEffort) {
+		if (!chatgptSelected) return;
+		closePickers();
+		effort = next;
+		try {
+			effort = (await saveEffort(next)) as ReasoningEffort;
+		} catch {
+			/* keep local */
+		}
+	}
+
+	function toggleModelMenu(event: MouseEvent) {
+		event.preventDefault();
+		event.stopPropagation();
+		closeMentions();
+		closeMenu();
+		effortMenuOpen = false;
+		customOpen = false;
+		if (showModelMenu) {
+			closePickers();
+			return;
+		}
+		modelMenuOpen = true;
+		pickerOpen = true;
+		void refreshModels();
+	}
+
+	function toggleEffortMenu(event: MouseEvent) {
+		event.preventDefault();
+		event.stopPropagation();
+		if (!chatgptSelected) return;
+		closeMentions();
+		closeMenu();
+		modelMenuOpen = false;
+		customOpen = false;
+		if (showEffortMenu) {
+			closePickers();
+			return;
+		}
+		effortMenuOpen = true;
+		pickerOpen = true;
+	}
 
 	function captureRoot(node: HTMLDivElement) {
 		root = node;
@@ -103,6 +211,7 @@
 
 	function openKinds(start: number, query: string) {
 		menuOpen = false;
+		closePickers();
 		stage = 'kinds';
 		triggerStart = start;
 		stageQuery = query;
@@ -112,7 +221,7 @@
 
 	function syncTriggerFromValue() {
 		if (composing) return;
-		if (stage === 'app') return;
+		if (activeStage === 'app') return;
 		const cursor = textarea?.selectionStart ?? value.length;
 		const trigger = mentionTrigger(value, cursor);
 		if (!trigger) {
@@ -147,15 +256,14 @@
 	}
 
 	async function loadApps() {
-		if (appsLoading) return;
 		const id = (appsLoadId += 1);
 		appsLoading = true;
 		try {
 			const names = await onlistapps();
-			if (id !== appsLoadId) return;
+			if (id !== appsLoadId || !mentionOpen) return;
 			appHits = names;
 		} catch {
-			if (id !== appsLoadId) return;
+			if (id !== appsLoadId || !mentionOpen) return;
 			appHits = [];
 		} finally {
 			if (id === appsLoadId) appsLoading = false;
@@ -177,12 +285,12 @@
 	}
 
 	function selectActiveMention() {
-		if (stage === 'kinds') {
+		if (activeStage === 'kinds') {
 			const item = kindItems[mentionIndex];
 			if (item) selectKind(item);
 			return;
 		}
-		if (stage === 'app') {
+		if (activeStage === 'app') {
 			const name = filteredApps[mentionIndex] ?? stageQuery.trim();
 			if (name) addMention({ kind: 'app', name });
 		}
@@ -222,7 +330,7 @@
 
 	function onPromptInput() {
 		resize();
-		if (stage === 'app') {
+		if (activeStage === 'app') {
 			const cursor = textarea?.selectionStart ?? value.length;
 			stageQuery = value.slice(triggerStart, cursor);
 			return;
@@ -232,6 +340,7 @@
 
 	function openMenu() {
 		closeMentions();
+		closePickers();
 		activeIndex = Math.max(0, APPROVAL_MODES.indexOf(approval));
 		menuOpen = true;
 	}
@@ -257,6 +366,7 @@
 		if (root.contains(event.target as Node)) return;
 		closeMenu();
 		closeMentions();
+		closePickers();
 	}
 
 	function onModeKey(event: KeyboardEvent) {
@@ -290,15 +400,7 @@
 		else onsubmit();
 	}
 
-	$effect(() => {
-		if (!mentionOpen && stage !== null) {
-			appsLoadId += 1;
-			stage = null;
-			stageQuery = '';
-			appHits = [];
-			appsLoading = false;
-		}
-	});
+	void refreshModels();
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
@@ -342,6 +444,110 @@
 				}}
 			></textarea>
 		</label>
+		<div class="prompt-pickers">
+			<div class="prompt-mode-wrap picker-left">
+				<button
+					type="button"
+					class="prompt-mode"
+					aria-haspopup="menu"
+					aria-expanded={showModelMenu}
+					aria-label="Model {modelButtonLabel}"
+					onclick={toggleModelMenu}
+				>
+					<span class="picker-label">{modelButtonLabel}</span>
+					<Chevron expanded />
+				</button>
+				{#if showModelMenu}
+					<div class={['prompt-menu', 'picker-menu', docked ? 'up' : 'down']} role="menu" aria-label="Models">
+						{#each groups as group (group.source)}
+							<div class="prompt-group">{group.label}</div>
+							{#each group.models as model (group.source + model.id)}
+								<button
+									type="button"
+									class={[
+										'prompt-option',
+										{
+											selected:
+												selected.source === group.source && selected.model === model.id
+										}
+									]}
+									role="menuitem"
+									onclick={() => void chooseModel(group.source, model.id)}
+								>
+									{model.label}
+								</button>
+							{/each}
+							<button
+								type="button"
+								class="prompt-option"
+								role="menuitem"
+								onclick={() => chooseCustom(group.source)}
+							>
+								Custom…
+							</button>
+						{/each}
+						{#if groups.length === 0}
+							<div class="mention-empty">Add a provider in Settings</div>
+						{/if}
+					</div>
+				{/if}
+				{#if showCustom}
+					<div class={['prompt-menu', 'picker-menu', docked ? 'up' : 'down']}>
+						<input
+							class="picker-custom"
+							bind:value={customModel}
+							placeholder="Model id"
+							aria-label="Custom model"
+							onkeydown={(event) => {
+								if (event.key === 'Enter') {
+									event.preventDefault();
+									void commitCustom();
+								}
+								if (event.key === 'Escape') {
+									event.preventDefault();
+									customOpen = false;
+								}
+							}}
+						/>
+						<button type="button" class="prompt-option" onclick={() => void commitCustom()}>
+							Use this model
+						</button>
+					</div>
+				{/if}
+			</div>
+			<div class="prompt-mode-wrap picker-left">
+				<button
+					type="button"
+					class={['prompt-mode', !chatgptSelected && 'disabled']}
+					aria-haspopup="menu"
+					aria-expanded={showEffortMenu}
+					aria-label="Reasoning effort {effortLabel(effort)}"
+					disabled={!chatgptSelected}
+					title={chatgptSelected ? 'Codex reasoning effort' : 'Effort applies to ChatGPT models'}
+					onclick={toggleEffortMenu}
+				>
+					<span>{effortLabel(effort)}</span>
+					<Chevron expanded />
+				</button>
+				{#if showEffortMenu}
+					<div class={['prompt-menu', 'picker-menu', docked ? 'up' : 'down']} role="menu" aria-label="Effort">
+						{#each EFFORTS as item (item)}
+							<button
+								type="button"
+								class={['prompt-option', { selected: item === effort }]}
+								role="menuitem"
+								onclick={() => void chooseEffort(item)}
+							>
+								{effortLabel(item)}
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+			{#if !chatgptSelected}
+				<span class="picker-note">Effort is Codex only</span>
+			{/if}
+		</div>
 	</div>
 	<div class="prompt-tools">
 		<div class="prompt-mode-wrap">
@@ -395,7 +601,7 @@
 			role="listbox"
 			aria-label="Mentions"
 		>
-			{#if stage === 'kinds'}
+			{#if activeStage === 'kinds'}
 				{#each kindItems as item, index (item.kind)}
 					<button
 						type="button"
@@ -412,7 +618,7 @@
 				{#if kindItems.length === 0}
 					<div class="mention-empty">No matches</div>
 				{/if}
-			{:else if stage === 'app'}
+			{:else if activeStage === 'app'}
 				{#each filteredApps as name, index (name)}
 					<button
 						type="button"
