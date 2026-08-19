@@ -32,7 +32,12 @@
 <div class="flex flex-col gap-2">
 	{#each blocks as block, index (index)}
 		{#if block.kind === 'user'}
-			<div class="w-full py-1 text-sm leading-[1.35] break-words text-[var(--muted)]">{block.text}</div>
+			<div
+				class="w-full py-1 text-sm leading-[1.35] break-words text-[var(--muted)]"
+				data-tauri-drag-region="false"
+			>
+				{block.text}
+			</div>
 		{:else if block.kind === 'text'}
 			<Markdown source={block.text} />
 		{:else}
@@ -100,7 +105,12 @@
 				<Chevron expanded={step.expanded} />
 			</button>
 			{#if step.expanded && step.text.trim()}
-				<div class="pl-4 text-sm leading-[1.35] break-words text-[var(--muted)]">{step.text.trim()}</div>
+				<div
+					class="pl-4 text-sm leading-[1.35] break-words text-[var(--muted)]"
+					data-tauri-drag-region="false"
+				>
+					{step.text.trim()}
+				</div>
 			{/if}
 		</div>
 	{:else}

@@ -3,6 +3,7 @@
 mod commands;
 mod events;
 mod launcher;
+mod navigation;
 mod oauth;
 mod state;
 
@@ -62,6 +63,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(external_navigation_plugin())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
@@ -93,6 +95,7 @@ pub fn run() {
             commands::set_ui_flags,
             commands::sync_launcher_size,
             commands::list_mention_apps,
+            commands::open_external_url,
         ])
         .setup(move |app| {
             // tao defaults to Regular, which overrides Info.plist LSUIElement and
@@ -134,6 +137,12 @@ pub fn run() {
                 launcher::show(app);
             }
         });
+}
+
+fn external_navigation_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("external-nav")
+        .on_navigation(|_webview, url| navigation::handle_navigation(url))
+        .build()
 }
 
 fn install_menu(app: &tauri::AppHandle) -> tauri::Result<()> {

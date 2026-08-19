@@ -303,7 +303,7 @@
 
 <svelte:window onpointerdown={onWindowPointerDown} />
 
-<div {@attach captureRoot} class={['prompt', variant]}>
+<div {@attach captureRoot} class={['prompt', variant]} data-tauri-drag-region="false">
 	<div class="prompt-stack">
 		{#if mentions.length > 0}
 			<div class="prompt-chips">

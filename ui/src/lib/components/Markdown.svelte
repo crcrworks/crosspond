@@ -5,7 +5,9 @@
 	const html = $derived(renderMarkdown(source.trimEnd()));
 </script>
 
-<div class="markdown text-sm leading-[1.65] break-words">{@html html}</div>
+<div class="markdown text-sm leading-[1.65] break-words" data-tauri-drag-region="false">
+	{@html html}
+</div>
 
 <style>
 	.markdown :global(p) {

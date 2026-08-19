@@ -29,7 +29,7 @@
         "resizable": true,
         "decorations": false,
         "transparent": true,
-        "shadow": false,
+        "shadow": true,
         "alwaysOnTop": true,
         "visible": false,
         "focus": false,
