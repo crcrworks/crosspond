@@ -164,7 +164,7 @@ kbd {
 .mention-menu {
 	left: 0;
 	right: auto;
-	min-width: min(100%, 280px);
+	min-width: min(100%, 320px);
 	max-height: 240px;
 	overflow-y: auto;
 }
