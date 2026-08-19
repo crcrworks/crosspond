@@ -23,8 +23,9 @@ mod status;
 
 pub use command::{ApprovalId, RuntimeCommand, StartTaskRequest};
 pub use config::{
-    AppConfig, ConfigError, ConfigStore, DEFAULT_CHATGPT_MODEL, FileConfigStore, ProviderKind,
-    default_vault_path, parse_vault_path_input,
+    AppConfig, CHATGPT_SOURCE, ConfigError, ConfigStore, DEFAULT_CHATGPT_MODEL, DEFAULT_COMPAT_ID,
+    DEFAULT_COMPAT_MODEL, FileConfigStore, OpenaiCompatEndpoint, ReasoningEffort, SelectedModel,
+    default_vault_path, parse_vault_path_input, sanitize_compat_id,
 };
 pub use context::{
     AppContext, ContextCapsule, ContextCollector, MAX_AMBIENT_TEXT_CHARS, NullContextCollector,
@@ -38,8 +39,9 @@ pub use crosspond_knowledge::{
     VaultError, VaultRepository, index_db_path,
 };
 pub use crosspond_model::{
-    ChatGptAuthorizationFlow, ChatGptOAuthTokens, REDIRECT_URI, TOKEN_URL,
-    create_authorization_flow, exchange_authorization_code, parse_callback_input,
+    ChatGptAuthorizationFlow, ChatGptOAuthTokens, ListedModel, REDIRECT_URI, TOKEN_URL,
+    create_authorization_flow, ensure_model, exchange_authorization_code, fallback_chatgpt_models,
+    fallback_compat_models, fetch_chatgpt_models, fetch_compat_models, parse_callback_input,
 };
 pub use event::AgentEvent;
 pub use history::{TaskHistoryEntry, history_group_label, history_title, list_recent_tasks};
@@ -58,7 +60,7 @@ pub use runtime::{
 pub use scratch::default_tasks_root;
 pub use secret::{
     SecretChatGptTokenStore, SecretError, SecretKey, SecretStore, SecretString,
-    chatgpt_oauth_is_set, load_chatgpt_tokens, provider_is_ready, provider_key_is_set,
-    save_chatgpt_tokens,
+    any_compat_key_is_set, chatgpt_oauth_is_set, compat_key_is_set, load_chatgpt_tokens,
+    provider_is_ready, provider_key_is_set, save_chatgpt_tokens, selected_provider_is_ready,
 };
 pub use status::{CommandWindowState, TaskStatus};

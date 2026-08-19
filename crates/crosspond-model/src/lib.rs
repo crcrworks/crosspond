@@ -5,18 +5,26 @@
 mod chatgpt_codex;
 mod chatgpt_oauth;
 mod error;
+mod list_models;
 mod openai_compat;
 mod provider;
 
 pub use chatgpt_codex::{ChatGptCodexProvider, responses_body};
 pub use chatgpt_oauth::{
-    AUTHORIZE_URL, CLIENT_ID, CODEX_RESPONSES_URL, ChatGptAuthorizationFlow, ChatGptOAuthTokens,
-    ChatGptPkce, ChatGptTokenStore, MemoryChatGptTokenStore, REDIRECT_URI, TOKEN_URL,
-    create_authorization_flow, exchange_authorization_code, parse_callback_input,
-    parse_token_response, refresh_access_token,
+    AUTHORIZE_URL, CLIENT_ID, CODEX_CLIENT_VERSION, CODEX_MODELS_URL, CODEX_RESPONSES_URL,
+    ChatGptAuthorizationFlow, ChatGptOAuthTokens, ChatGptPkce, ChatGptTokenStore,
+    MemoryChatGptTokenStore, ORIGINATOR, REDIRECT_URI, TOKEN_URL, create_authorization_flow,
+    exchange_authorization_code, parse_callback_input, parse_token_response, refresh_access_token,
 };
 pub use error::ModelError;
-pub use openai_compat::{OpenAiCompatibleProvider, chat_completions_url, parse_sse_frames};
+pub use list_models::{
+    ListedModel, ensure_model, fallback_chatgpt_models, fallback_compat_models,
+    fetch_chatgpt_models, fetch_chatgpt_models_at, fetch_compat_models, fetch_compat_models_at,
+    parse_models_json,
+};
+pub use openai_compat::{
+    OpenAiCompatibleProvider, chat_completions_url, models_url, parse_sse_frames,
+};
 pub use provider::{
     EchoProvider, ImagePart, Message, ModelEvent, ModelProvider, ModelRequest, Role, ToolCall,
     ToolDefinition, default_provider_builder, keep_latest_images,

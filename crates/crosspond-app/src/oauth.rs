@@ -3,8 +3,9 @@ use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
 use crosspond_core::{
-    AppConfig, ProviderKind, REDIRECT_URI, TOKEN_URL, create_authorization_flow,
-    exchange_authorization_code, parse_callback_input, save_chatgpt_tokens,
+    DEFAULT_CHATGPT_MODEL, DEFAULT_COMPAT_MODEL, REDIRECT_URI, SelectedModel, TOKEN_URL,
+    create_authorization_flow, exchange_authorization_code, parse_callback_input,
+    save_chatgpt_tokens,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -72,13 +73,16 @@ pub fn complete_login(app: &AppHandle, state: &AppState, redirect: &str) -> Resu
 pub fn sign_out(state: &AppState) -> Result<(), String> {
     state
         .secrets
-        .delete(&crosspond_core::SecretKey::CHATGPT_OAUTH)
+        .delete(&crosspond_core::SecretKey::chatgpt_oauth())
         .map_err(|err| err.to_string())?;
     *state.lock_pending_chatgpt() = None;
+    state.invalidate_models();
     let mut config = state.config.load().unwrap_or_default();
-    if config.provider == ProviderKind::ChatGptCodex {
-        config.provider = ProviderKind::OpenaiCompatible;
-        state.config.save(&config).map_err(|err| err.to_string())?;
+    if config.selected.is_chatgpt() {
+        if let Some(endpoint) = config.openai_compat.first() {
+            config.selected = SelectedModel::compat(&endpoint.id, DEFAULT_COMPAT_MODEL);
+            state.config.save(&config).map_err(|err| err.to_string())?;
+        }
     }
     Ok(())
 }
@@ -146,12 +150,12 @@ fn exchange_and_store(app: &AppHandle, code: &str, verifier: &str) -> Result<(),
     };
     save_chatgpt_tokens(&*state.secrets, &tokens).map_err(|err| err.to_string())?;
     *state.lock_pending_chatgpt() = None;
+    state.invalidate_models();
     let mut config = state.config.load().unwrap_or_default();
-    config.provider = ProviderKind::ChatGptCodex;
-    if config.model == AppConfig::default().model {
-        config.model = crosspond_core::DEFAULT_CHATGPT_MODEL.into();
+    if !config.selected.is_chatgpt() && config.selected.model == DEFAULT_COMPAT_MODEL {
+        config.selected = SelectedModel::chatgpt(DEFAULT_CHATGPT_MODEL);
+        state.config.save(&config).map_err(|err| err.to_string())?;
     }
-    state.config.save(&config).map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -167,16 +171,4 @@ fn emit_login_result(app: &AppHandle, result: Result<(), String>) {
 struct ChatGptLoginEvent {
     ok: bool,
     message: String,
-}
-
-pub fn apply_saved_provider(config: &mut AppConfig, provider: &str) {
-    match provider {
-        "chatgpt_codex" => {
-            if config.model == AppConfig::default().model {
-                config.model = crosspond_core::DEFAULT_CHATGPT_MODEL.into();
-            }
-            config.provider = ProviderKind::ChatGptCodex;
-        }
-        _ => config.provider = ProviderKind::OpenaiCompatible,
-    }
 }

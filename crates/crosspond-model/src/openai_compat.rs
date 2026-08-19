@@ -405,6 +405,14 @@ pub fn chat_completions_url(base_url: &str) -> String {
     }
 }
 
+pub fn models_url(base_url: &str) -> String {
+    let completions = chat_completions_url(base_url);
+    match completions.strip_suffix("/chat/completions") {
+        Some(prefix) => format!("{prefix}/models"),
+        None => format!("{}/models", base_url.trim().trim_end_matches('/')),
+    }
+}
+
 fn has_openai_v1_prefix(base: &str) -> bool {
     base.ends_with("/v1") || base.contains("/v1/")
 }
@@ -731,6 +739,29 @@ mod tests {
     }
 
     #[test]
+    fn chat_completions_json_omits_reasoning_effort() {
+        let body = ChatRequestBody {
+            model: "gpt-4o-mini".into(),
+            messages: vec![WireMessage {
+                role: "user",
+                content: WireContent::Text("hi".into()),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            }],
+            stream: true,
+            max_tokens: None,
+            tools: Vec::new(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(!json.contains("effort"));
+        assert!(!json.contains("reasoning"));
+        assert_eq!(
+            models_url("https://api.openai.com/v1"),
+            "https://api.openai.com/v1/models"
+        );
+    }
+
+    #[test]
     fn parses_sse_text_deltas() {
         let mut buffer = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n\
              data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n\
@@ -822,6 +853,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -848,6 +880,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("write a file")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -875,6 +908,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -899,6 +933,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -932,6 +967,7 @@ mod tests {
                 model: String::new(),
                 messages: vec![Message::user("hi")],
                 tools: Vec::new(),
+                reasoning_effort: None,
             },
             tx,
         );

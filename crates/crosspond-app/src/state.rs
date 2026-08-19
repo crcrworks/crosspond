@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use crosspond_core::{
     CommandSender, ConfigStore, ContextCapsule, ContextCollector, ConversationId,
@@ -20,7 +21,13 @@ pub struct AppState {
     pub hotkey: Mutex<Box<dyn GlobalHotkeyService>>,
     pub inner: Mutex<InnerState>,
     pub pending_chatgpt: Mutex<Option<PendingChatGptLogin>>,
+    pub models_cache: Mutex<Option<ModelsCacheEntry>>,
     _runtime: JoinHandle<()>,
+}
+
+pub struct ModelsCacheEntry {
+    pub at: Instant,
+    pub catalog: crate::commands::ModelsCatalog,
 }
 
 pub struct InnerState {
@@ -66,6 +73,7 @@ impl AppState {
                 capturing_hotkey: false,
             }),
             pending_chatgpt: Mutex::new(None),
+            models_cache: Mutex::new(None),
             _runtime: runtime,
         }
     }
@@ -82,6 +90,13 @@ impl AppState {
         self.pending_chatgpt
             .lock()
             .unwrap_or_else(|err| err.into_inner())
+    }
+
+    pub fn invalidate_models(&self) {
+        *self
+            .models_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = None;
     }
 }
 

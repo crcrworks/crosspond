@@ -181,6 +181,7 @@ pub struct ModelRequest {
     pub model: String,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolDefinition>,
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Clone, Debug)]

@@ -35,6 +35,10 @@ pub enum RuntimeCommand {
     ResumeSession(ConversationId),
     /// Verify the current provider settings without starting a task.
     TestConnection,
+    /// Verify one OpenAI Compatible endpoint without changing the selected model.
+    TestCompat {
+        id: String,
+    },
     /// Re-open the Knowledge Vault after Settings saves `vault_path`.
     ReloadKnowledge,
 }

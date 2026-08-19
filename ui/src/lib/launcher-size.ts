@@ -7,3 +7,6 @@ export function composerExtraHeight(scrollHeight: number, minHeight = 24, maxHei
 	const next = Math.min(scrollHeight, maxHeight);
 	return Math.max(0, next - minHeight);
 }
+
+export const PICKER_ROW_HEIGHT = 22;
+export const PICKER_MENU_HEIGHT = 160;

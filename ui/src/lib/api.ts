@@ -5,6 +5,8 @@ import type {
 	ConversationView,
 	HistoryItem,
 	HotkeyView,
+	ModelsCatalog,
+	SelectedModel,
 	SettingsView,
 	StartTaskResult
 } from './types';
@@ -50,8 +52,32 @@ export function loadSettings() {
 	return invoke<SettingsView>('load_settings');
 }
 
-export function saveConfig(baseUrl: string, model: string, vaultPath: string, provider: SettingsView['provider']) {
-	return invoke('save_config', { baseUrl, model, vaultPath, provider });
+export function saveConfig(vaultPath: string) {
+	return invoke('save_config', { vaultPath });
+}
+
+export function saveCompat(id: string, name: string, baseUrl: string) {
+	return invoke<SettingsView>('save_compat', { id, name, baseUrl });
+}
+
+export function addCompat() {
+	return invoke<SettingsView>('add_compat');
+}
+
+export function deleteCompat(id: string) {
+	return invoke<SettingsView>('delete_compat', { id });
+}
+
+export function saveSelected(source: string, model: string) {
+	return invoke<SelectedModel>('save_selected', { source, model });
+}
+
+export function saveEffort(effort: string) {
+	return invoke<string>('save_effort', { effort });
+}
+
+export function listModels() {
+	return invoke<ModelsCatalog>('list_models');
 }
 
 export function startChatgptLogin() {
@@ -78,12 +104,16 @@ export function resumeLauncherHotkey() {
 	return invoke<HotkeyView>('resume_launcher_hotkey');
 }
 
-export function saveSecret(kind: 'provider' | 'exa', value: string) {
+export function saveSecret(kind: string, value: string) {
 	return invoke('save_secret', { kind, value });
 }
 
 export function testConnection() {
 	return invoke('test_connection');
+}
+
+export function testCompatConnection(id: string) {
+	return invoke('test_compat_connection', { id });
 }
 
 export function listHistory() {

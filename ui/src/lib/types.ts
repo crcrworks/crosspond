@@ -57,15 +57,46 @@ export type HotkeyView = {
 	tokens: string[];
 };
 
-export type SettingsView = {
-	base_url: string;
+export type SelectedModel = {
+	source: string;
 	model: string;
+};
+
+export type CompatEndpoint = {
+	id: string;
+	name: string;
+	base_url: string;
+	key_stored: boolean;
+};
+
+export type ListedModel = {
+	id: string;
+	label: string;
+};
+
+export type ModelGroup = {
+	source: string;
+	label: string;
+	models: ListedModel[];
+};
+
+export type ModelsCatalog = {
+	groups: ModelGroup[];
+	selected: SelectedModel;
+	reasoning_effort: ReasoningEffort;
+};
+
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+
+export type SettingsView = {
+	openai_compat: CompatEndpoint[];
+	selected: SelectedModel;
+	reasoning_effort: ReasoningEffort;
 	vault_path: string;
 	default_vault_path: string;
-	provider: 'openai_compatible' | 'chatgpt_codex';
-	provider_key_stored: boolean;
 	chatgpt_signed_in: boolean;
 	provider_ready: boolean;
+	selected_ready: boolean;
 	exa_key_stored: boolean;
 	permissions: {
 		accessibility: boolean;
@@ -82,6 +113,8 @@ export type Bootstrap = {
 	launcher_hotkey: HotkeyView;
 	badges: string[];
 	visible: boolean;
+	selected: SelectedModel;
+	reasoning_effort: ReasoningEffort;
 };
 
 export type LauncherShown = {

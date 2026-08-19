@@ -110,14 +110,14 @@ kbd {
 }
 
 .prompt.seamless {
-	align-items: center;
+	align-items: flex-start;
 	border-color: transparent;
 	background: transparent;
 	padding: 4px 0;
 }
 
 .prompt.docked {
-	align-items: center;
+	align-items: flex-start;
 }
 
 .prompt-slot.seamless.fill .prompt {
@@ -218,6 +218,64 @@ kbd {
 
 .prompt.seamless .prompt-tools {
 	margin-top: 0;
+}
+
+.prompt-pickers {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	gap: 2px;
+}
+
+.picker-left :global(.prompt-menu) {
+	left: 0;
+	right: auto;
+	min-width: 168px;
+	max-height: 220px;
+	overflow-y: auto;
+}
+
+.picker-label {
+	max-width: 148px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.prompt-mode.disabled,
+.prompt-mode:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.prompt-group {
+	padding: 6px 8px 2px;
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.05em;
+	line-height: 1.4;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.picker-note {
+	margin-left: 4px;
+	font-size: 10px;
+	line-height: 1.4;
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+.picker-custom {
+	display: block;
+	width: 100%;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg);
+	padding: 6px 8px;
+	font: inherit;
+	font-size: 12px;
+	color: var(--text);
 }
 
 .prompt-mode-wrap {

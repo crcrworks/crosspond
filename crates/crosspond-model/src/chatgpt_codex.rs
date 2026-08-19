@@ -9,7 +9,8 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::chatgpt_oauth::{
-    CODEX_RESPONSES_URL, ChatGptOAuthTokens, ChatGptTokenStore, TOKEN_URL, refresh_access_token,
+    CODEX_CLIENT_VERSION, CODEX_RESPONSES_URL, ChatGptOAuthTokens, ChatGptTokenStore, ORIGINATOR,
+    TOKEN_URL, refresh_access_token,
 };
 use crate::error::ModelError;
 use crate::openai_compat::{ThinkSplitter, emit_split_piece, split_sse_frame};
@@ -18,7 +19,6 @@ use crate::provider::{
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const ORIGINATOR: &str = "codex_cli_rs";
 
 #[derive(Clone)]
 pub struct ChatGptCodexProvider {
@@ -187,6 +187,7 @@ impl ChatGptCodexProvider {
             .header("chatgpt-account-id", &tokens.account_id)
             .header("OpenAI-Beta", "responses=experimental")
             .header("originator", ORIGINATOR)
+            .header("version", CODEX_CLIENT_VERSION)
             .header("accept", "text/event-stream")
             .json(body)
             .send()
@@ -214,6 +215,7 @@ impl ModelProvider for ChatGptCodexProvider {
                         model: String::new(),
                         messages: vec![Message::user("ping")],
                         tools: Vec::new(),
+                        reasoning_effort: None,
                     },
                     tx,
                     true,
@@ -413,6 +415,14 @@ pub fn responses_body(default_model: &str, request: &ModelRequest) -> Value {
     if !request.tools.is_empty() {
         body["tools"] = Value::Array(request.tools.iter().map(wire_tool).collect());
     }
+    if let Some(effort) = request
+        .reasoning_effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        body["reasoning"] = json!({ "effort": effort });
+    }
     body
 }
 
@@ -600,6 +610,7 @@ mod tests {
                     description: "List apps".into(),
                     parameters: json!({ "type": "object" }),
                 }],
+                reasoning_effort: None,
             },
         );
         assert_eq!(body["model"], "gpt-5.2");
@@ -617,6 +628,35 @@ mod tests {
         assert_eq!(input[3]["type"], "message");
         assert_eq!(input[4]["type"], "function_call_output");
         assert_eq!(input[4]["output"], "Safari");
+    }
+
+    #[test]
+    fn responses_body_includes_reasoning_effort() {
+        let body = responses_body(
+            "gpt-5.6-luna",
+            &ModelRequest {
+                model: String::new(),
+                messages: vec![Message::user("hi")],
+                tools: Vec::new(),
+                reasoning_effort: Some("high".into()),
+            },
+        );
+        assert_eq!(body["model"], "gpt-5.6-luna");
+        assert_eq!(body["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn responses_body_omits_reasoning_object_without_effort() {
+        let body = responses_body(
+            "gpt-5.6-luna",
+            &ModelRequest {
+                model: String::new(),
+                messages: vec![Message::user("hi")],
+                tools: Vec::new(),
+                reasoning_effort: None,
+            },
+        );
+        assert!(body.get("reasoning").is_none());
     }
 
     #[test]
@@ -647,6 +687,7 @@ mod tests {
                     ),
                 ],
                 tools: Vec::new(),
+                reasoning_effort: None,
             },
         );
         let input = body["input"].as_array().unwrap();
@@ -685,6 +726,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -716,6 +758,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -749,6 +792,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("write")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -782,6 +826,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -804,6 +849,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -849,6 +895,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
@@ -897,6 +944,7 @@ mod tests {
                     model: String::new(),
                     messages: vec![Message::user("hi")],
                     tools: Vec::new(),
+                    reasoning_effort: None,
                 },
                 tx,
             )
