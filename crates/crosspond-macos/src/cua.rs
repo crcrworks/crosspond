@@ -552,24 +552,54 @@ impl CuaHost {
             .session
             .lock()
             .map_err(|_| ToolError::Failed("cua-driver state is unavailable".into()))?;
-        if slot.as_mut().is_some_and(|session| !session.alive()) {
-            *slot = None;
-            self.clear_live();
-        }
-        if slot.is_none() {
-            *slot = Some(McpSession::spawn()?);
-        }
-        let session = slot
-            .as_mut()
-            .ok_or_else(|| ToolError::Failed("cua-driver failed to start".into()))?;
-        match session.call(name, arguments) {
-            Ok(value) => Ok(value),
+        let first = {
+            let session = self.ensure_session(&mut slot)?;
+            session.call(name, arguments.clone())
+        };
+        match first {
+            Ok(value) if cua_session_ended(&value) => {
+                let session = self.replace_session(&mut slot)?;
+                session.call(name, arguments)
+            }
+            Err(error) if is_session_ended_message(&error.to_string()) => {
+                let session = self.replace_session(&mut slot)?;
+                session.call(name, arguments)
+            }
             Err(error) => {
                 *slot = None;
                 self.clear_live();
                 Err(error)
             }
+            other => other,
         }
+    }
+
+    fn ensure_session<'a>(
+        &self,
+        slot: &'a mut Option<McpSession>,
+    ) -> Result<&'a mut McpSession, ToolError> {
+        if slot.as_mut().is_some_and(|session| !session.alive()) {
+            *slot = None;
+            self.clear_live();
+        }
+        Self::spawn_if_needed(slot)
+    }
+
+    fn replace_session<'a>(
+        &self,
+        slot: &'a mut Option<McpSession>,
+    ) -> Result<&'a mut McpSession, ToolError> {
+        *slot = None;
+        self.clear_live();
+        Self::spawn_if_needed(slot)
+    }
+
+    fn spawn_if_needed(slot: &mut Option<McpSession>) -> Result<&mut McpSession, ToolError> {
+        if slot.is_none() {
+            *slot = Some(McpSession::spawn()?);
+        }
+        slot.as_mut()
+            .ok_or_else(|| ToolError::Failed("cua-driver failed to start".into()))
     }
 }
 
@@ -849,21 +879,36 @@ fn rpc_io_error(error: std::io::Error) -> ToolError {
 }
 
 fn tool_error(result: &Value) -> Result<(), ToolError> {
-    if result.get("isError").and_then(Value::as_bool) == Some(true) {
-        let text = result
-            .get("content")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .find_map(|part| {
-                (part.get("type").and_then(Value::as_str) == Some("text"))
-                    .then(|| part.get("text").and_then(Value::as_str))
-                    .flatten()
-            })
-            .unwrap_or("cua-driver tool error");
-        return Err(ToolError::Failed(text.to_string()));
+    match mcp_error_text(result) {
+        Some(text) => Err(ToolError::Failed(text.to_string())),
+        None => Ok(()),
     }
-    Ok(())
+}
+
+fn mcp_error_text(result: &Value) -> Option<&str> {
+    if result.get("isError").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    result
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|part| {
+            (part.get("type").and_then(Value::as_str) == Some("text"))
+                .then(|| part.get("text").and_then(Value::as_str))
+                .flatten()
+        })
+        .or(Some("cua-driver tool error"))
+}
+
+fn cua_session_ended(result: &Value) -> bool {
+    mcp_error_text(result).is_some_and(is_session_ended_message)
+}
+
+fn is_session_ended_message(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("session has ended") || text.contains("session ended")
 }
 
 fn parse_windows(result: &Value) -> Vec<WindowRecord> {
@@ -1397,6 +1442,34 @@ agent authorization (serve only):
         assert_eq!(args["element_index"], 4);
         assert_eq!(args["element_token"], "s00abcdef:4");
         assert_eq!(args["snapshot_id"], "s00abcdef");
+    }
+
+    #[test]
+    fn detects_session_ended_tool_error() {
+        let result = json!({
+            "isError": true,
+            "content": [{"type": "text", "text": "this session has ended"}]
+        });
+        assert!(cua_session_ended(&result));
+        assert!(is_session_ended_message("The session ended."));
+        assert!(!is_session_ended_message(
+            "no snapshot yet. Call get_accessibility_snapshot or take_screenshot first."
+        ));
+    }
+
+    #[test]
+    fn ignores_unrelated_tool_errors() {
+        let result = json!({
+            "isError": true,
+            "content": [{
+                "type": "text",
+                "text": "could not find an on-screen window for Helium"
+            }]
+        });
+        assert!(!cua_session_ended(&result));
+        assert!(!cua_session_ended(&json!({
+            "structuredContent": { "windows": [] }
+        })));
     }
 
     #[test]
