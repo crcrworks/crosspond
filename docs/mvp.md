@@ -55,9 +55,17 @@ Demo: first launch → Settings → Option + Space → do work → see the trans
 
 Phase 11 Whole-Mac tools still apply (any app, keyboard/scroll, shell/URL, EventKit, external file reads, web tools, earlier computer use).
 
+## Phase 13 Browser
+
+Chromium pages go through a Crosspond Chrome extension (CDP via `chrome.debugger`), not Accessibility or screenshots. The model calls `browser_snapshot` for a compact a11y outline with refs, then `browser_click` / `browser_fill` / `browser_type` on those refs. Native apps still use cua-driver AX / screenshot tools.
+
+The extension talks to Crosspond over native messaging (`com.crosspond.chrome`) and a user-only unix socket. Load it unpacked from `extension/chrome` (Settings shows the path and connection badge). A new site host needs Allow even in Auto, then it is stored in `config.json` `browser_allowed_hosts`. `browser_blocked_hosts` always refuses. Page bodies, cookies, and field values stay out of the WebView, receipts, and logs.
+
+Safari, Firefox, Web Store listing, raw CDP, and an in-app browser are later.
+
 ## Later phases (do not implement yet)
 
-13. Release (signing, notarization, license re-audit)
+14. Release (signing, notarization, license re-audit, Chrome Web Store)
 
 ## Non-goals for MVP
 
