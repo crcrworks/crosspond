@@ -372,7 +372,9 @@
 				<option value={mode}>{approvalLabel(mode)}</option>
 			{/each}
 		</select>
-		<Chevron expanded />
+		<span class="picker-caret">
+			<Chevron expanded />
+		</span>
 	</div>
 {/snippet}
 
@@ -461,7 +463,9 @@
 							</optgroup>
 						{/each}
 					</select>
-					<Chevron expanded />
+					<span class="picker-caret">
+						<Chevron expanded />
+					</span>
 				{/if}
 			</div>
 			<div class="prompt-mode-wrap picker-native">
@@ -479,7 +483,9 @@
 						<option value={item}>{effortLabel(item)}</option>
 					{/each}
 				</select>
-				<Chevron expanded />
+				<span class="picker-caret">
+					<Chevron expanded />
+				</span>
 			</div>
 			{#if docked && !chatgptSelected}
 				<span class="picker-note">Effort is Codex only</span>
