@@ -16,11 +16,43 @@ pub enum Role {
     Tool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+    /// Provider extras that must be echoed on the next request.
+    /// Gemini 3 OpenAI-compat sends `extra_content.google.thought_signature`.
+    pub extra_content: Option<Value>,
+}
+
+impl std::fmt::Debug for ToolCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolCall")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("arguments", &self.arguments)
+            .field(
+                "extra_content",
+                &self.extra_content.as_ref().map(|_| "[omitted]"),
+            )
+            .finish()
+    }
+}
+
+impl ToolCall {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            arguments: arguments.into(),
+            extra_content: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -248,5 +280,20 @@ mod tests {
         assert!(messages[0].content.contains("screenshot omitted"));
         assert_eq!(messages[2].images.len(), 1);
         assert_eq!(messages[2].images[0].bytes, vec![2, 2]);
+    }
+
+    #[test]
+    fn debug_omits_thought_signature() {
+        let call = ToolCall {
+            id: "call_1".into(),
+            name: "open_app".into(),
+            arguments: "{}".into(),
+            extra_content: Some(serde_json::json!({
+                "google": { "thought_signature": "secret-sig" }
+            })),
+        };
+        let rendered = format!("{call:?}");
+        assert!(rendered.contains("[omitted]"));
+        assert!(!rendered.contains("secret-sig"));
     }
 }
