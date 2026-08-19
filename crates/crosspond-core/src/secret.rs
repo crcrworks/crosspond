@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crosspond_model::{ChatGptOAuthTokens, ChatGptTokenStore, ModelError};
 
-use crate::config::{AppConfig, CHATGPT_SOURCE, DEFAULT_COMPAT_ID};
+use crate::config::{AppConfig, DEFAULT_COMPAT_ID};
 
 /// Identifies a secret in the platform store. Not the secret value.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -205,7 +205,7 @@ pub(crate) mod memory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppConfig, OpenaiCompatEndpoint, SelectedModel};
+    use crate::config::{AppConfig, CHATGPT_SOURCE, OpenaiCompatEndpoint, SelectedModel};
 
     #[test]
     fn debug_does_not_include_secret() {
