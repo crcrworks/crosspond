@@ -2,7 +2,14 @@
 	import { APPROVAL_MODES, approvalLabel } from '$lib/tools';
 	import { listModels, saveEffort, saveSelected } from '$lib/api';
 	import { composerExtraHeight } from '$lib/launcher-size';
-	import { EFFORTS, effortLabel } from '$lib/models';
+	import {
+		CUSTOM_MODEL,
+		EFFORTS,
+		effortLabel,
+		isCustomModelOption,
+		modelOptionValue,
+		parseModelOption
+	} from '$lib/models';
 	import {
 		chipLabel,
 		filterCatalog,
@@ -58,7 +65,6 @@
 	} = $props();
 
 	let root: HTMLDivElement | undefined = $state();
-	let activeIndex = $state(0);
 	let mentionIndex = $state(0);
 	let stage = $state<PickerStage | null>(null);
 	let triggerStart = $state(0);
@@ -70,11 +76,8 @@
 	let groups = $state<ModelGroup[]>([]);
 	let selected = $state<SelectedModel>({ source: 'default', model: 'gpt-4o-mini' });
 	let effort = $state<ReasoningEffort>('medium');
-	let modelMenuOpen = $state(false);
-	let effortMenuOpen = $state(false);
-	let customOpen = $state(false);
+	let customSource = $state<string | null>(null);
 	let customModel = $state('');
-	let customSource = $state('default');
 	const docked = $derived(variant === 'docked');
 	const sendReady = $derived(canSubmit && (value.trim().length > 0 || mentions.length > 0));
 	const activeStage = $derived(mentionOpen ? stage : null);
@@ -84,15 +87,18 @@
 	);
 	const mentionCount = $derived(activeStage === 'kinds' ? kindItems.length : filteredApps.length);
 	const chatgptSelected = $derived(selected.source === 'chatgpt');
-	const modelButtonLabel = $derived(selected.model || 'Model');
-	const showModelMenu = $derived(pickerOpen && modelMenuOpen);
-	const showEffortMenu = $derived(pickerOpen && effortMenuOpen && chatgptSelected);
-	const showCustom = $derived(pickerOpen && customOpen);
+	const modelSelectValue = $derived(modelOptionValue(selected.source, selected.model));
+	const showCustom = $derived(pickerOpen && customSource !== null);
+	const selectedInList = $derived(
+		groups.some(
+			(group) =>
+				group.source === selected.source &&
+				group.models.some((model) => model.id === selected.model)
+		)
+	);
 
 	function closePickers() {
-		modelMenuOpen = false;
-		effortMenuOpen = false;
-		customOpen = false;
+		customSource = null;
 		pickerOpen = false;
 	}
 
@@ -117,28 +123,18 @@
 		}
 	}
 
-	function chooseCustom(source: string) {
-		modelMenuOpen = false;
-		effortMenuOpen = false;
-		customSource = source;
-		customModel = selected.source === source ? selected.model : '';
-		customOpen = true;
-		pickerOpen = true;
-	}
-
 	async function commitCustom() {
 		const model = customModel.trim();
-		if (!model) {
-			customOpen = false;
+		const source = customSource;
+		if (!model || !source) {
+			closePickers();
 			return;
 		}
-		await chooseModel(customSource, model);
-		customOpen = false;
+		await chooseModel(source, model);
 	}
 
 	async function chooseEffort(next: ReasoningEffort) {
 		if (!chatgptSelected) return;
-		closePickers();
 		effort = next;
 		try {
 			effort = (await saveEffort(next)) as ReasoningEffort;
@@ -147,36 +143,42 @@
 		}
 	}
 
-	function toggleModelMenu(event: MouseEvent) {
-		event.preventDefault();
-		event.stopPropagation();
+	function onModelActivate() {
+		customSource = null;
+		pickerOpen = true;
 		closeMentions();
-		closeMenu();
-		effortMenuOpen = false;
-		customOpen = false;
-		if (showModelMenu) {
-			closePickers();
+		menuOpen = false;
+	}
+
+	function onModelChange(event: Event) {
+		const value = (event.currentTarget as HTMLSelectElement).value;
+		const parsed = parseModelOption(value);
+		if (isCustomModelOption(parsed.model)) {
+			customSource = parsed.source;
+			customModel = selected.source === parsed.source ? selected.model : '';
+			pickerOpen = true;
 			return;
 		}
-		modelMenuOpen = true;
-		pickerOpen = true;
+		void chooseModel(parsed.source, parsed.model);
+	}
+
+	function onEffortChange(event: Event) {
+		void chooseEffort((event.currentTarget as HTMLSelectElement).value as ReasoningEffort);
+	}
+
+	function onApprovalChange(event: Event) {
+		const mode = (event.currentTarget as HTMLSelectElement).value as ComputerApproval;
+		if (mode !== approval) onapproval(mode);
+	}
+
+	function onPickerBlur() {
+		if (customSource !== null) return;
+		pickerOpen = false;
 		void refreshModels();
 	}
 
-	function toggleEffortMenu(event: MouseEvent) {
-		event.preventDefault();
-		event.stopPropagation();
-		if (!chatgptSelected) return;
-		closeMentions();
-		closeMenu();
-		modelMenuOpen = false;
-		customOpen = false;
-		if (showEffortMenu) {
-			closePickers();
-			return;
-		}
-		effortMenuOpen = true;
-		pickerOpen = true;
+	function focusCustom(node: HTMLInputElement) {
+		queueMicrotask(() => node.focus());
 	}
 
 	function captureRoot(node: HTMLDivElement) {
@@ -338,60 +340,11 @@
 		syncTriggerFromValue();
 	}
 
-	function openMenu() {
-		closeMentions();
-		closePickers();
-		activeIndex = Math.max(0, APPROVAL_MODES.indexOf(approval));
-		menuOpen = true;
-	}
-
-	function closeMenu() {
-		menuOpen = false;
-	}
-
-	function toggleMenu(event: MouseEvent) {
-		event.preventDefault();
-		event.stopPropagation();
-		if (menuOpen) closeMenu();
-		else openMenu();
-	}
-
-	function selectMode(mode: ComputerApproval) {
-		closeMenu();
-		if (mode !== approval) onapproval(mode);
-	}
-
 	function onWindowPointerDown(event: PointerEvent) {
 		if (!root) return;
 		if (root.contains(event.target as Node)) return;
-		closeMenu();
 		closeMentions();
 		closePickers();
-	}
-
-	function onModeKey(event: KeyboardEvent) {
-		if (event.key === 'Escape' && menuOpen) {
-			event.preventDefault();
-			closeMenu();
-			return;
-		}
-		if (!menuOpen && (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ')) {
-			event.preventDefault();
-			openMenu();
-			return;
-		}
-		if (!menuOpen) return;
-		if (event.key === 'ArrowDown') {
-			event.preventDefault();
-			activeIndex = (activeIndex + 1) % APPROVAL_MODES.length;
-		} else if (event.key === 'ArrowUp') {
-			event.preventDefault();
-			activeIndex = (activeIndex - 1 + APPROVAL_MODES.length) % APPROVAL_MODES.length;
-		} else if (event.key === 'Enter' || event.key === ' ') {
-			event.preventDefault();
-			const mode = APPROVAL_MODES[activeIndex];
-			if (mode) selectMode(mode);
-		}
 	}
 
 	function onAction() {
@@ -445,108 +398,70 @@
 			></textarea>
 		</label>
 		<div class="prompt-pickers">
-			<div class="prompt-mode-wrap picker-left">
-				<button
-					type="button"
-					class="prompt-mode"
-					aria-haspopup="menu"
-					aria-expanded={showModelMenu}
-					aria-label="Model {modelButtonLabel}"
-					onclick={toggleModelMenu}
-				>
-					<span class="picker-label">{modelButtonLabel}</span>
-					<Chevron expanded />
-				</button>
-				{#if showModelMenu}
-					<div
-						class={['prompt-menu', 'picker-menu', 'picker-wide', docked ? 'up' : 'down']}
-						role="menu"
-						aria-label="Models"
-					>
-						{#each groups as group (group.source)}
-							<div class="prompt-group">{group.label}</div>
-							{#each group.models as model (group.source + model.id)}
-								<button
-									type="button"
-									class={[
-										'prompt-option',
-										{
-											selected:
-												selected.source === group.source && selected.model === model.id
-										}
-									]}
-									role="menuitem"
-									onclick={() => void chooseModel(group.source, model.id)}
-								>
-									{model.label}
-								</button>
-							{/each}
-							<button
-								type="button"
-								class="prompt-option"
-								role="menuitem"
-								onclick={() => chooseCustom(group.source)}
-							>
-								Custom…
-							</button>
-						{/each}
-						{#if groups.length === 0}
-							<div class="mention-empty">Add a provider in Settings</div>
-						{/if}
-					</div>
-				{/if}
+			<div class="prompt-mode-wrap picker-left picker-native">
 				{#if showCustom}
-					<div class={['prompt-menu', 'picker-menu', 'picker-wide', docked ? 'up' : 'down']}>
-						<input
-							class="picker-custom"
-							bind:value={customModel}
-							placeholder="Model id"
-							aria-label="Custom model"
-							onkeydown={(event) => {
-								if (event.key === 'Enter') {
-									event.preventDefault();
-									void commitCustom();
-								}
-								if (event.key === 'Escape') {
-									event.preventDefault();
-									customOpen = false;
-								}
-							}}
-						/>
-						<button type="button" class="prompt-option" onclick={() => void commitCustom()}>
-							Use this model
-						</button>
-					</div>
+					<input
+						{@attach focusCustom}
+						class="picker-custom-inline"
+						bind:value={customModel}
+						placeholder="Model id"
+						aria-label="Custom model"
+						onkeydown={(event) => {
+							if (event.key === 'Enter') {
+								event.preventDefault();
+								void commitCustom();
+							}
+							if (event.key === 'Escape') {
+								event.preventDefault();
+								closePickers();
+							}
+						}}
+						onblur={() => {
+							if (customModel.trim()) void commitCustom();
+							else closePickers();
+						}}
+					/>
+				{:else}
+					<select
+						class="prompt-mode picker-select"
+						aria-label="Model {selected.model}"
+						value={modelSelectValue}
+						onfocus={onModelActivate}
+						onmousedown={onModelActivate}
+						onblur={onPickerBlur}
+						onchange={onModelChange}
+					>
+						{#if !selectedInList}
+							<option value={modelSelectValue}>{selected.model || 'Model'}</option>
+						{/if}
+						{#each groups as group (group.source)}
+							<optgroup label={group.label}>
+								{#each group.models as model (group.source + model.id)}
+									<option value={modelOptionValue(group.source, model.id)}>{model.label}</option>
+								{/each}
+								<option value={modelOptionValue(group.source, CUSTOM_MODEL)}>Custom…</option>
+							</optgroup>
+						{/each}
+					</select>
+					<Chevron expanded />
 				{/if}
 			</div>
-			<div class="prompt-mode-wrap picker-left">
-				<button
-					type="button"
-					class={['prompt-mode', !chatgptSelected && 'disabled']}
-					aria-haspopup="menu"
-					aria-expanded={showEffortMenu}
+			<div class="prompt-mode-wrap picker-left picker-native">
+				<select
+					class="prompt-mode picker-select picker-effort"
 					aria-label="Reasoning effort {effortLabel(effort)}"
 					disabled={!chatgptSelected}
 					title={chatgptSelected ? 'Codex reasoning effort' : 'Effort applies to ChatGPT models'}
-					onclick={toggleEffortMenu}
+					value={effort}
+					onfocus={() => (pickerOpen = true)}
+					onblur={onPickerBlur}
+					onchange={onEffortChange}
 				>
-					<span>{effortLabel(effort)}</span>
-					<Chevron expanded />
-				</button>
-				{#if showEffortMenu}
-					<div class={['prompt-menu', 'picker-menu', docked ? 'up' : 'down']} role="menu" aria-label="Effort">
-						{#each EFFORTS as item (item)}
-							<button
-								type="button"
-								class={['prompt-option', { selected: item === effort }]}
-								role="menuitem"
-								onclick={() => void chooseEffort(item)}
-							>
-								{effortLabel(item)}
-							</button>
-						{/each}
-					</div>
-				{/if}
+					{#each EFFORTS as item (item)}
+						<option value={item}>{effortLabel(item)}</option>
+					{/each}
+				</select>
+				<Chevron expanded />
 			</div>
 			{#if !chatgptSelected}
 				<span class="picker-note">Effort is Codex only</span>
@@ -554,34 +469,20 @@
 		</div>
 	</div>
 	<div class="prompt-tools">
-		<div class="prompt-mode-wrap">
-			<button
-				type="button"
-				class="prompt-mode"
-				aria-haspopup="menu"
-				aria-expanded={menuOpen}
+		<div class="prompt-mode-wrap picker-native">
+			<select
+				class="prompt-mode picker-select picker-approval"
 				aria-label="Computer approval: {approvalLabel(approval)}"
-				onclick={toggleMenu}
-				onkeydown={onModeKey}
+				value={approval}
+				onfocus={() => (menuOpen = true)}
+				onblur={() => (menuOpen = false)}
+				onchange={onApprovalChange}
 			>
-				<span>{approvalLabel(approval)}</span>
-				<Chevron expanded />
-			</button>
-			{#if menuOpen}
-				<div class={['prompt-menu', docked ? 'up' : 'down']} role="menu" aria-label="Computer approval">
-					{#each APPROVAL_MODES as mode, index (mode)}
-						<button
-							type="button"
-							class={['prompt-option', { active: index === activeIndex, selected: mode === approval }]}
-							role="menuitem"
-							onpointerenter={() => (activeIndex = index)}
-							onclick={() => selectMode(mode)}
-						>
-							{approvalLabel(mode)}
-						</button>
-					{/each}
-				</div>
-			{/if}
+				{#each APPROVAL_MODES as mode (mode)}
+					<option value={mode}>{approvalLabel(mode)}</option>
+				{/each}
+			</select>
+			<Chevron expanded />
 		</div>
 		{#if docked}
 			<button
