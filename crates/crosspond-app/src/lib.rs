@@ -88,6 +88,7 @@ pub fn run() {
             commands::save_secret,
             commands::start_chatgpt_login,
             commands::complete_chatgpt_login,
+            commands::cancel_chatgpt_login,
             commands::sign_out_chatgpt,
             commands::test_connection,
             commands::test_compat_connection,

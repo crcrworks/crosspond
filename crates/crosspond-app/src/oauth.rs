@@ -1,11 +1,12 @@
-use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use crosspond_core::{
     DEFAULT_CHATGPT_MODEL, DEFAULT_COMPAT_MODEL, REDIRECT_URI, SelectedModel, TOKEN_URL,
-    create_authorization_flow, exchange_authorization_code, parse_callback_input,
-    save_chatgpt_tokens,
+    code_from_redirect, create_authorization_flow, exchange_authorization_code,
+    save_chatgpt_tokens, wait_for_localhost_callback,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -15,6 +16,8 @@ use crate::state::{AppState, PendingChatGptLogin};
 
 const CALLBACK_PORT: u16 = 1455;
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
+const BIND_RETRY: u32 = 25;
+const BIND_RETRY_WAIT: Duration = Duration::from_millis(40);
 const SUCCESS_HTML: &str = "<!doctype html><html><body style=\"font-family:sans-serif;padding:2rem\"><p>Signed in to Crosspond. You can close this window.</p></body></html>";
 
 #[derive(Serialize)]
@@ -24,13 +27,18 @@ pub struct ChatGptLoginStart {
 }
 
 pub fn start_login(app: &AppHandle, state: &AppState) -> Result<ChatGptLoginStart, String> {
+    let had_pending = state.lock_pending_chatgpt().is_some();
+    cancel_pending(state);
+
     let flow = create_authorization_flow();
+    let cancel = Arc::new(AtomicBool::new(false));
     *state.lock_pending_chatgpt() = Some(PendingChatGptLogin {
         verifier: flow.pkce.verifier.clone(),
         state: flow.state.clone(),
+        cancel: Arc::clone(&cancel),
     });
 
-    match TcpListener::bind(("127.0.0.1", CALLBACK_PORT)) {
+    match bind_callback_listener(had_pending) {
         Ok(listener) => {
             let _ = app.opener().open_url(&flow.url, None::<&str>);
             let app = app.clone();
@@ -39,9 +47,22 @@ pub fn start_login(app: &AppHandle, state: &AppState) -> Result<ChatGptLoginStar
             std::thread::Builder::new()
                 .name("crosspond-chatgpt-oauth".into())
                 .spawn(move || {
-                    let result = wait_for_code(listener, &expected_state)
-                        .and_then(|code| exchange_and_store(&app, &code, &verifier));
-                    emit_login_result(&app, result);
+                    let result = wait_for_localhost_callback(
+                        listener,
+                        &expected_state,
+                        CALLBACK_TIMEOUT,
+                        cancel.as_ref(),
+                        SUCCESS_HTML,
+                    )
+                    .and_then(|code| {
+                        if cancel.load(Ordering::SeqCst) {
+                            return Err("ChatGPT sign-in cancelled.".into());
+                        }
+                        exchange_and_store(&app, &code, &verifier)
+                    });
+                    if !cancel.load(Ordering::SeqCst) {
+                        emit_login_result(&app, result);
+                    }
                 })
                 .map_err(|err| err.to_string())?;
             Ok(ChatGptLoginStart {
@@ -61,22 +82,22 @@ pub fn complete_login(app: &AppHandle, state: &AppState, redirect: &str) -> Resu
         .lock_pending_chatgpt()
         .take()
         .ok_or_else(|| "start ChatGPT sign-in first".to_string())?;
-    let (code, state_value) = parse_callback_input(redirect).map_err(|err| err.user_message())?;
-    if let Some(got) = state_value
-        && got != pending.state
-    {
-        return Err("ChatGPT sign-in state did not match".into());
-    }
+    pending.cancel.store(true, Ordering::SeqCst);
+    let code = code_from_redirect(redirect, &pending.state)?;
     exchange_and_store(app, &code, &pending.verifier)
 }
 
-pub fn sign_out(state: &AppState) -> Result<(), String> {
+pub fn cancel_login(state: &AppState) {
+    cancel_pending(state);
+}
+
+pub fn sign_out(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    cancel_pending(state);
     state
         .secrets
         .delete(&crosspond_core::SecretKey::chatgpt_oauth())
         .map_err(|err| err.to_string())?;
-    *state.lock_pending_chatgpt() = None;
-    state.invalidate_models();
+    bump_models(app, state);
     let mut config = state.config.load().unwrap_or_default();
     if config.selected.is_chatgpt() {
         if let Some(endpoint) = config.openai_compat.first() {
@@ -87,54 +108,27 @@ pub fn sign_out(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
-fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String, String> {
-    listener
-        .set_nonblocking(true)
-        .map_err(|err| err.to_string())?;
-    let deadline = Instant::now() + CALLBACK_TIMEOUT;
-    let (mut stream, _) = loop {
-        match listener.accept() {
-            Ok(accepted) => break accepted,
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(err)
-                if err.kind() == std::io::ErrorKind::WouldBlock
-                    || err.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                if Instant::now() >= deadline {
-                    return Err("ChatGPT sign-in timed out".into());
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(err) => return Err(err.to_string()),
-        }
-    };
-    stream
-        .set_nonblocking(false)
-        .map_err(|err| err.to_string())?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf).unwrap_or(0);
-    let request = String::from_utf8_lossy(&buf[..n]);
-    let first = request.lines().next().unwrap_or_default();
-    let path = first.split_whitespace().nth(1).unwrap_or_default();
-    let redirect = format!("http://localhost:{CALLBACK_PORT}{path}");
-    let (code, state) = parse_callback_input(&redirect).map_err(|err| err.user_message())?;
-    if let Some(got) = state
-        && got != expected_state
-    {
-        let _ = stream.write_all(
-            b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        );
-        return Err("ChatGPT sign-in state did not match".into());
+fn cancel_pending(state: &AppState) {
+    if let Some(pending) = state.lock_pending_chatgpt().take() {
+        pending.cancel.store(true, Ordering::SeqCst);
     }
-    let body = SUCCESS_HTML.as_bytes();
-    let header = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    let _ = stream.write_all(header.as_bytes());
-    let _ = stream.write_all(body);
-    Ok(code)
+}
+
+fn bind_callback_listener(retry: bool) -> Result<TcpListener, std::io::Error> {
+    let attempts = if retry { BIND_RETRY } else { 1 };
+    let mut last = None;
+    for attempt in 0..attempts {
+        match TcpListener::bind(("127.0.0.1", CALLBACK_PORT)) {
+            Ok(listener) => return Ok(listener),
+            Err(err) => {
+                last = Some(err);
+                if attempt + 1 < attempts {
+                    std::thread::sleep(BIND_RETRY_WAIT);
+                }
+            }
+        }
+    }
+    Err(last.expect("bind attempted"))
 }
 
 fn exchange_and_store(app: &AppHandle, code: &str, verifier: &str) -> Result<(), String> {
@@ -150,13 +144,18 @@ fn exchange_and_store(app: &AppHandle, code: &str, verifier: &str) -> Result<(),
     };
     save_chatgpt_tokens(&*state.secrets, &tokens).map_err(|err| err.to_string())?;
     *state.lock_pending_chatgpt() = None;
-    state.invalidate_models();
+    bump_models(app, &state);
     let mut config = state.config.load().unwrap_or_default();
     if !config.selected.is_chatgpt() && config.selected.model == DEFAULT_COMPAT_MODEL {
         config.selected = SelectedModel::chatgpt(DEFAULT_CHATGPT_MODEL);
         state.config.save(&config).map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+pub(crate) fn bump_models(app: &AppHandle, state: &AppState) {
+    state.invalidate_models();
+    let _ = app.emit("models-changed", ());
 }
 
 fn emit_login_result(app: &AppHandle, result: Result<(), String>) {

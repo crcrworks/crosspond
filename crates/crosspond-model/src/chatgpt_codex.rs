@@ -10,9 +10,10 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::chatgpt_oauth::{
     CODEX_CLIENT_VERSION, CODEX_RESPONSES_URL, ChatGptOAuthTokens, ChatGptTokenStore, ORIGINATOR,
-    TOKEN_URL, refresh_access_token,
+    TOKEN_URL, chatgpt_refresh_lock, refresh_access_token,
 };
 use crate::error::ModelError;
+use crate::list_models::fetch_chatgpt_models_at;
 use crate::openai_compat::{ThinkSplitter, emit_split_piece, split_sse_frame};
 use crate::provider::{
     ImagePart, Message, ModelEvent, ModelProvider, ModelRequest, Role, ToolCall, ToolDefinition,
@@ -71,15 +72,52 @@ impl ChatGptCodexProvider {
     }
 
     async fn ensure_fresh_tokens(&self) -> Result<ChatGptOAuthTokens, ModelError> {
-        let current = self
-            .tokens
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clone();
+        let _guard = chatgpt_refresh_lock().lock().await;
+        let current = if let Ok(Some(stored)) = self.store.load() {
+            *self.tokens.lock().unwrap_or_else(|err| err.into_inner()) = stored.clone();
+            stored
+        } else {
+            self.tokens
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .clone()
+        };
         if !current.needs_refresh() {
             return Ok(current);
         }
         self.refresh_tokens(&current.refresh).await
+    }
+
+    async fn recover_after_unauthorized(
+        &self,
+        previous: &ChatGptOAuthTokens,
+    ) -> Result<ChatGptOAuthTokens, ModelError> {
+        let _guard = chatgpt_refresh_lock().lock().await;
+        if let Ok(Some(stored)) = self.store.load()
+            && stored.access != previous.access
+        {
+            *self.tokens.lock().unwrap_or_else(|err| err.into_inner()) = stored.clone();
+            return Ok(stored);
+        }
+        let refresh = self
+            .store
+            .load()
+            .ok()
+            .flatten()
+            .map(|stored| stored.refresh)
+            .unwrap_or_else(|| previous.refresh.clone());
+        match self.refresh_tokens(&refresh).await {
+            Ok(tokens) => Ok(tokens),
+            Err(err) => {
+                if let Ok(Some(stored)) = self.store.load()
+                    && stored.access != previous.access
+                {
+                    *self.tokens.lock().unwrap_or_else(|err| err.into_inner()) = stored.clone();
+                    return Ok(stored);
+                }
+                Err(err)
+            }
+        }
     }
 
     async fn refresh_tokens(&self, refresh: &str) -> Result<ChatGptOAuthTokens, ModelError> {
@@ -99,7 +137,7 @@ impl ChatGptCodexProvider {
         let body = responses_body(&self.model, &request);
         let mut response = self.post_responses(&tokens, &body).await?;
         if response.status().as_u16() == 401 {
-            tokens = match self.refresh_tokens(&tokens.refresh).await {
+            tokens = match self.recover_after_unauthorized(&tokens).await {
                 Ok(tokens) => tokens,
                 Err(_) => return Err(ModelError::Unauthorized),
             };
@@ -208,19 +246,10 @@ impl ModelProvider for ChatGptCodexProvider {
     fn test_connection(&self) -> Pin<Box<dyn Future<Output = Result<(), ModelError>> + Send>> {
         let provider = self.clone();
         Box::pin(async move {
-            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-            provider
-                .stream_inner(
-                    ModelRequest {
-                        model: String::new(),
-                        messages: vec![Message::user("ping")],
-                        tools: Vec::new(),
-                        reasoning_effort: None,
-                    },
-                    tx,
-                    true,
-                )
+            let tokens = provider.ensure_fresh_tokens().await?;
+            fetch_chatgpt_models_at(&derived_models_url(&provider.responses_url), &tokens)
                 .await
+                .map(|_| ())
         })
     }
 }
@@ -367,11 +396,11 @@ fn drain_responses_sse(
     buffer: &mut String,
     mut on_data: impl FnMut(&str) -> Result<(), ModelError>,
 ) -> Result<bool, ModelError> {
+    let mut saw_completed = false;
     loop {
         let Some(frame) = split_sse_frame(buffer) else {
-            return Ok(false);
+            return Ok(saw_completed);
         };
-        let mut done = false;
         for line in frame.lines() {
             let line = line.trim_end_matches('\r');
             let Some(data) = line.strip_prefix("data:") else {
@@ -379,18 +408,15 @@ fn drain_responses_sse(
             };
             let data = data.trim_start();
             if data == "[DONE]" {
-                done = true;
+                saw_completed = true;
             } else if !data.is_empty() {
-                if data.contains("\"response.completed\"")
-                    || data.contains("\"type\":\"response.completed\"")
+                if data.contains("\"type\":\"response.completed\"")
+                    || data.contains("\"response.completed\"")
                 {
-                    done = true;
+                    saw_completed = true;
                 }
                 on_data(data)?;
             }
-        }
-        if done {
-            return Ok(true);
         }
     }
 }
@@ -530,6 +556,16 @@ fn screenshot_vision_prompt(images: &[ImagePart]) -> String {
         );
     }
     "Screenshot image from the tool result above. ui_click uses exact pixels in this image (origin top-left); preserve its aspect ratio and do not normalize each axis to 1000.".into()
+}
+
+fn derived_models_url(responses_url: &str) -> String {
+    if let Some(prefix) = responses_url.strip_suffix("/codex/responses") {
+        return format!("{prefix}/codex/models");
+    }
+    if let Some(prefix) = responses_url.strip_suffix("/responses") {
+        return format!("{prefix}/models");
+    }
+    crate::chatgpt_oauth::CODEX_MODELS_URL.to_string()
 }
 
 fn public_reqwest_error(err: &reqwest::Error) -> String {
@@ -958,6 +994,46 @@ mod tests {
         }
         assert_eq!(text, "ready");
         assert_eq!(store.current().unwrap().refresh, "refresh-pre");
+    }
+
+    #[tokio::test]
+    async fn uses_tokens_already_saved_to_the_store() {
+        let mut stale = sample_tokens();
+        stale.expires_at = crate::chatgpt_oauth::unix_ms() - 1;
+        let mut stored = sample_tokens();
+        stored.access = "stored-access".into();
+        stored.expires_at = crate::chatgpt_oauth::unix_ms() + 3_600_000;
+        let store = MemoryChatGptTokenStore::new(stored);
+        let sse = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ready\"}\n\n\
+             data: {\"type\":\"response.completed\"}\n\n";
+        let base = serve_script(vec![(200, "text/event-stream", sse.as_bytes().to_vec())]);
+        let provider = ChatGptCodexProvider::with_endpoints(
+            "gpt-5.2",
+            stale,
+            store,
+            format!("{base}/codex/responses"),
+            format!("{base}/missing-token"),
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        provider
+            .stream(
+                ModelRequest {
+                    model: String::new(),
+                    messages: vec![Message::user("hi")],
+                    tools: Vec::new(),
+                    reasoning_effort: None,
+                },
+                tx,
+            )
+            .await
+            .unwrap();
+        let mut text = String::new();
+        while let Ok(event) = rx.try_recv() {
+            if let ModelEvent::TextDelta(piece) = event {
+                text.push_str(&piece);
+            }
+        }
+        assert_eq!(text, "ready");
     }
 
     #[tokio::test]

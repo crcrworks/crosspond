@@ -267,10 +267,6 @@
 				modeMenuOpen = false;
 				return;
 			}
-			if (pickerOpen) {
-				pickerOpen = false;
-				return;
-			}
 			if (mentionOpen) {
 				mentionOpen = false;
 				return;

@@ -40,8 +40,9 @@ pub use crosspond_knowledge::{
 };
 pub use crosspond_model::{
     ChatGptAuthorizationFlow, ChatGptOAuthTokens, ListedModel, REDIRECT_URI, TOKEN_URL,
-    create_authorization_flow, ensure_model, exchange_authorization_code, fallback_chatgpt_models,
-    fallback_compat_models, fetch_chatgpt_models, fetch_compat_models, parse_callback_input,
+    code_from_redirect, create_authorization_flow, ensure_model, exchange_authorization_code,
+    fallback_chatgpt_models, fallback_compat_models, fetch_chatgpt_models, fetch_compat_models,
+    parse_callback_input, refresh_chatgpt_session, wait_for_localhost_callback,
 };
 pub use event::AgentEvent;
 pub use history::{TaskHistoryEntry, history_group_label, history_title, list_recent_tasks};

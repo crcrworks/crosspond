@@ -5,12 +5,12 @@ use crosspond_core::{
     AppConfig, ApprovalId, CHATGPT_SOURCE, ComputerApprovalMode, ConversationId, ConversationView,
     DEFAULT_CHATGPT_MODEL, DEFAULT_COMPAT_ID, DEFAULT_COMPAT_MODEL, HotkeyView, LauncherHotkey,
     ListedModel, MISSING_API_KEY_MESSAGE, MISSING_CHATGPT_MESSAGE, Mention, ReasoningEffort,
-    Receipt, RuntimeCommand, SecretKey, SecretString, SelectedModel, StartTaskRequest, TaskId,
-    conversation_artifact_path, default_tasks_root, default_vault_path, ensure_model,
-    fallback_chatgpt_models, fallback_compat_models, fetch_chatgpt_models, fetch_compat_models,
-    history_group_label, history_title, list_recent_tasks, load_chatgpt_tokens,
-    open_conversation as load_conversation, parse_vault_path_input, provider_is_ready,
-    selected_provider_is_ready,
+    Receipt, RuntimeCommand, SecretChatGptTokenStore, SecretKey, SecretString, SelectedModel,
+    StartTaskRequest, TOKEN_URL, TaskId, conversation_artifact_path, default_tasks_root,
+    default_vault_path, ensure_model, fallback_chatgpt_models, fallback_compat_models,
+    fetch_chatgpt_models, fetch_compat_models, history_group_label, history_title,
+    list_recent_tasks, load_chatgpt_tokens, open_conversation as load_conversation,
+    parse_vault_path_input, provider_is_ready, refresh_chatgpt_session, selected_provider_is_ready,
 };
 use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
 use serde::Serialize;
@@ -273,18 +273,26 @@ fn selected_view(config: &AppConfig) -> SelectedView {
     }
 }
 
-fn save_loaded_config(state: &AppState, mut config: AppConfig) -> Result<(), String> {
+fn save_loaded_config(
+    app: &AppHandle,
+    state: &AppState,
+    mut config: AppConfig,
+) -> Result<(), String> {
     config.normalize();
     state.config.save(&config).map_err(|err| err.to_string())?;
-    state.invalidate_models();
+    crate::oauth::bump_models(app, state);
     Ok(())
 }
 
 #[tauri::command]
-pub fn save_config(vault_path: String, state: State<AppState>) -> Result<(), String> {
+pub fn save_config(
+    vault_path: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<(), String> {
     let mut config = state.config.load().unwrap_or_default();
     config.vault_path = Some(parse_vault_path_input(&vault_path));
-    save_loaded_config(&state, config)?;
+    save_loaded_config(&app, &state, config)?;
     state.commands.send(RuntimeCommand::ReloadKnowledge);
     Ok(())
 }
@@ -294,6 +302,7 @@ pub fn save_compat(
     id: String,
     name: String,
     base_url: String,
+    app: AppHandle,
     state: State<AppState>,
 ) -> Result<SettingsView, String> {
     let mut config = state.config.load().unwrap_or_default();
@@ -313,26 +322,30 @@ pub fn save_compat(
     } else {
         base_url.trim().to_string()
     };
-    save_loaded_config(&state, config)?;
+    save_loaded_config(&app, &state, config)?;
     Ok(settings_view(&state))
 }
 
 #[tauri::command]
-pub fn add_compat(state: State<AppState>) -> Result<SettingsView, String> {
+pub fn add_compat(app: AppHandle, state: State<AppState>) -> Result<SettingsView, String> {
     let mut config = state.config.load().unwrap_or_default();
     config.add_compat();
-    save_loaded_config(&state, config)?;
+    save_loaded_config(&app, &state, config)?;
     Ok(settings_view(&state))
 }
 
 #[tauri::command]
-pub fn delete_compat(id: String, state: State<AppState>) -> Result<SettingsView, String> {
+pub fn delete_compat(
+    id: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<SettingsView, String> {
     let mut config = state.config.load().unwrap_or_default();
     if !config.remove_compat(&id) {
         return Err("Keep at least one OpenAI Compatible endpoint.".into());
     }
     let _ = state.secrets.delete(&SecretKey::provider_api_key_for(&id));
-    save_loaded_config(&state, config)?;
+    save_loaded_config(&app, &state, config)?;
     Ok(settings_view(&state))
 }
 
@@ -340,6 +353,7 @@ pub fn delete_compat(id: String, state: State<AppState>) -> Result<SettingsView,
 pub fn save_selected(
     source: String,
     model: String,
+    app: AppHandle,
     state: State<AppState>,
 ) -> Result<SelectedView, String> {
     let mut config = state.config.load().unwrap_or_default();
@@ -360,16 +374,20 @@ pub fn save_selected(
         return Err("Unknown model source.".into());
     }
     let selected = selected_view(&config);
-    save_loaded_config(&state, config)?;
+    save_loaded_config(&app, &state, config)?;
     Ok(selected)
 }
 
 #[tauri::command]
-pub fn save_effort(effort: String, state: State<AppState>) -> Result<String, String> {
+pub fn save_effort(
+    effort: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<String, String> {
     let mut config = state.config.load().unwrap_or_default();
     config.reasoning_effort = ReasoningEffort::parse(&effort);
     let stored = config.reasoning_effort.as_str().to_string();
-    save_loaded_config(&state, config)?;
+    save_loaded_config(&app, &state, config)?;
     Ok(stored)
 }
 
@@ -377,12 +395,14 @@ const MODELS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[tauri::command]
 pub async fn list_models(state: State<'_, AppState>) -> Result<ModelsCatalog, String> {
+    let generation = state.models_generation();
     {
         let cache = state
             .models_cache
             .lock()
             .unwrap_or_else(|err| err.into_inner());
         if let Some(entry) = cache.as_ref()
+            && entry.generation == generation
             && entry.at.elapsed() < MODELS_TTL
         {
             return Ok(entry.catalog.clone());
@@ -390,23 +410,30 @@ pub async fn list_models(state: State<'_, AppState>) -> Result<ModelsCatalog, St
     }
     let config = state.config.load().unwrap_or_default();
     let secrets = std::sync::Arc::clone(&state.secrets);
-    let catalog = collect_models_catalog(&config, secrets.as_ref()).await;
-    *state
-        .models_cache
-        .lock()
-        .unwrap_or_else(|err| err.into_inner()) = Some(crate::state::ModelsCacheEntry {
-        at: std::time::Instant::now(),
-        catalog: catalog.clone(),
-    });
+    let catalog = collect_models_catalog(&config, std::sync::Arc::clone(&secrets)).await;
+    if state.models_generation() == generation {
+        *state
+            .models_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Some(crate::state::ModelsCacheEntry {
+            at: std::time::Instant::now(),
+            generation,
+            catalog: catalog.clone(),
+        });
+    }
     Ok(catalog)
 }
 
 async fn collect_models_catalog(
     config: &AppConfig,
-    secrets: &dyn crosspond_core::SecretStore,
+    secrets: std::sync::Arc<dyn crosspond_core::SecretStore>,
 ) -> ModelsCatalog {
     let mut groups = Vec::new();
-    if let Ok(Some(tokens)) = load_chatgpt_tokens(secrets) {
+    if let Ok(Some(tokens)) = load_chatgpt_tokens(secrets.as_ref()) {
+        let store = SecretChatGptTokenStore::new(std::sync::Arc::clone(&secrets));
+        let tokens = refresh_chatgpt_session(tokens, &store, TOKEN_URL)
+            .await
+            .unwrap_or(tokens);
         let mut models = match fetch_chatgpt_models(&tokens).await {
             Ok(models) if !models.is_empty() => models,
             _ => fallback_chatgpt_models(),
@@ -524,7 +551,12 @@ fn on_main<T: Send + 'static>(
 }
 
 #[tauri::command]
-pub fn save_secret(kind: String, value: String, state: State<AppState>) -> Result<(), String> {
+pub fn save_secret(
+    kind: String,
+    value: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<(), String> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(());
@@ -534,7 +566,7 @@ pub fn save_secret(kind: String, value: String, state: State<AppState>) -> Resul
         .secrets
         .set(&key, &SecretString::new(value))
         .map_err(|err| err.to_string())?;
-    state.invalidate_models();
+    crate::oauth::bump_models(&app, &state);
     Ok(())
 }
 
@@ -570,8 +602,13 @@ pub fn complete_chatgpt_login(
 }
 
 #[tauri::command]
-pub fn sign_out_chatgpt(state: State<AppState>) -> Result<(), String> {
-    crate::oauth::sign_out(&state)
+pub fn cancel_chatgpt_login(state: State<AppState>) {
+    crate::oauth::cancel_login(&state);
+}
+
+#[tauri::command]
+pub fn sign_out_chatgpt(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    crate::oauth::sign_out(&app, &state)
 }
 
 #[tauri::command]

@@ -184,12 +184,25 @@ pub struct ModelRequest {
     pub reasoning_effort: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum ModelEvent {
     TextDelta(String),
     ReasoningDelta(String),
     ToolCall(ToolCall),
     EncryptedReasoning(String),
+}
+
+impl std::fmt::Debug for ModelEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TextDelta(text) => f.debug_tuple("TextDelta").field(text).finish(),
+            Self::ReasoningDelta(text) => f.debug_tuple("ReasoningDelta").field(text).finish(),
+            Self::ToolCall(call) => f.debug_tuple("ToolCall").field(call).finish(),
+            Self::EncryptedReasoning(_) => {
+                f.debug_tuple("EncryptedReasoning").field(&"***").finish()
+            }
+        }
+    }
 }
 
 pub trait ModelProvider: Send + Sync {
@@ -290,6 +303,16 @@ mod tests {
         let message =
             Message::assistant("ok").with_encrypted_reasoning(Some("enc-secret-blob".into()));
         let rendered = format!("{message:?}");
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("enc-secret-blob"));
+    }
+
+    #[test]
+    fn debug_redacts_encrypted_reasoning_event() {
+        let rendered = format!(
+            "{:?}",
+            ModelEvent::EncryptedReasoning("enc-secret-blob".into())
+        );
         assert!(rendered.contains("***"));
         assert!(!rendered.contains("enc-secret-blob"));
     }

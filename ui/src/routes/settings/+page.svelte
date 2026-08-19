@@ -2,6 +2,7 @@
 	import { listen } from '@tauri-apps/api/event';
 	import {
 		addCompat,
+		cancelChatgptLogin,
 		completeChatgptLogin,
 		deleteCompat,
 		loadSettings,
@@ -207,6 +208,16 @@
 		}
 	}
 
+	async function onChatgptCancel() {
+		loginMode = 'idle';
+		loginStatus = null;
+		try {
+			await cancelChatgptLogin();
+		} catch {
+			/* ignore */
+		}
+	}
+
 	async function onChatgptSignOut() {
 		loginStatus = null;
 		try {
@@ -394,6 +405,9 @@
 						onclick={() => void onChatgptLogin()}
 						variant="primary"
 					/>
+					{#if loginMode === 'browser'}
+						<Button label="Cancel" onclick={() => void onChatgptCancel()} />
+					{/if}
 				{/if}
 				{#if loginMode === 'manual'}
 					<div class="text-sm text-[var(--muted)]">

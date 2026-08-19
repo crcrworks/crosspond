@@ -92,6 +92,10 @@ export function signOutChatgpt() {
 	return invoke('sign_out_chatgpt');
 }
 
+export function cancelChatgptLogin() {
+	return invoke('cancel_chatgpt_login');
+}
+
 export function setLauncherHotkey(spec: string) {
 	return invoke<HotkeyView>('set_launcher_hotkey', { spec });
 }

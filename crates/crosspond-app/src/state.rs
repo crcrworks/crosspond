@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -11,6 +12,7 @@ use crosspond_core::{
 pub struct PendingChatGptLogin {
     pub verifier: String,
     pub state: String,
+    pub cancel: Arc<AtomicBool>,
 }
 
 pub struct AppState {
@@ -22,11 +24,13 @@ pub struct AppState {
     pub inner: Mutex<InnerState>,
     pub pending_chatgpt: Mutex<Option<PendingChatGptLogin>>,
     pub models_cache: Mutex<Option<ModelsCacheEntry>>,
+    pub models_generation: AtomicU64,
     _runtime: JoinHandle<()>,
 }
 
 pub struct ModelsCacheEntry {
     pub at: Instant,
+    pub generation: u64,
     pub catalog: crate::commands::ModelsCatalog,
 }
 
@@ -78,6 +82,7 @@ impl AppState {
             }),
             pending_chatgpt: Mutex::new(None),
             models_cache: Mutex::new(None),
+            models_generation: AtomicU64::new(0),
             _runtime: runtime,
         }
     }
@@ -97,10 +102,15 @@ impl AppState {
     }
 
     pub fn invalidate_models(&self) {
+        self.models_generation.fetch_add(1, Ordering::SeqCst);
         *self
             .models_cache
             .lock()
             .unwrap_or_else(|err| err.into_inner()) = None;
+    }
+
+    pub fn models_generation(&self) -> u64 {
+        self.models_generation.load(Ordering::SeqCst)
     }
 }
 

@@ -161,6 +161,10 @@ impl ChatGptTokenStore for SecretChatGptTokenStore {
         save_chatgpt_tokens(&*self.inner, tokens)
             .map_err(|err| ModelError::Network(err.to_string()))
     }
+
+    fn load(&self) -> Result<Option<ChatGptOAuthTokens>, ModelError> {
+        load_chatgpt_tokens(&*self.inner).map_err(|err| ModelError::Network(err.to_string()))
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { APPROVAL_MODES, approvalLabel } from '$lib/tools';
 	import { listModels, saveEffort, saveSelected } from '$lib/api';
+	import { listen } from '@tauri-apps/api/event';
+	import { onMount } from 'svelte';
 	import { composerExtraHeight } from '$lib/launcher-size';
 	import {
 		CUSTOM_MODEL,
@@ -96,6 +98,7 @@
 				group.models.some((model) => model.id === selected.model)
 		)
 	);
+	let pendingSaves = 0;
 
 	function closePickers() {
 		customSource = null;
@@ -106,8 +109,10 @@
 		try {
 			const catalog = await listModels();
 			groups = catalog.groups;
-			selected = catalog.selected;
-			effort = catalog.reasoning_effort;
+			if (pendingSaves === 0) {
+				selected = catalog.selected;
+				effort = catalog.reasoning_effort;
+			}
 		} catch {
 			groups = [];
 		}
@@ -115,11 +120,14 @@
 
 	async function chooseModel(source: string, model: string) {
 		closePickers();
+		pendingSaves += 1;
 		selected = { source, model };
 		try {
 			selected = await saveSelected(source, model);
 		} catch {
 			/* keep local selection */
+		} finally {
+			pendingSaves -= 1;
 		}
 	}
 
@@ -135,11 +143,14 @@
 
 	async function chooseEffort(next: ReasoningEffort) {
 		if (!chatgptSelected) return;
+		pendingSaves += 1;
 		effort = next;
 		try {
 			effort = (await saveEffort(next)) as ReasoningEffort;
 		} catch {
 			/* keep local */
+		} finally {
+			pendingSaves -= 1;
 		}
 	}
 
@@ -174,7 +185,6 @@
 	function onPickerBlur() {
 		if (customSource !== null) return;
 		pickerOpen = false;
-		void refreshModels();
 	}
 
 	function focusCustom(node: HTMLInputElement) {
@@ -344,6 +354,10 @@
 		if (!root) return;
 		if (root.contains(event.target as Node)) return;
 		closeMentions();
+		if (customSource !== null) {
+			void commitCustom();
+			return;
+		}
 		closePickers();
 	}
 
@@ -353,7 +367,32 @@
 		else onsubmit();
 	}
 
-	void refreshModels();
+	onMount(() => {
+		void refreshModels();
+		let unlistenChanged: (() => void) | undefined;
+		let unlistenLogin: (() => void) | undefined;
+		let unlistenShown: (() => void) | undefined;
+		void listen('models-changed', () => {
+			void refreshModels();
+		}).then((fn) => {
+			unlistenChanged = fn;
+		});
+		void listen<{ ok: boolean }>('chatgpt-login', (event) => {
+			if (event.payload.ok) void refreshModels();
+		}).then((fn) => {
+			unlistenLogin = fn;
+		});
+		void listen('launcher-shown', () => {
+			void refreshModels();
+		}).then((fn) => {
+			unlistenShown = fn;
+		});
+		return () => {
+			unlistenChanged?.();
+			unlistenLogin?.();
+			unlistenShown?.();
+		};
+	});
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
