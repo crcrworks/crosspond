@@ -56,7 +56,8 @@ Option+Space
         │                        browser_press_key / browser_scroll /
         │                        browser_select / browser_navigate /
         │                        browser_new_tab
-        │                        unknown site host → Allow (even Auto)
+        │                        unknown site host → Allow in Manual/AI (Auto skips
+        │                          and does not persist the host)
         │                        then ComputerAction policy for writes
         │                      web_search / fetch_url (auto; Exa key for search)
         │                      calendar_events (auto; EventKit / Calendar TCC)
@@ -103,7 +104,7 @@ Computer tools default to the **ambient** frontmost pid from when the launcher o
 
 `ui_press` / `ui_set_value` address cua-driver `element_index` values with the matching `snapshot_id` (and `element_token` when present) from the latest snapshot. Prefer `ui_press` over `ui_click` whenever the control has a label in the tree.
 
-Chromium tabs with the Crosspond extension connected use `browser_*` tools instead of AX/screenshots. Snapshot refs (`{epoch}-eN`) are valid only until the next snapshot or navigation. Password, OTP, email, and phone field values are `••••`. If the extension is disconnected, those tools say how to load it and must not silently fall back to Accessibility. New website hosts need Allow in Manual and AI, then join `browser_allowed_hosts` in `config.json`. Auto runs browser tools on unknown hosts without asking and does not add them to Allowed Sites. Blocked hosts are refused. The native host is `com.crosspond.chrome`. On launch, Crosspond copies `crosspond-chrome-host` to `~/.crosspond/bin` and writes Chromium native-host manifests; Chrome then launches that binary, which forwards length-prefixed JSON to `~/.crosspond/chrome-bridge.sock`.
+Chromium tabs with the Crosspond extension connected use `browser_*` tools instead of AX/screenshots. Snapshot refs (`{epoch}-eN`) are valid only until the next snapshot or navigation. Password, OTP, email, and phone field values are `••••`. If the extension is disconnected, those tools say how to load it and must not silently fall back to Accessibility. New website hosts need Allow in Manual and AI, then join `browser_allowed_hosts` in `config.json`. Auto runs browser tools on unknown hosts without asking and does not add them to Allowed Sites. Blocked hosts are refused. The native host is `com.crosspond.chrome`. On launch, Crosspond copies `crosspond-chrome-host` to `~/.crosspond/bin` and writes Chromium native-host manifests; Chrome then launches that binary, which forwards length-prefixed JSON to `~/.crosspond/chrome-bridge.sock`. The extension strips AX trees before posting them over native messaging so a large page cannot drop the port. If the port still drops, the service worker reconnects (alarms + tab focus) and Crosspond retries the call for a few seconds. The host process exits when Chrome closes stdio so the next `connectNative` can launch a clean one.
 
 `calendar_events` reads EventKit (not Calendar.app UI). Prefer it for schedule questions.
 

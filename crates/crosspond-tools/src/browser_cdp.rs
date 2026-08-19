@@ -96,7 +96,11 @@ impl ExtensionBrowser {
     fn capture_snapshot(&self) -> Result<String, ToolError> {
         let tab_id = self.ensure_tab()?;
         let _ = self.cdp(tab_id, "Accessibility.enable", json!({}))?;
-        let tree = self.cdp(tab_id, "Accessibility.getFullAXTree", json!({}))?;
+        let tree = self.cdp(
+            tab_id,
+            "Accessibility.getFullAXTree",
+            json!({ "depth": 20 }),
+        )?;
         let (title, url) = self.tab_identity(tab_id)?;
         let epoch = next_epoch();
         let rendered =

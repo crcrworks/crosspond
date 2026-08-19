@@ -8,9 +8,9 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -22,8 +22,11 @@ pub const EXTENSION_ID: &str = "cjgcgokbkhcedpojinajphgehbliaile";
 
 /// Chrome limits native-host → extension messages to 1 MiB.
 pub const MAX_NATIVE_MESSAGE_BYTES: usize = 1024 * 1024;
+/// Unix-socket and extension → host frames. Full AX trees are larger than 1 MiB.
+pub const MAX_BRIDGE_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
 
 const CONNECT_RETRY: Duration = Duration::from_millis(250);
+const RECONNECT_WAIT: Duration = Duration::from_secs(4);
 
 /// `~/.crosspond/chrome-bridge.sock`.
 pub fn default_socket_path() -> PathBuf {
@@ -40,29 +43,41 @@ pub fn socket_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
-/// Length-prefixed native-messaging / bridge frame.
+/// Length-prefixed native-messaging / bridge frame (unix socket / extension → host).
 pub fn write_message<W: Write>(writer: &mut W, bytes: &[u8]) -> io::Result<()> {
-    if bytes.len() > MAX_NATIVE_MESSAGE_BYTES {
+    write_message_with_limit(writer, bytes, MAX_BRIDGE_MESSAGE_BYTES)
+}
+
+pub fn read_message<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
+    read_message_with_limit(reader, MAX_BRIDGE_MESSAGE_BYTES)
+}
+
+pub fn write_message_with_limit<W: Write>(
+    writer: &mut W,
+    bytes: &[u8],
+    max_bytes: usize,
+) -> io::Result<()> {
+    if bytes.len() > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "native message exceeds 1 MiB",
+            format!("native message exceeds {max_bytes} bytes"),
         ));
     }
     let len = u32::try_from(bytes.len())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "native message exceeds 1 MiB"))?;
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "native message too large"))?;
     writer.write_all(&len.to_le_bytes())?;
     writer.write_all(bytes)?;
     writer.flush()
 }
 
-pub fn read_message<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
+pub fn read_message_with_limit<R: Read>(reader: &mut R, max_bytes: usize) -> io::Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
     reader.read_exact(&mut len_buf)?;
     let len = u32::from_le_bytes(len_buf) as usize;
-    if len > MAX_NATIVE_MESSAGE_BYTES {
+    if len > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "native message exceeds 1 MiB",
+            format!("native message exceeds {max_bytes} bytes"),
         ));
     }
     let mut buf = vec![0; len];
@@ -70,18 +85,23 @@ pub fn read_message<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-pub fn copy_framed<R, W>(reader: &mut R, writer: &mut W) -> io::Result<()>
+pub fn copy_framed<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    read_max: usize,
+    write_max: usize,
+) -> io::Result<()>
 where
     R: Read,
     W: Write,
 {
     loop {
-        let payload = match read_message(reader) {
+        let payload = match read_message_with_limit(reader, read_max) {
             Ok(bytes) => bytes,
             Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(err) => return Err(err),
         };
-        write_message(writer, &payload)?;
+        write_message_with_limit(writer, &payload, write_max)?;
     }
 }
 
@@ -265,7 +285,9 @@ pub fn resolve_extension_dir(current_exe: &Path) -> Option<PathBuf> {
 pub struct BrowserBridge {
     inner: Mutex<Option<BridgeStream>>,
     connected: AtomicBool,
+    ever_connected: AtomicBool,
     next_id: AtomicU64,
+    wait: Condvar,
 }
 
 struct BridgeStream {
@@ -278,7 +300,9 @@ impl BrowserBridge {
         Arc::new(Self {
             inner: Mutex::new(None),
             connected: AtomicBool::new(false),
+            ever_connected: AtomicBool::new(false),
             next_id: AtomicU64::new(1),
+            wait: Condvar::new(),
         })
     }
 
@@ -291,9 +315,52 @@ impl BrowserBridge {
             let id = self.next_id.fetch_add(1, Ordering::SeqCst);
             request["id"] = json!(id);
         }
+        if !self.is_connected() {
+            self.wait_for_connection()?;
+        }
+        match self.try_call(&request) {
+            Ok(value) => Ok(value),
+            Err(err) if is_transport_disconnect(&err) => {
+                self.wait_for_connection()?;
+                self.try_call(&request)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn wait_for_connection(&self) -> Result<(), String> {
+        if self.is_connected() {
+            return Ok(());
+        }
+        if !self.ever_connected.load(Ordering::SeqCst) {
+            return Err(disconnected_message().into());
+        }
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| "browser bridge lock".to_string())?;
+        let deadline = Instant::now() + RECONNECT_WAIT;
+        while guard.is_none() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(disconnected_message().into());
+            }
+            let (next, timed) = self
+                .wait
+                .wait_timeout(guard, remaining)
+                .map_err(|_| "browser bridge lock".to_string())?;
+            guard = next;
+            if timed.timed_out() && guard.is_none() {
+                return Err(disconnected_message().into());
+            }
+        }
+        Ok(())
+    }
+
+    fn try_call(&self, request: &Value) -> Result<Value, String> {
         let id = request.get("id").cloned().unwrap_or(Value::Null);
         let payload =
-            serde_json::to_vec(&request).map_err(|err| format!("browser request: {err}"))?;
+            serde_json::to_vec(request).map_err(|err| format!("browser request: {err}"))?;
         let mut guard = self
             .inner
             .lock()
@@ -303,18 +370,25 @@ impl BrowserBridge {
         };
         #[cfg(unix)]
         {
-            write_message(&mut conn.stream, &payload).map_err(|err| err.to_string())?;
+            if let Err(err) = write_message(&mut conn.stream, &payload) {
+                self.drop_stream(&mut guard);
+                return Err(format!("browser extension disconnected: {err}"));
+            }
             loop {
                 let bytes = match read_message(&mut conn.stream) {
                     Ok(bytes) => bytes,
                     Err(err) => {
-                        *guard = None;
-                        self.connected.store(false, Ordering::SeqCst);
+                        self.drop_stream(&mut guard);
                         return Err(format!("browser extension disconnected: {err}"));
                     }
                 };
-                let response: Value =
-                    serde_json::from_slice(&bytes).map_err(|err| err.to_string())?;
+                let response: Value = match serde_json::from_slice(&bytes) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        self.drop_stream(&mut guard);
+                        return Err(format!("browser extension disconnected: {err}"));
+                    }
+                };
                 if response.get("id") == Some(&id) {
                     if response.get("ok").and_then(Value::as_bool) == Some(false) {
                         let err = response
@@ -334,6 +408,11 @@ impl BrowserBridge {
         }
     }
 
+    fn drop_stream(&self, guard: &mut Option<BridgeStream>) {
+        *guard = None;
+        self.connected.store(false, Ordering::SeqCst);
+    }
+
     fn attach_stream(&self, #[cfg(unix)] stream: std::os::unix::net::UnixStream) {
         #[cfg(unix)]
         {
@@ -342,9 +421,15 @@ impl BrowserBridge {
             if let Ok(mut guard) = self.inner.lock() {
                 *guard = Some(BridgeStream { stream });
                 self.connected.store(true, Ordering::SeqCst);
+                self.ever_connected.store(true, Ordering::SeqCst);
+                self.wait.notify_all();
             }
         }
     }
+}
+
+fn is_transport_disconnect(err: &str) -> bool {
+    err == disconnected_message() || err.starts_with("browser extension disconnected:")
 }
 
 pub fn disconnected_message() -> &'static str {
@@ -399,22 +484,20 @@ fn run_bridge_server(_bridge: Arc<BrowserBridge>, _socket_path: PathBuf) -> io::
 }
 
 /// Native-host process: copy framed JSON between Chrome stdio and the unix socket.
+///
+/// Retry connecting until Crosspond is listening. Once stdio or the socket
+/// closes, exit so Chrome can relaunch a fresh host on `connectNative`.
 pub fn run_native_host(socket_path: PathBuf) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::net::UnixStream;
-        loop {
+        let stream = loop {
             match UnixStream::connect(&socket_path) {
-                Ok(stream) => {
-                    if let Err(err) = pipe_stdio(stream)
-                        && err.kind() != io::ErrorKind::UnexpectedEof
-                    {
-                        eprintln!("crosspond-chrome-host: {err}");
-                    }
-                }
+                Ok(stream) => break stream,
                 Err(_) => thread::sleep(CONNECT_RETRY),
             }
-        }
+        };
+        pipe_stdio(stream)
     }
     #[cfg(not(unix))]
     {
@@ -425,15 +508,32 @@ pub fn run_native_host(socket_path: PathBuf) -> io::Result<()> {
 
 #[cfg(unix)]
 fn pipe_stdio(stream: std::os::unix::net::UnixStream) -> io::Result<()> {
-    let mut to_app = stream.try_clone()?;
-    let mut from_app = stream;
+    use std::net::Shutdown;
+    let to_app = stream.try_clone()?;
+    let from_app = stream.try_clone()?;
     let incoming = thread::spawn(move || {
         let mut stdin = io::stdin();
-        copy_framed(&mut stdin, &mut to_app)
+        let mut to_app = to_app;
+        let result = copy_framed(
+            &mut stdin,
+            &mut to_app,
+            MAX_BRIDGE_MESSAGE_BYTES,
+            MAX_BRIDGE_MESSAGE_BYTES,
+        );
+        let _ = to_app.shutdown(Shutdown::Both);
+        result
     });
     let outgoing = thread::spawn(move || {
         let mut stdout = io::stdout();
-        copy_framed(&mut from_app, &mut stdout)
+        let mut from_app = from_app;
+        let result = copy_framed(
+            &mut from_app,
+            &mut stdout,
+            MAX_BRIDGE_MESSAGE_BYTES,
+            MAX_NATIVE_MESSAGE_BYTES,
+        );
+        let _ = from_app.shutdown(Shutdown::Both);
+        result
     });
     let first = incoming
         .join()
@@ -441,7 +541,11 @@ fn pipe_stdio(stream: std::os::unix::net::UnixStream) -> io::Result<()> {
     let second = outgoing
         .join()
         .unwrap_or_else(|_| Err(io::Error::other("stdout pipe panicked")));
-    first.and(second)
+    match (first, second) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(err), _) | (_, Err(err)) if err.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
+        (Err(err), _) | (_, Err(err)) => Err(err),
+    }
 }
 
 #[cfg(test)]
@@ -463,8 +567,18 @@ mod tests {
         buf.extend_from_slice(&(MAX_NATIVE_MESSAGE_BYTES as u32 + 1).to_le_bytes());
         buf.extend_from_slice(&[0]);
         let mut cursor = std::io::Cursor::new(buf);
-        let err = read_message(&mut cursor).unwrap_err();
+        let err = read_message_with_limit(&mut cursor, MAX_NATIVE_MESSAGE_BYTES).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn bridge_frames_allow_payloads_over_chrome_stdout_limit() {
+        let payload = vec![b'x'; MAX_NATIVE_MESSAGE_BYTES + 64];
+        let mut buf = Vec::new();
+        write_message(&mut buf, &payload).unwrap();
+        let mut cursor = std::io::Cursor::new(buf);
+        let got = read_message(&mut cursor).unwrap();
+        assert_eq!(got.len(), payload.len());
     }
 
     #[test]
@@ -510,6 +624,7 @@ mod tests {
         assert!(perms.contains(&"debugger"));
         assert!(perms.contains(&"tabs"));
         assert!(perms.contains(&"tabGroups"));
+        assert!(perms.contains(&"alarms"));
         assert!(!perms.contains(&"history"));
         assert!(!perms.contains(&"bookmarks"));
         assert!(!perms.contains(&"downloads"));
@@ -528,12 +643,15 @@ mod tests {
     }
 
     #[test]
-    fn service_worker_reads_native_host_last_error() {
+    fn service_worker_keeps_native_host_alive() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../extension/chrome/service_worker.js");
         let text = fs::read_to_string(&path).expect("service worker");
         assert!(text.contains("chrome.runtime.connectNative"));
         assert!(text.contains("chrome.runtime.lastError"));
+        assert!(text.contains("function compactAxTree"));
+        assert!(text.contains("chrome.alarms"));
+        assert!(text.contains("scheduleReconnect"));
     }
 
     #[test]
@@ -568,6 +686,94 @@ mod tests {
         assert_eq!(json["type"], "stdio");
         let path = json["path"].as_str().expect("absolute path");
         assert_eq!(Path::new(path), staged.as_path());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn call_json_without_host_fails_immediately() {
+        let bridge = BrowserBridge::new();
+        let start = Instant::now();
+        let err = bridge.call_json(json!({ "op": "status" })).unwrap_err();
+        assert!(err.contains("not connected"));
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "missing extension must not wait for reconnect"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn call_json_retries_after_host_reconnects() {
+        use std::net::Shutdown;
+        use std::os::unix::net::UnixStream;
+
+        fn wait_for_path(path: &Path) {
+            for _ in 0..100 {
+                if path.exists() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            panic!("socket {} was not created", path.display());
+        }
+
+        fn reply_loop(mut stream: UnixStream) {
+            while let Ok(bytes) = read_message(&mut stream) {
+                let request: Value = match serde_json::from_slice(&bytes) {
+                    Ok(value) => value,
+                    Err(_) => break,
+                };
+                let id = request.get("id").cloned().unwrap_or(Value::Null);
+                let body = serde_json::to_vec(&json!({
+                    "id": id,
+                    "ok": true,
+                    "result": { "connected": true }
+                }))
+                .unwrap();
+                if write_message(&mut stream, &body).is_err() {
+                    break;
+                }
+            }
+        }
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "crosspond-bridge-reconnect-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let sock = root.join("chrome-bridge.sock");
+        let bridge = BrowserBridge::new();
+        let _server = spawn_bridge_server(Arc::clone(&bridge), sock.clone());
+        wait_for_path(&sock);
+
+        let host = UnixStream::connect(&sock).expect("host connect");
+        let shutdown = host.try_clone().expect("clone host");
+        let first = thread::spawn(move || reply_loop(host));
+        thread::sleep(Duration::from_millis(40));
+        let first_reply = bridge
+            .call_json(json!({ "op": "status" }))
+            .expect("first call");
+        assert_eq!(first_reply["result"]["connected"], true);
+
+        let _ = shutdown.shutdown(Shutdown::Both);
+        let _ = first.join();
+
+        let sock_re = sock.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(120));
+            if let Ok(host) = UnixStream::connect(&sock_re) {
+                reply_loop(host);
+            }
+        });
+
+        let second = bridge
+            .call_json(json!({ "op": "status" }))
+            .expect("call after reconnect");
+        assert_eq!(second["result"]["connected"], true);
         let _ = fs::remove_dir_all(&root);
     }
 }
