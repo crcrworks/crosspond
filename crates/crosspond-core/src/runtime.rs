@@ -3568,7 +3568,7 @@ mod tests {
 
     fn fill_provider(credential_ref: &str) -> ProviderBuilder {
         let arguments = fill_credential_arguments(credential_ref);
-        Arc::new(move |_, _, _| {
+        Arc::new(move |_, _| {
             Arc::new(NamedToolThenDoneProvider::new(
                 "fill_credential",
                 arguments.clone(),
