@@ -71,13 +71,8 @@ kbd {
 }
 
 .prompt-slot.seamless {
-	align-items: center;
-	padding: 8px 16px 14px;
-}
-
-.prompt-slot.seamless.fill {
-	flex: 1;
-	min-height: 0;
+	align-items: flex-start;
+	padding: 4px 12px 8px;
 }
 
 .prompt-slot.docked {
@@ -110,18 +105,20 @@ kbd {
 }
 
 .prompt.seamless {
+	flex: 1 0 auto;
 	align-items: flex-start;
 	border-color: transparent;
 	background: transparent;
-	padding: 4px 0;
+	height: auto;
+	padding: 0;
+}
+
+.prompt.seamless .prompt-stack {
+	gap: 0;
 }
 
 .prompt.docked {
 	align-items: flex-start;
-}
-
-.prompt-slot.seamless.fill .prompt {
-	height: 100%;
 }
 
 .prompt:focus-within {
@@ -225,6 +222,19 @@ kbd {
 	min-width: 0;
 	align-items: center;
 	gap: 2px;
+	width: 100%;
+}
+
+.prompt.seamless .prompt-pickers {
+	margin-top: 4px;
+	padding-top: 4px;
+	border-top: 1px solid var(--border);
+}
+
+.prompt-pickers-end {
+	display: flex;
+	margin-left: auto;
+	align-items: center;
 }
 
 .picker-native {
@@ -270,14 +280,15 @@ kbd {
 }
 
 .picker-custom-inline {
-	width: 168px;
+	width: 140px;
+	height: 20px;
 	border: 0;
 	border-radius: 6px;
 	background: var(--tone-muted-bg);
-	padding: 2px 6px;
+	padding: 0 6px;
 	font: inherit;
-	font-size: 12px;
-	line-height: 1.4;
+	font-size: 11px;
+	line-height: 20px;
 	color: var(--text);
 }
 
@@ -328,6 +339,13 @@ select.prompt-mode.picker-select:focus {
 	background: var(--tone-muted-bg);
 	color: var(--text);
 	outline: none;
+}
+
+.prompt.seamless select.prompt-mode.picker-select {
+	height: 20px;
+	padding: 0 16px 0 4px;
+	font-size: 11px;
+	line-height: 20px;
 }
 
 .prompt-menu {

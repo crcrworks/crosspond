@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composerExtraHeight, PICKER_ROW_HEIGHT, shouldSyncLauncherSize } from './launcher-size';
+import { composerExtraHeight, shouldSyncLauncherSize } from './launcher-size';
 
 describe('shouldSyncLauncherSize', () => {
 	it('syncs when shrinking back to the compact bar', () => {
@@ -24,11 +24,5 @@ describe('composerExtraHeight', () => {
 	it('grows with wrapped lines and caps at the max field height', () => {
 		expect(composerExtraHeight(64)).toBe(40);
 		expect(composerExtraHeight(200)).toBe(136);
-	});
-});
-
-describe('picker row', () => {
-	it('reserves a compact row under the prompt', () => {
-		expect(PICKER_ROW_HEIGHT).toBe(22);
 	});
 });

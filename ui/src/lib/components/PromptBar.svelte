@@ -358,6 +358,24 @@
 
 <svelte:window onpointerdown={onWindowPointerDown} />
 
+{#snippet approvalPicker()}
+	<div class="prompt-mode-wrap picker-native">
+		<select
+			class="prompt-mode picker-select picker-approval"
+			aria-label="Computer approval: {approvalLabel(approval)}"
+			value={approval}
+			onfocus={() => (menuOpen = true)}
+			onblur={() => (menuOpen = false)}
+			onchange={onApprovalChange}
+		>
+			{#each APPROVAL_MODES as mode (mode)}
+				<option value={mode}>{approvalLabel(mode)}</option>
+			{/each}
+		</select>
+		<Chevron expanded />
+	</div>
+{/snippet}
+
 <div {@attach captureRoot} class={['prompt', variant]} data-tauri-drag-region="false">
 	<div class="prompt-stack">
 		{#if mentions.length > 0}
@@ -398,7 +416,7 @@
 			></textarea>
 		</label>
 		<div class="prompt-pickers">
-			<div class="prompt-mode-wrap picker-left picker-native">
+			<div class="prompt-mode-wrap picker-native">
 				{#if showCustom}
 					<input
 						{@attach focusCustom}
@@ -446,7 +464,7 @@
 					<Chevron expanded />
 				{/if}
 			</div>
-			<div class="prompt-mode-wrap picker-left picker-native">
+			<div class="prompt-mode-wrap picker-native">
 				<select
 					class="prompt-mode picker-select picker-effort"
 					aria-label="Reasoning effort {effortLabel(effort)}"
@@ -463,28 +481,19 @@
 				</select>
 				<Chevron expanded />
 			</div>
-			{#if !chatgptSelected}
+			{#if docked && !chatgptSelected}
 				<span class="picker-note">Effort is Codex only</span>
+			{/if}
+			{#if !docked}
+				<div class="prompt-pickers-end">
+					{@render approvalPicker()}
+				</div>
 			{/if}
 		</div>
 	</div>
-	<div class="prompt-tools">
-		<div class="prompt-mode-wrap picker-native">
-			<select
-				class="prompt-mode picker-select picker-approval"
-				aria-label="Computer approval: {approvalLabel(approval)}"
-				value={approval}
-				onfocus={() => (menuOpen = true)}
-				onblur={() => (menuOpen = false)}
-				onchange={onApprovalChange}
-			>
-				{#each APPROVAL_MODES as mode (mode)}
-					<option value={mode}>{approvalLabel(mode)}</option>
-				{/each}
-			</select>
-			<Chevron expanded />
-		</div>
-		{#if docked}
+	{#if docked}
+		<div class="prompt-tools">
+			{@render approvalPicker()}
 			<button
 				type="button"
 				class={['prompt-action', busy && 'stop']}
@@ -498,8 +507,8 @@
 					<Icon src="/icons/arrow-up.svg" color="var(--button-primary-text)" size={14} />
 				{/if}
 			</button>
-		{/if}
-	</div>
+		</div>
+	{/if}
 	{#if mentionOpen}
 		<div
 			class={['prompt-menu', 'mention-menu', docked ? 'up' : 'down']}

@@ -29,7 +29,7 @@
 	import TranscriptView from '$lib/components/TranscriptView.svelte';
 	import { LauncherSession } from '$lib/session.svelte';
 	import { firstUserTitle } from '$lib/transcript';
-	import { PICKER_ROW_HEIGHT, shouldSyncLauncherSize } from '$lib/launcher-size';
+	import { shouldSyncLauncherSize } from '$lib/launcher-size';
 	import {
 		MENTION_CHIP_ROW,
 		MENTION_MENU_HEIGHT,
@@ -55,7 +55,6 @@
 	const expanded = $derived(!session.compact);
 	const extraHeight = $derived(
 		textExtra +
-			PICKER_ROW_HEIGHT +
 			(session.mentions.length > 0 ? MENTION_CHIP_ROW : 0) +
 			(session.compact && mentionOpen ? MENTION_MENU_HEIGHT : 0)
 	);
@@ -329,8 +328,7 @@
 		<div
 			class={[
 				'prompt-slot',
-				expanded ? 'docked' : 'seamless',
-				!expanded && session.badges.length === 0 && !mentionOpen && 'fill'
+				expanded ? 'docked' : 'seamless'
 			]}
 			data-tauri-drag-region
 		>
