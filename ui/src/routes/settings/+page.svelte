@@ -1,9 +1,20 @@
 <script lang="ts">
 	import { listen } from '@tauri-apps/api/event';
-	import { loadSettings, openSystemSettings, saveConfig, saveSecret, testConnection } from '$lib/api';
+	import {
+		loadSettings,
+		openSystemSettings,
+		pauseLauncherHotkey,
+		resumeLauncherHotkey,
+		saveConfig,
+		saveSecret,
+		setLauncherHotkey,
+		testConnection
+	} from '$lib/api';
 	import Badge from '$lib/components/Badge.svelte';
 	import Button from '$lib/components/Button.svelte';
-	import type { AgentEvent, SettingsView } from '$lib/types';
+	import HotkeyTokens from '$lib/components/HotkeyTokens.svelte';
+	import { modifierTokens, specFromKeyboardEvent } from '$lib/hotkey';
+	import type { AgentEvent, HotkeyView, SettingsView } from '$lib/types';
 	import { onMount } from 'svelte';
 
 	let settings = $state<SettingsView | null>(null);
@@ -14,6 +25,13 @@
 	let exaKey = $state('');
 	let saveStatus = $state<string | null>(null);
 	let testStatus = $state<{ ok: boolean; message: string } | null>(null);
+	let recording = $state(false);
+	let draftTokens = $state<string[]>([]);
+	let hotkeyError = $state<string | null>(null);
+
+	const launcherHotkey = $derived(
+		settings?.launcher_hotkey ?? { spec: 'alt+Space', tokens: ['Option', 'Space'] }
+	);
 
 	onMount(() => {
 		void (async () => {
@@ -31,7 +49,10 @@
 		}).then((fn) => {
 			unlisten = fn;
 		});
-		return () => unlisten?.();
+		return () => {
+			unlisten?.();
+			void resumeLauncherHotkey();
+		};
 	});
 
 	async function persist() {
@@ -65,7 +86,70 @@
 			testStatus = { ok: false, message: String(error) };
 		}
 	}
+
+	async function startRecording() {
+		if (recording) return;
+		hotkeyError = null;
+		saveStatus = null;
+		draftTokens = [];
+		try {
+			await pauseLauncherHotkey();
+			recording = true;
+		} catch (error) {
+			hotkeyError = String(error);
+		}
+	}
+
+	async function cancelRecording() {
+		if (!recording) return;
+		recording = false;
+		draftTokens = [];
+		try {
+			await resumeLauncherHotkey();
+		} catch (error) {
+			hotkeyError = String(error);
+		}
+	}
+
+	function applyHotkey(view: HotkeyView) {
+		if (!settings) return;
+		settings = { ...settings, launcher_hotkey: view };
+		hotkeyError = null;
+		saveStatus = 'Shortcut saved.';
+	}
+
+	async function onRecordKey(event: KeyboardEvent) {
+		if (!recording) return;
+		event.preventDefault();
+		if (event.key === 'Escape') {
+			void cancelRecording();
+			return;
+		}
+		if (event.repeat) return;
+		draftTokens = modifierTokens(event);
+		const spec = specFromKeyboardEvent(event);
+		if (!spec) return;
+		recording = false;
+		draftTokens = [];
+		try {
+			const view = await setLauncherHotkey(spec);
+			applyHotkey(view);
+		} catch (error) {
+			hotkeyError = String(error);
+			try {
+				await resumeLauncherHotkey();
+			} catch (resumeError) {
+				hotkeyError = `${error}; ${resumeError}`;
+			}
+		}
+	}
+
+	function onWindowBlur() {
+		void cancelRecording();
+	}
 </script>
+
+<svelte:window onkeydown={onRecordKey} onblur={onWindowBlur} />
 
 <div class="h-full overflow-y-auto px-6 py-4 text-[var(--text)]" style:background="var(--bg)">
 	<div class="flex flex-col gap-4">
@@ -74,7 +158,31 @@
 		</div>
 		<div class="flex flex-col gap-1">
 			<div class="text-sm text-[var(--muted)]">Launch Crosspond</div>
-			<div><kbd>Option</kbd> + <kbd>Space</kbd></div>
+			<button
+				type="button"
+				class="hotkey-record"
+				aria-pressed={recording}
+				aria-label={recording
+					? 'Press a new launch shortcut. Escape cancels.'
+					: `Launch shortcut ${launcherHotkey.tokens.join(' + ')}. Click to change.`}
+				onclick={startRecording}
+			>
+				{#if recording}
+					{#if draftTokens.length > 0}
+						<HotkeyTokens tokens={draftTokens} />
+					{:else}
+						<span class="text-sm text-[var(--muted)]">Press a shortcut</span>
+					{/if}
+				{:else}
+					<HotkeyTokens tokens={launcherHotkey.tokens} />
+				{/if}
+			</button>
+			<div class="text-sm text-[var(--muted)]">
+				Click, then press the new shortcut. Escape cancels.
+			</div>
+			{#if hotkeyError}
+				<div class="text-sm" style:color="var(--danger)">{hotkeyError}</div>
+			{/if}
 		</div>
 		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
 			Knowledge
@@ -192,3 +300,23 @@
 		{/if}
 	</div>
 </div>
+
+<style>
+	.hotkey-record {
+		display: flex;
+		width: fit-content;
+		min-height: 32px;
+		align-items: center;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--surface);
+		padding: 6px 10px;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.hotkey-record:hover,
+	.hotkey-record[aria-pressed='true'] {
+		border-color: var(--prompt-border-focus);
+	}
+</style>

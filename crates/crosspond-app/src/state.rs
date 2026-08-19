@@ -28,6 +28,8 @@ pub struct InnerState {
     pub composing: bool,
     /// Latest launcher resize request. Older queued resizes are dropped.
     pub resize_seq: u64,
+    /// Settings is capturing a new shortcut; ignore launcher toggles.
+    pub capturing_hotkey: bool,
 }
 
 impl AppState {
@@ -55,6 +57,7 @@ impl AppState {
                 compact: true,
                 composing: false,
                 resize_seq: 0,
+                capturing_hotkey: false,
             }),
             _runtime: runtime,
         }
@@ -81,5 +84,13 @@ pub struct NoopHotkey;
 impl GlobalHotkeyService for NoopHotkey {
     fn poll(&self) -> Option<crosspond_core::HotkeyEvent> {
         None
+    }
+
+    fn set_hotkey(&mut self, _spec: &crosspond_core::LauncherHotkey) -> Result<(), String> {
+        Err("global hotkeys are not available".into())
+    }
+
+    fn clear_hotkey(&mut self) -> Result<(), String> {
+        Ok(())
     }
 }

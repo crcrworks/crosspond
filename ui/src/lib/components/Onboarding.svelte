@@ -1,15 +1,18 @@
 <script lang="ts">
 	import Button from './Button.svelte';
+	import HotkeyTokens from './HotkeyTokens.svelte';
 
 	let {
 		ready,
 		hint,
+		hotkeyTokens,
 		onsettings,
 		oncontinue,
 		ondone
 	}: {
 		ready: boolean;
 		hint: string | null;
+		hotkeyTokens: string[];
 		onsettings: () => void;
 		oncontinue: () => void;
 		ondone: () => void;
@@ -19,7 +22,9 @@
 {#if ready}
 	<div class="flex flex-col gap-3 pt-2">
 		<div class="text-sm">Crosspond is ready.</div>
-		<div class="text-sm text-[var(--muted)]">Press <kbd>Option</kbd> + <kbd>Space</kbd> anywhere.</div>
+		<div class="text-sm text-[var(--muted)]">
+			Press <HotkeyTokens tokens={hotkeyTokens} /> anywhere.
+		</div>
 		<Button label="Done" onclick={ondone} variant="primary" />
 	</div>
 {:else}

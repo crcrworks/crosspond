@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::hotkey::LauncherHotkey;
 use crate::policy::ComputerApprovalMode;
 
 /// Default Knowledge Vault folder. Not under `~/.crosspond`.
@@ -65,6 +66,9 @@ pub struct AppConfig {
     /// Unset means Crosspond will not read or write a vault.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_path: Option<PathBuf>,
+    /// Global shortcut that toggles the launcher. Default is Option+Space.
+    #[serde(default)]
+    pub launcher_hotkey: LauncherHotkey,
 }
 
 impl AppConfig {
@@ -85,6 +89,7 @@ impl Default for AppConfig {
             model: "gpt-4o-mini".into(),
             computer_approval: ComputerApprovalMode::Manual,
             vault_path: None,
+            launcher_hotkey: LauncherHotkey::default(),
         }
     }
 }
@@ -181,6 +186,7 @@ mod tests {
         let loaded = store.load().unwrap();
         assert_eq!(loaded, AppConfig::default());
         assert_eq!(loaded.computer_approval, ComputerApprovalMode::Manual);
+        assert_eq!(loaded.launcher_hotkey, LauncherHotkey::default());
         assert!(loaded.vault_path.is_none());
         assert!(!text.contains("vault_path"));
         let _ = fs::remove_dir_all(dir);
@@ -193,7 +199,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.computer_approval, ComputerApprovalMode::Manual);
+        assert_eq!(parsed.launcher_hotkey, LauncherHotkey::default());
         assert!(parsed.vault_path.is_none());
+    }
+
+    #[test]
+    fn launcher_hotkey_is_configurable() {
+        let parsed: AppConfig = serde_json::from_str(
+            r#"{"provider":"openai_compatible","base_url":"https://api.openai.com/v1","model":"gpt-4o-mini","launcher_hotkey":"control+shift+Space"}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.launcher_hotkey.to_spec(), "shift+control+Space");
+        assert_eq!(
+            parsed.launcher_hotkey.display_tokens(),
+            ["Control", "Shift", "Space"]
+        );
     }
 
     #[test]

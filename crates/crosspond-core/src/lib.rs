@@ -39,7 +39,7 @@ pub use crosspond_knowledge::{
 };
 pub use event::AgentEvent;
 pub use history::{TaskHistoryEntry, history_group_label, history_title, list_recent_tasks};
-pub use hotkey::{GlobalHotkeyService, HotkeyEvent};
+pub use hotkey::{GlobalHotkeyService, HotkeyEvent, HotkeySpecError, HotkeyView, LauncherHotkey};
 pub use ids::{ConversationId, TaskId};
 pub use mention::{Mention, display_prompt, parse_running_app_names};
 pub use policy::{

@@ -4,6 +4,7 @@ import type {
 	ComputerApproval,
 	ConversationView,
 	HistoryItem,
+	HotkeyView,
 	SettingsView,
 	StartTaskResult
 } from './types';
@@ -51,6 +52,18 @@ export function loadSettings() {
 
 export function saveConfig(baseUrl: string, model: string, vaultPath: string) {
 	return invoke('save_config', { baseUrl, model, vaultPath });
+}
+
+export function setLauncherHotkey(spec: string) {
+	return invoke<HotkeyView>('set_launcher_hotkey', { spec });
+}
+
+export function pauseLauncherHotkey() {
+	return invoke('pause_launcher_hotkey');
+}
+
+export function resumeLauncherHotkey() {
+	return invoke<HotkeyView>('resume_launcher_hotkey');
 }
 
 export function saveSecret(kind: 'provider' | 'exa', value: string) {

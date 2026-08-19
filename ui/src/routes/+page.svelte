@@ -47,6 +47,7 @@
 	let mentionOpen = $state(false);
 	let stickToBottom = $state(true);
 	let scroller: HTMLDivElement | undefined = $state();
+	let hotkeyTokens = $state<string[]>(['Option', 'Space']);
 
 	const chatLayout = $derived(
 		session.inConversation && session.overlay === 'none'
@@ -125,6 +126,7 @@
 		void (async () => {
 			const boot = await bootstrap();
 			session.computerApproval = boot.computer_approval;
+			hotkeyTokens = boot.launcher_hotkey.tokens;
 			session.applyShown(boot.badges, boot.needs_onboarding, !boot.needs_onboarding, boot.visible);
 			if (boot.needs_onboarding) session.enterOnboarding(!boot.needs_onboarding);
 			void refreshHistory();
@@ -140,6 +142,7 @@
 			});
 			unlistenShown = await listen<LauncherShown>('launcher-shown', (event) => {
 				const shown = event.payload;
+				hotkeyTokens = shown.launcher_hotkey.tokens;
 				session.applyShown(shown.badges, shown.onboarding, shown.ready, shown.visible);
 				void refreshHistory();
 				if (shown.visible) queueMicrotask(() => textarea?.focus());
@@ -368,6 +371,7 @@
 				<Onboarding
 					ready={session.onboardingReady}
 					hint={session.onboardingHint}
+					{hotkeyTokens}
 					onsettings={() => void openSettings()}
 					oncontinue={() => void continueOnboarding()}
 					ondone={() => void hideLauncher()}
