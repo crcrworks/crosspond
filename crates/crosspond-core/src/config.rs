@@ -289,6 +289,10 @@ struct RawAppConfig {
     vault_path: Option<PathBuf>,
     #[serde(default)]
     launcher_hotkey: LauncherHotkey,
+    #[serde(default)]
+    browser_allowed_hosts: Vec<String>,
+    #[serde(default)]
+    browser_blocked_hosts: Vec<String>,
 }
 
 impl AppConfig {
@@ -301,6 +305,8 @@ impl AppConfig {
                 computer_approval: raw.computer_approval,
                 vault_path: raw.vault_path,
                 launcher_hotkey: raw.launcher_hotkey,
+                browser_allowed_hosts: raw.browser_allowed_hosts,
+                browser_blocked_hosts: raw.browser_blocked_hosts,
             }
         } else {
             migrate_legacy(raw)
@@ -339,6 +345,8 @@ fn migrate_legacy(raw: RawAppConfig) -> AppConfig {
         computer_approval: raw.computer_approval,
         vault_path: raw.vault_path,
         launcher_hotkey: raw.launcher_hotkey,
+        browser_allowed_hosts: raw.browser_allowed_hosts,
+        browser_blocked_hosts: raw.browser_blocked_hosts,
     }
 }
 
