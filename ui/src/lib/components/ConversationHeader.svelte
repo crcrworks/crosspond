@@ -25,7 +25,7 @@
 	<button type="button" class="chat-new" aria-label="New chat" onclick={onnew}>
 		<Icon src="/icons/plus.svg" />
 	</button>
-	<div class="chat-tabs">
+	<div class="chat-tabs" data-tauri-drag-region>
 		{#if liveTitle !== null}
 			<button type="button" class={['chat-tab', { active: liveActive }]} onclick={onlive}>
 				{liveTitle}

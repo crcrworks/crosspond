@@ -302,7 +302,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class={['launcher', dockPrompt && 'dock-prompt']}>
+<div class={['launcher', dockPrompt && 'dock-prompt']} data-tauri-drag-region="deep">
 	{#if showHeader}
 		<ConversationHeader
 			liveTitle={session.inConversation ? (liveTitle ?? 'Chat') : null}
@@ -361,6 +361,7 @@
 		<div
 			bind:this={scroller}
 			class="transcript-pane min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-2"
+			data-tauri-drag-region="deep"
 			onscroll={() => {
 				if (!scroller) return;
 				const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;

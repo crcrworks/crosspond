@@ -363,10 +363,10 @@ kbd {
 .chat-header {
 	display: flex;
 	flex-shrink: 0;
-	align-items: stretch;
+	align-items: flex-end;
 	height: 36px;
 	border-bottom: 1px solid var(--border);
-	padding: 0 8px 0 4px;
+	padding: 10px 8px 0 4px;
 }
 
 .chat-new {
@@ -374,9 +374,10 @@ kbd {
 	flex-shrink: 0;
 	align-items: center;
 	justify-content: center;
-	align-self: center;
+	align-self: flex-end;
 	width: 22px;
 	height: 22px;
+	margin-bottom: 3px;
 	padding: 0;
 	border: 0;
 	border-radius: 4px;
@@ -404,6 +405,7 @@ kbd {
 
 .chat-tab {
 	max-width: 148px;
+	height: 26px;
 	flex-shrink: 0;
 	overflow: hidden;
 	border: 0;
@@ -412,7 +414,7 @@ kbd {
 	padding: 0 10px;
 	font: inherit;
 	font-size: 12px;
-	line-height: 36px;
+	line-height: 26px;
 	color: var(--muted);
 	text-align: left;
 	text-overflow: ellipsis;
