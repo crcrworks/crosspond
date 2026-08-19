@@ -317,7 +317,7 @@ pub fn chatgpt_refresh_lock() -> &'static tokio::sync::Mutex<()> {
 }
 
 pub async fn refresh_chatgpt_session(
-    tokens: ChatGptOAuthTokens,
+    tokens: &ChatGptOAuthTokens,
     store: &dyn ChatGptTokenStore,
     token_url: &str,
 ) -> Result<ChatGptOAuthTokens, ModelError> {
@@ -331,7 +331,7 @@ pub async fn refresh_chatgpt_session(
         return Ok(refreshed);
     }
     if !tokens.needs_refresh() {
-        return Ok(tokens);
+        return Ok(tokens.clone());
     }
     let refreshed = refresh_access_token(&tokens.refresh, token_url).await?;
     store.save(&refreshed)?;
@@ -758,6 +758,23 @@ mod tests {
         let err = refresh_access_token("refresh", &url).await.unwrap_err();
         assert!(matches!(err, ModelError::Unauthorized));
         assert!(!err.user_message().contains("invalid_grant"));
+    }
+
+    #[tokio::test]
+    async fn refresh_session_keeps_caller_tokens_when_store_is_fresh() {
+        let tokens = ChatGptOAuthTokens {
+            access: "a".into(),
+            refresh: "r".into(),
+            expires_at: unix_ms() + 3_600_000,
+            account_id: "acct".into(),
+        };
+        let store = MemoryChatGptTokenStore::new(tokens.clone());
+        let refreshed =
+            refresh_chatgpt_session(&tokens, store.as_ref(), "http://127.0.0.1:1/unused")
+                .await
+                .unwrap_or(tokens);
+        assert_eq!(refreshed.access, "a");
+        assert_eq!(refreshed.account_id, "acct");
     }
 
     fn serve_json(status: u16, body: &str) -> String {

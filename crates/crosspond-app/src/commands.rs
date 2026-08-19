@@ -431,7 +431,7 @@ async fn collect_models_catalog(
     let mut groups = Vec::new();
     if let Ok(Some(tokens)) = load_chatgpt_tokens(secrets.as_ref()) {
         let store = SecretChatGptTokenStore::new(std::sync::Arc::clone(&secrets));
-        let tokens = refresh_chatgpt_session(tokens, &store, TOKEN_URL)
+        let tokens = refresh_chatgpt_session(&tokens, &store, TOKEN_URL)
             .await
             .unwrap_or(tokens);
         let mut models = match fetch_chatgpt_models(&tokens).await {
