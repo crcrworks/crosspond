@@ -409,7 +409,7 @@ impl Runtime {
         let _ = self.events.send(AgentEvent::ContextCollected { task_id });
 
         let wants_later = looks_like_read_later(&request.prompt)
-            || request.mentions.iter().any(Mention::is_later);
+            || request.mentions.iter().any(Mention::is_vault_later);
         if wants_later && let Some(vault) = &self.knowledge {
             let saved = crate::knowledge::save_ambient_read_later(
                 vault,
@@ -470,7 +470,7 @@ impl Runtime {
             .unwrap_or_default();
         let mentions_block = mention::mention_routing(&request.mentions);
         let mut screen_images = Vec::new();
-        if request.mentions.iter().any(Mention::is_screen) {
+        if request.mentions.iter().any(Mention::wants_screenshot) {
             let app = request.mentions.iter().find_map(Mention::app_name);
             match self
                 .capture_mention_screenshot(task_id, &task_dir, app)
@@ -2099,7 +2099,7 @@ mod tests {
 
         let task_id = TaskId::new();
         let mut request = StartTaskRequest::new(task_id, "");
-        request.mentions = vec![Mention::Later];
+        request.mentions = vec![Mention::VaultLater];
         request.context.page_url = Some("https://example.invalid/paper".into());
         request.context.focused_window = Some(crate::context::WindowContext {
             title: Some("Paper".into()),
@@ -2183,6 +2183,8 @@ mod tests {
             assert!(user.content.contains("screenshot"));
             let system = &captured[0][0].content;
             assert!(system.contains("User mentions"));
+            assert!(system.contains("Look at that image before acting"));
+            assert!(!system.contains("Do not only describe the screen"));
             assert!(!system.contains('\u{89}'));
         }
         let events = std::fs::read_to_string(
@@ -2195,6 +2197,140 @@ mod tests {
         assert!(events.contains("take_screenshot"));
         assert!(!events.contains('\u{89}'));
         assert!(!events.contains("secret"));
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn computer_mention_captures_screenshot_and_requires_ui_tools() {
+        let pids = Arc::new(Mutex::new(Vec::new()));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let tools = computer_and_screenshot_registry(
+            Arc::new(RecordingAx {
+                pressed: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(TestShot {
+                pids: Arc::clone(&pids),
+            }),
+            Arc::new(TestApps),
+            Arc::new(TestInput),
+            Arc::new(TestCalendar),
+        );
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_, _, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&requests),
+                })
+            })
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), tools);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                context: ContextCapsule {
+                    frontmost_app: Some(crate::context::AppContext {
+                        name: "Safari".into(),
+                        bundle_id: "com.apple.Safari".into(),
+                        pid: 7,
+                    }),
+                    ..ContextCapsule::default()
+                },
+                mentions: vec![Mention::Computer],
+                ..StartTaskRequest::new(task_id, "このダイアログ進めて")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        assert_eq!(*pids.lock().expect("lock"), vec![Some(7)]);
+        {
+            let captured = requests.lock().expect("lock");
+            let user = captured[0]
+                .iter()
+                .find(|message| message.role == Role::User)
+                .expect("user");
+            assert_eq!(user.images.len(), 1);
+            assert_eq!(user.images[0].width, Some(10));
+            assert!(user.content.contains("screenshot"));
+            assert!(user.content.contains("ui_press"));
+            assert!(user.content.contains("Do not only describe the screen"));
+            let system = &captured[0][0].content;
+            assert!(system.contains("User mentions"));
+            assert!(system.contains("ui_click"));
+            assert!(!system.contains('\u{89}'));
+        }
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn screen_and_computer_mentions_capture_once() {
+        let pids = Arc::new(Mutex::new(Vec::new()));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let tools = computer_and_screenshot_registry(
+            Arc::new(RecordingAx {
+                pressed: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(TestShot {
+                pids: Arc::clone(&pids),
+            }),
+            Arc::new(TestApps),
+            Arc::new(TestInput),
+            Arc::new(TestCalendar),
+        );
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_, _, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&requests),
+                })
+            })
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), tools);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                context: ContextCapsule {
+                    frontmost_app: Some(crate::context::AppContext {
+                        name: "Safari".into(),
+                        bundle_id: "com.apple.Safari".into(),
+                        pid: 11,
+                    }),
+                    ..ContextCapsule::default()
+                },
+                mentions: vec![Mention::Screen, Mention::Computer],
+                ..StartTaskRequest::new(task_id, "進めて")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        assert_eq!(*pids.lock().expect("lock"), vec![Some(11)]);
+        {
+            let captured = requests.lock().expect("lock");
+            let user = captured[0]
+                .iter()
+                .find(|message| message.role == Role::User)
+                .expect("user");
+            assert_eq!(user.images.len(), 1);
+        }
 
         drop(command_tx);
         join.await.unwrap();
@@ -2220,7 +2356,7 @@ mod tests {
         let task_id = TaskId::new();
         command_tx
             .send(RuntimeCommand::StartTask(StartTaskRequest {
-                mentions: vec![Mention::Query],
+                mentions: vec![Mention::VaultQuery],
                 ..StartTaskRequest::new(task_id, "what's for lunch")
             }))
             .unwrap();

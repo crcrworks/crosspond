@@ -1,18 +1,20 @@
 export type MentionKind =
-	| 'query'
-	| 'save'
-	| 'later'
+	| 'vault_query'
+	| 'vault_save'
+	| 'vault_later'
 	| 'screen'
+	| 'computer'
 	| 'app'
 	| 'files'
 	| 'calendar'
 	| 'web';
 
 export type Mention =
-	| { kind: 'query' }
-	| { kind: 'save' }
-	| { kind: 'later' }
+	| { kind: 'vault_query' }
+	| { kind: 'vault_save' }
+	| { kind: 'vault_later' }
 	| { kind: 'screen' }
+	| { kind: 'computer' }
 	| { kind: 'app'; name: string }
 	| { kind: 'files' }
 	| { kind: 'calendar' }
@@ -24,35 +26,46 @@ export type MentionCatalogItem = {
 	label: string;
 	description: string;
 	needsPicker: boolean;
+	aliases?: string[];
 };
 
 export const MENTION_CATALOG: MentionCatalogItem[] = [
 	{
-		kind: 'query',
-		token: 'query',
-		label: 'Query',
+		kind: 'vault_query',
+		token: 'vault-query',
+		label: 'Vault query',
 		description: '知識を探す',
-		needsPicker: false
+		needsPicker: false,
+		aliases: ['query']
 	},
 	{
-		kind: 'save',
-		token: 'save',
-		label: 'Save',
+		kind: 'vault_save',
+		token: 'vault-save',
+		label: 'Vault save',
 		description: 'Vault に残す',
-		needsPicker: false
+		needsPicker: false,
+		aliases: ['save']
 	},
 	{
-		kind: 'later',
-		token: 'later',
-		label: 'Later',
+		kind: 'vault_later',
+		token: 'vault-later',
+		label: 'Vault later',
 		description: 'あとで読む',
-		needsPicker: false
+		needsPicker: false,
+		aliases: ['later']
 	},
 	{
 		kind: 'screen',
 		token: 'screen',
 		label: 'Screen',
 		description: '画面を見る',
+		needsPicker: false
+	},
+	{
+		kind: 'computer',
+		token: 'computer',
+		label: 'Computer',
+		description: '画面を見て操作する',
 		needsPicker: false
 	},
 	{
@@ -85,7 +98,23 @@ export const MENTION_CATALOG: MentionCatalogItem[] = [
 	}
 ];
 
-const TOKEN_RE = /(^|\s)[@＠](screen|save|later|files|calendar|web|query|app)\b/gi;
+const TOKEN_TO_KIND: Record<string, MentionKind> = {
+	'vault-query': 'vault_query',
+	query: 'vault_query',
+	'vault-save': 'vault_save',
+	save: 'vault_save',
+	'vault-later': 'vault_later',
+	later: 'vault_later',
+	screen: 'screen',
+	computer: 'computer',
+	app: 'app',
+	files: 'files',
+	calendar: 'calendar',
+	web: 'web'
+};
+
+const TOKEN_RE =
+	/(^|\s)[@＠](vault-query|vault-save|vault-later|computer|screen|save|later|files|calendar|web|query|app)\b/gi;
 
 export function mentionTrigger(
 	text: string,
@@ -100,26 +129,34 @@ export function mentionTrigger(
 export function filterCatalog(query: string): MentionCatalogItem[] {
 	const needle = query.trim().toLowerCase();
 	if (!needle) return MENTION_CATALOG;
-	return MENTION_CATALOG.filter(
-		(item) =>
-			item.token.startsWith(needle) ||
-			item.label.toLowerCase().startsWith(needle) ||
-			item.description.includes(needle)
-	);
+	return MENTION_CATALOG.filter((item) => catalogMatches(item, needle, query.trim()));
+}
+
+function catalogMatches(item: MentionCatalogItem, needle: string, raw: string): boolean {
+	if (item.token.startsWith(needle) || item.token.includes(`-${needle}`)) return true;
+	if (item.label.toLowerCase().startsWith(needle) || item.label.toLowerCase().includes(needle)) {
+		return true;
+	}
+	if (item.description.includes(raw) || item.description.toLowerCase().includes(needle)) {
+		return true;
+	}
+	return (item.aliases ?? []).some((alias) => alias.startsWith(needle));
 }
 
 export function chipLabel(mention: Mention): string {
 	switch (mention.kind) {
 		case 'app':
 			return mention.name.trim() || 'App';
-		case 'query':
-			return 'Query';
-		case 'save':
-			return 'Save';
-		case 'later':
-			return 'Later';
+		case 'vault_query':
+			return 'Vault query';
+		case 'vault_save':
+			return 'Vault save';
+		case 'vault_later':
+			return 'Vault later';
 		case 'screen':
 			return 'Screen';
+		case 'computer':
+			return 'Computer';
 		case 'files':
 			return 'Files';
 		case 'calendar':
@@ -134,7 +171,8 @@ export function displayPrompt(mentions: Mention[], text: string): string {
 		if (mention.kind === 'app' && mention.name.trim()) {
 			return `@app ${mention.name.trim()}`;
 		}
-		return `@${mention.kind}`;
+		const item = MENTION_CATALOG.find((entry) => entry.kind === mention.kind);
+		return `@${item?.token ?? mention.kind}`;
 	});
 	const trimmed = text.trim();
 	if (trimmed) tokens.push(trimmed);
@@ -145,8 +183,8 @@ export function takeInlineMentions(text: string): { prompt: string; mentions: Me
 	const mentions: Mention[] = [];
 	const prompt = text
 		.replace(TOKEN_RE, (_full, lead: string, token: string) => {
-			const kind = token.toLowerCase() as MentionKind;
-			mentions.push(mentionFromKind(kind));
+			const kind = TOKEN_TO_KIND[token.toLowerCase()];
+			if (kind) mentions.push(mentionFromKind(kind));
 			return lead;
 		})
 		.replace(/\s+/g, ' ')

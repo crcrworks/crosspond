@@ -21,16 +21,29 @@ describe('mentionTrigger', () => {
 describe('filterCatalog', () => {
 	it('matches token prefixes and Japanese descriptions', () => {
 		expect(filterCatalog('sc').map((item) => item.kind)).toEqual(['screen']);
-		expect(filterCatalog('画面').map((item) => item.kind)).toEqual(['screen']);
-		expect(filterCatalog('知識').map((item) => item.kind)).toEqual(['query']);
+		expect(filterCatalog('画面').map((item) => item.kind)).toEqual(['screen', 'computer']);
+		expect(filterCatalog('知識').map((item) => item.kind)).toEqual(['vault_query']);
+		expect(filterCatalog('操作').map((item) => item.kind)).toEqual(['computer']);
 		expect(filterCatalog('').length).toBeGreaterThan(3);
 	});
 
 	it('lets query attach without a note picker', () => {
 		const query = filterCatalog('query')[0];
-		expect(query?.kind).toBe('query');
+		expect(query?.kind).toBe('vault_query');
+		expect(query?.token).toBe('vault-query');
 		expect(query?.needsPicker).toBe(false);
 		expect(filterCatalog('app')[0]?.needsPicker).toBe(true);
+	});
+
+	it('groups vault mentions under vault and aliases', () => {
+		expect(filterCatalog('vault').map((item) => item.kind)).toEqual([
+			'vault_query',
+			'vault_save',
+			'vault_later'
+		]);
+		expect(filterCatalog('save').map((item) => item.kind)).toEqual(['vault_save']);
+		expect(filterCatalog('later').map((item) => item.kind)).toEqual(['vault_later']);
+		expect(filterCatalog('computer').map((item) => item.kind)).toEqual(['computer']);
 	});
 });
 
@@ -38,28 +51,39 @@ describe('takeInlineMentions', () => {
 	it('strips known tokens and keeps the instruction', () => {
 		const taken = takeInlineMentions('@query @screen VPN 調べて');
 		expect(taken.prompt).toBe('VPN 調べて');
-		expect(taken.mentions.map((item) => item.kind)).toEqual(['query', 'screen']);
+		expect(taken.mentions.map((item) => item.kind)).toEqual(['vault_query', 'screen']);
+	});
+
+	it('accepts hyphenated vault tokens and computer', () => {
+		const taken = takeInlineMentions('@vault-query @computer 進めて');
+		expect(taken.prompt).toBe('進めて');
+		expect(taken.mentions.map((item) => item.kind)).toEqual(['vault_query', 'computer']);
 	});
 });
 
 describe('displayPrompt', () => {
-	it('joins chips and leftover text', () => {
-		expect(displayPrompt([{ kind: 'screen' }, { kind: 'query' }], '進めて')).toBe(
-			'@screen @query 進めて'
-		);
+	it('joins chips and leftover text with hyphenated vault tokens', () => {
+		expect(
+			displayPrompt([{ kind: 'screen' }, { kind: 'vault_query' }], '進めて')
+		).toBe('@screen @vault-query 進めて');
+		expect(displayPrompt([{ kind: 'computer' }], '進めて')).toBe('@computer 進めて');
 	});
 });
 
 describe('mergeMentions', () => {
 	it('dedupes singleton kinds', () => {
-		const merged = mergeMentions([{ kind: 'query' }], [{ kind: 'query' }, { kind: 'save' }]);
-		expect(merged.map((item) => item.kind)).toEqual(['query', 'save']);
+		const merged = mergeMentions(
+			[{ kind: 'vault_query' }],
+			[{ kind: 'vault_query' }, { kind: 'vault_save' }]
+		);
+		expect(merged.map((item) => item.kind)).toEqual(['vault_query', 'vault_save']);
 	});
 });
 
 describe('chipLabel', () => {
-	it('labels query without a note title', () => {
-		expect(chipLabel({ kind: 'query' })).toBe('Query');
+	it('labels vault query without a note title', () => {
+		expect(chipLabel({ kind: 'vault_query' })).toBe('Vault query');
 		expect(chipLabel({ kind: 'screen' })).toBe('Screen');
+		expect(chipLabel({ kind: 'computer' })).toBe('Computer');
 	});
 });
