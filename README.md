@@ -18,10 +18,10 @@ That runs the Tauri 2 host (`crates/crosspond-app`) and the SvelteKit Vite serve
 Then:
 
 1. On first launch, Crosspond opens a welcome. Press **⌘,** (or **Open Settings**) and set Base URL, model, and API key. Optionally add an Exa API key for `web_search`. The Knowledge Vault path defaults to `~/Documents/Crosspond`; change it in Settings if you want a different folder.
-2. Click **Save**, then **Test Connection**, then **Continue**.
+2. Click **Save**, then **Test Connection**, then **Continue**. On **Crosspond is ready**, click **Open** (or press the launcher shortcut) to show the command bar.
 3. Grant Accessibility, Screen Recording, or Calendars later from Settings → Permissions, or when a tool needs them. Finder selection may also prompt for Automation.
 4. Select text in another app, or files in Finder — or leave Safari / Helium in front.
-5. Press **Option + Space** (change this in Settings). A badge should show the app and “Selected text: N chars” or “N selected files”.
+5. Press **Option + Space** (change this in Settings) to show the bar from any app. A badge should show the app and “Selected text: N chars” or “N selected files”.
 6. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in Safari, or ask to click something visible in a browser page. UI actions, shell, and external files show an **Allow** / **Cancel** card first unless the chip is **Auto**. After a task, the summary stays in the conversation and artifacts get **Show in Finder**; **History** opens a past conversation so you can follow up.
 
 **Escape** or **Stop** cancels the whole task while it is running. Approval **Cancel** rejects only that action. Hiding the window keeps work running and keeps the conversation; press **New** to start fresh.
