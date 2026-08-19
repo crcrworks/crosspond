@@ -22,7 +22,10 @@ mod secret;
 mod status;
 
 pub use command::{ApprovalId, RuntimeCommand, StartTaskRequest};
-pub use config::{AppConfig, ConfigError, ConfigStore, FileConfigStore, ProviderKind};
+pub use config::{
+    AppConfig, ConfigError, ConfigStore, FileConfigStore, ProviderKind, default_vault_path,
+    parse_vault_path_input,
+};
 pub use context::{
     AppContext, ContextCapsule, ContextCollector, MAX_AMBIENT_TEXT_CHARS, NullContextCollector,
     StagedInput, WindowContext,

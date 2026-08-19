@@ -36,7 +36,7 @@ Markdown remains the source of truth. Crosspond keeps a disposable SQLite FTS5 c
 
 ## Knowledge Vault Phase 1
 
-Crosspond can open a user-chosen Obsidian-compatible vault and write normal Markdown notes with YAML frontmatter and `[[wikilinks]]`. Opening a vault creates `_system/Schema.md`, `Index.md`, and `Log.md` if they are missing. The vault path is `config.json` `vault_path`, not a folder under `~/.crosspond`.
+Crosspond can open a user-chosen Obsidian-compatible vault and write normal Markdown notes with YAML frontmatter and `[[wikilinks]]`. Opening a vault creates `_system/Schema.md`, `Index.md`, and `Log.md` if they are missing. The vault path is `config.json` `vault_path`, set from Settings (default `~/Documents/Crosspond`), not a folder under `~/.crosspond`.
 
 ## Knowledge Vault Phase 0
 

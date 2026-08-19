@@ -55,6 +55,8 @@ export type StartTaskResult = {
 export type SettingsView = {
 	base_url: string;
 	model: string;
+	vault_path: string;
+	default_vault_path: string;
 	provider_key_stored: boolean;
 	exa_key_stored: boolean;
 	permissions: {
