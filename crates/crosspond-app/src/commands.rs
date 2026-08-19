@@ -2,11 +2,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crosspond_core::{
-    AppConfig, ApprovalId, ComputerApprovalMode, ConversationId, ConversationView, HotkeyView,
-    LauncherHotkey, MISSING_API_KEY_MESSAGE, Mention, Receipt, RuntimeCommand, SecretKey,
-    SecretString, StartTaskRequest, TaskId, conversation_artifact_path, default_tasks_root,
-    default_vault_path, history_group_label, history_title, list_recent_tasks,
-    open_conversation as load_conversation, parse_vault_path_input, provider_key_is_set,
+    AppConfig, ApprovalId, CHATGPT_SOURCE, ComputerApprovalMode, ConversationId, ConversationView,
+    DEFAULT_CHATGPT_MODEL, DEFAULT_COMPAT_ID, DEFAULT_COMPAT_MODEL, HotkeyView, LauncherHotkey,
+    ListedModel, MISSING_API_KEY_MESSAGE, MISSING_CHATGPT_MESSAGE, Mention, ReasoningEffort,
+    Receipt, RuntimeCommand, SecretChatGptTokenStore, SecretKey, SecretString, SelectedModel,
+    StartTaskRequest, TOKEN_URL, TaskId, conversation_artifact_path, default_tasks_root,
+    default_vault_path, ensure_model, fallback_chatgpt_models, fallback_compat_models,
+    fetch_chatgpt_models, fetch_compat_models, history_group_label, history_title,
+    list_recent_tasks, load_chatgpt_tokens, open_conversation as load_conversation,
+    parse_vault_path_input, provider_is_ready, refresh_chatgpt_session, selected_provider_is_ready,
 };
 use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
 use serde::Serialize;
@@ -16,6 +20,12 @@ use tauri_plugin_opener::OpenerExt;
 use crate::launcher;
 use crate::state::AppState;
 
+#[derive(Serialize, Clone)]
+pub struct SelectedView {
+    pub source: String,
+    pub model: String,
+}
+
 #[derive(Serialize)]
 pub struct Bootstrap {
     pub needs_onboarding: bool,
@@ -23,19 +33,52 @@ pub struct Bootstrap {
     pub launcher_hotkey: HotkeyView,
     pub badges: Vec<String>,
     pub visible: bool,
+    pub selected: SelectedView,
+    pub reasoning_effort: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CompatEndpointView {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub key_stored: bool,
 }
 
 #[derive(Serialize)]
 pub struct SettingsView {
-    pub base_url: String,
-    pub model: String,
+    pub openai_compat: Vec<CompatEndpointView>,
+    pub selected: SelectedView,
+    pub reasoning_effort: String,
     pub vault_path: String,
     pub default_vault_path: String,
-    pub provider_key_stored: bool,
+    pub chatgpt_signed_in: bool,
+    pub provider_ready: bool,
+    pub selected_ready: bool,
     pub exa_key_stored: bool,
     pub permissions: PermissionSnapshot,
     pub computer_approval: ComputerApprovalMode,
     pub launcher_hotkey: HotkeyView,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ListedModelView {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ModelGroupView {
+    pub source: String,
+    pub label: String,
+    pub models: Vec<ListedModelView>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ModelsCatalog {
+    pub groups: Vec<ModelGroupView>,
+    pub selected: SelectedView,
+    pub reasoning_effort: String,
 }
 
 #[derive(Serialize)]
@@ -54,11 +97,13 @@ pub fn bootstrap(state: State<AppState>) -> Bootstrap {
     let inner = state.lock_inner();
     let config = state.config.load().unwrap_or_default();
     Bootstrap {
-        needs_onboarding: !provider_key_is_set(&*state.secrets),
+        needs_onboarding: !provider_is_ready(&config, &*state.secrets),
         computer_approval: config.computer_approval,
         launcher_hotkey: config.launcher_hotkey.view(),
         badges: inner.ambient.badge_lines(),
         visible: inner.visible,
+        selected: selected_view(&config),
+        reasoning_effort: config.reasoning_effort.as_str().into(),
     }
 }
 
@@ -80,8 +125,13 @@ pub fn start_task(
     if prompt.is_empty() && mentions.is_empty() {
         return Err("prompt is empty".into());
     }
-    if !provider_key_is_set(&*state.secrets) {
-        return Err(MISSING_API_KEY_MESSAGE.into());
+    let config = state.config.load().unwrap_or_default();
+    if !selected_provider_is_ready(&config, &*state.secrets) {
+        return Err(if config.selected.is_chatgpt() {
+            MISSING_CHATGPT_MESSAGE.into()
+        } else {
+            MISSING_API_KEY_MESSAGE.into()
+        });
     }
     let task_id = TaskId::new();
     let mut inner = state.lock_inner();
@@ -160,8 +210,8 @@ pub fn open_settings(app: AppHandle) -> Result<(), String> {
     }
     WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("/settings".into()))
         .title("Settings")
-        .inner_size(480.0, 640.0)
-        .min_inner_size(400.0, 480.0)
+        .inner_size(520.0, 720.0)
+        .min_inner_size(420.0, 520.0)
         .resizable(true)
         .on_new_window(|url, _| {
             crate::navigation::handle_new_window(&url);
@@ -174,11 +224,14 @@ pub fn open_settings(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn load_settings(state: State<AppState>) -> SettingsView {
+    settings_view(&state)
+}
+
+fn settings_view(state: &AppState) -> SettingsView {
     let loaded = state.config.load().unwrap_or_default();
-    let provider_key_stored = provider_key_is_set(&*state.secrets);
     let exa_key_stored = state
         .secrets
-        .get(&SecretKey::EXA_API_KEY)
+        .get(&SecretKey::exa_api_key())
         .ok()
         .flatten()
         .is_some_and(|key| !key.is_empty());
@@ -187,12 +240,25 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
         .unwrap_or_else(default_vault_path)
         .display()
         .to_string();
+    let chatgpt_signed_in = crosspond_core::chatgpt_oauth_is_set(&*state.secrets);
     SettingsView {
-        base_url: loaded.base_url,
-        model: loaded.model,
+        openai_compat: loaded
+            .openai_compat
+            .iter()
+            .map(|endpoint| CompatEndpointView {
+                id: endpoint.id.clone(),
+                name: endpoint.name.clone(),
+                base_url: endpoint.base_url.clone(),
+                key_stored: crosspond_core::compat_key_is_set(&endpoint.id, &*state.secrets),
+            })
+            .collect(),
+        selected: selected_view(&loaded),
+        reasoning_effort: loaded.reasoning_effort.as_str().into(),
         vault_path,
         default_vault_path: default_vault_path().display().to_string(),
-        provider_key_stored,
+        chatgpt_signed_in,
+        provider_ready: provider_is_ready(&loaded, &*state.secrets),
+        selected_ready: selected_provider_is_ready(&loaded, &*state.secrets),
         exa_key_stored,
         permissions: PermissionSnapshot::current(),
         computer_approval: loaded.computer_approval,
@@ -200,29 +266,221 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
     }
 }
 
+fn selected_view(config: &AppConfig) -> SelectedView {
+    SelectedView {
+        source: config.selected.source.clone(),
+        model: config.selected.model.clone(),
+    }
+}
+
+fn save_loaded_config(
+    app: &AppHandle,
+    state: &AppState,
+    mut config: AppConfig,
+) -> Result<(), String> {
+    config.normalize();
+    state.config.save(&config).map_err(|err| err.to_string())?;
+    crate::oauth::bump_models(app, state);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn save_config(
-    base_url: String,
-    model: String,
     vault_path: String,
+    app: AppHandle,
     state: State<AppState>,
 ) -> Result<(), String> {
     let mut config = state.config.load().unwrap_or_default();
-    let defaults = AppConfig::default();
-    config.base_url = if base_url.trim().is_empty() {
-        defaults.base_url
+    config.vault_path = Some(parse_vault_path_input(&vault_path));
+    save_loaded_config(&app, &state, config)?;
+    state.commands.send(RuntimeCommand::ReloadKnowledge);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_compat(
+    id: String,
+    name: String,
+    base_url: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<SettingsView, String> {
+    let mut config = state.config.load().unwrap_or_default();
+    let id = crosspond_core::sanitize_compat_id(&id);
+    let Some(endpoint) = config
+        .openai_compat
+        .iter_mut()
+        .find(|endpoint| endpoint.id == id)
+    else {
+        return Err("Unknown OpenAI Compatible endpoint.".into());
+    };
+    if !name.trim().is_empty() {
+        endpoint.name = name.trim().to_string();
+    }
+    endpoint.base_url = if base_url.trim().is_empty() {
+        "https://api.openai.com/v1".into()
     } else {
         base_url.trim().to_string()
     };
-    config.model = if model.trim().is_empty() {
-        defaults.model
+    save_loaded_config(&app, &state, config)?;
+    Ok(settings_view(&state))
+}
+
+#[tauri::command]
+pub fn add_compat(app: AppHandle, state: State<AppState>) -> Result<SettingsView, String> {
+    let mut config = state.config.load().unwrap_or_default();
+    config.add_compat();
+    save_loaded_config(&app, &state, config)?;
+    Ok(settings_view(&state))
+}
+
+#[tauri::command]
+pub fn delete_compat(
+    id: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<SettingsView, String> {
+    let mut config = state.config.load().unwrap_or_default();
+    if !config.remove_compat(&id) {
+        return Err("Keep at least one OpenAI Compatible endpoint.".into());
+    }
+    let _ = state.secrets.delete(&SecretKey::provider_api_key_for(&id));
+    save_loaded_config(&app, &state, config)?;
+    Ok(settings_view(&state))
+}
+
+#[tauri::command]
+pub fn save_selected(
+    source: String,
+    model: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<SelectedView, String> {
+    let mut config = state.config.load().unwrap_or_default();
+    let model = if model.trim().is_empty() {
+        if source == CHATGPT_SOURCE {
+            DEFAULT_CHATGPT_MODEL.to_string()
+        } else {
+            DEFAULT_COMPAT_MODEL.to_string()
+        }
     } else {
         model.trim().to_string()
     };
-    config.vault_path = Some(parse_vault_path_input(&vault_path));
-    state.config.save(&config).map_err(|err| err.to_string())?;
-    state.commands.send(RuntimeCommand::ReloadKnowledge);
-    Ok(())
+    if source == CHATGPT_SOURCE {
+        config.selected = SelectedModel::chatgpt(model);
+    } else if config.compat(&source).is_some() {
+        config.selected = SelectedModel::compat(source, model);
+    } else {
+        return Err("Unknown model source.".into());
+    }
+    let selected = selected_view(&config);
+    save_loaded_config(&app, &state, config)?;
+    Ok(selected)
+}
+
+#[tauri::command]
+pub fn save_effort(
+    effort: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<String, String> {
+    let mut config = state.config.load().unwrap_or_default();
+    config.reasoning_effort = ReasoningEffort::parse(&effort);
+    let stored = config.reasoning_effort.as_str().to_string();
+    save_loaded_config(&app, &state, config)?;
+    Ok(stored)
+}
+
+const MODELS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[tauri::command]
+pub async fn list_models(state: State<'_, AppState>) -> Result<ModelsCatalog, String> {
+    let generation = state.models_generation();
+    {
+        let cache = state
+            .models_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if let Some(entry) = cache.as_ref()
+            && entry.generation == generation
+            && entry.at.elapsed() < MODELS_TTL
+        {
+            return Ok(entry.catalog.clone());
+        }
+    }
+    let config = state.config.load().unwrap_or_default();
+    let secrets = std::sync::Arc::clone(&state.secrets);
+    let catalog = collect_models_catalog(&config, std::sync::Arc::clone(&secrets)).await;
+    if state.models_generation() == generation {
+        *state
+            .models_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Some(crate::state::ModelsCacheEntry {
+            at: std::time::Instant::now(),
+            generation,
+            catalog: catalog.clone(),
+        });
+    }
+    Ok(catalog)
+}
+
+async fn collect_models_catalog(
+    config: &AppConfig,
+    secrets: std::sync::Arc<dyn crosspond_core::SecretStore>,
+) -> ModelsCatalog {
+    let mut groups = Vec::new();
+    if let Ok(Some(tokens)) = load_chatgpt_tokens(secrets.as_ref()) {
+        let store = SecretChatGptTokenStore::new(std::sync::Arc::clone(&secrets));
+        let tokens = refresh_chatgpt_session(&tokens, &store, TOKEN_URL)
+            .await
+            .unwrap_or(tokens);
+        let mut models = match fetch_chatgpt_models(&tokens).await {
+            Ok(models) if !models.is_empty() => models,
+            _ => fallback_chatgpt_models(),
+        };
+        if config.selected.is_chatgpt() {
+            ensure_model(&mut models, &config.selected.model);
+        }
+        groups.push(model_group(CHATGPT_SOURCE, "ChatGPT", models));
+    }
+    for endpoint in &config.openai_compat {
+        let mut models = if let Some(key) = secrets
+            .get(&SecretKey::provider_api_key_for(&endpoint.id))
+            .ok()
+            .flatten()
+            .filter(|key| !key.is_empty())
+        {
+            match fetch_compat_models(&endpoint.base_url, key.expose()).await {
+                Ok(models) if !models.is_empty() => models,
+                _ => fallback_compat_models(),
+            }
+        } else {
+            fallback_compat_models()
+        };
+        if config.selected.source == endpoint.id {
+            ensure_model(&mut models, &config.selected.model);
+        }
+        groups.push(model_group(&endpoint.id, &endpoint.name, models));
+    }
+    ModelsCatalog {
+        groups,
+        selected: selected_view(config),
+        reasoning_effort: config.reasoning_effort.as_str().into(),
+    }
+}
+
+fn model_group(source: &str, label: &str, models: Vec<ListedModel>) -> ModelGroupView {
+    ModelGroupView {
+        source: source.into(),
+        label: label.into(),
+        models: models
+            .into_iter()
+            .map(|model| ListedModelView {
+                id: model.id,
+                label: model.label,
+            })
+            .collect(),
+    }
 }
 
 #[tauri::command]
@@ -293,25 +551,74 @@ fn on_main<T: Send + 'static>(
 }
 
 #[tauri::command]
-pub fn save_secret(kind: String, value: String, state: State<AppState>) -> Result<(), String> {
+pub fn save_secret(
+    kind: String,
+    value: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<(), String> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(());
     }
-    let key = match kind.as_str() {
-        "provider" => SecretKey::PROVIDER_API_KEY,
-        "exa" => SecretKey::EXA_API_KEY,
-        _ => return Err("unknown secret".into()),
-    };
+    let key = secret_key_for_kind(&kind)?;
     state
         .secrets
         .set(&key, &SecretString::new(value))
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    crate::oauth::bump_models(&app, &state);
+    Ok(())
+}
+
+fn secret_key_for_kind(kind: &str) -> Result<SecretKey, String> {
+    match kind {
+        "exa" => Ok(SecretKey::exa_api_key()),
+        "provider" => Ok(SecretKey::provider_api_key_for(DEFAULT_COMPAT_ID)),
+        other => {
+            if let Some(id) = other.strip_prefix("provider.") {
+                Ok(SecretKey::provider_api_key_for(id))
+            } else {
+                Err("unknown secret".into())
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub fn start_chatgpt_login(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<crate::oauth::ChatGptLoginStart, String> {
+    crate::oauth::start_login(&app, &state)
+}
+
+#[tauri::command]
+pub fn complete_chatgpt_login(
+    redirect: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<(), String> {
+    crate::oauth::complete_login(&app, &state, &redirect)
+}
+
+#[tauri::command]
+pub fn cancel_chatgpt_login(state: State<AppState>) {
+    crate::oauth::cancel_login(&state);
+}
+
+#[tauri::command]
+pub fn sign_out_chatgpt(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    crate::oauth::sign_out(&app, &state)
 }
 
 #[tauri::command]
 pub fn test_connection(state: State<AppState>) {
     state.commands.send(RuntimeCommand::TestConnection);
+}
+
+#[tauri::command]
+pub fn test_compat_connection(id: String, state: State<AppState>) {
+    state.commands.send(RuntimeCommand::TestCompat { id });
 }
 
 #[tauri::command]

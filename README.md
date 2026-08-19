@@ -2,7 +2,7 @@
 
 Command bar for your computer agent. macOS only.
 
-Phase 12 adds receipts in the launcher, recent task history, and first-launch onboarding on top of the Phase 11 Whole-Mac agent: retarget any app (`list_apps` / `open_app`), keyboard and scroll, `run_command` / `open_url` (Allow in Manual/AI; Auto runs them), EventKit `calendar_events`, and external file reads — plus earlier BYOK chat, workspace tools, ambient context, Accessibility, and screenshot/click.
+Phase 12 adds receipts in the launcher, recent task history, and first-launch onboarding on top of the Phase 11 Whole-Mac agent: retarget any app (`list_apps` / `open_app`), keyboard and scroll, `run_command` / `open_url` (Allow in Manual/AI; Auto runs them), EventKit `calendar_events`, and external file reads — plus earlier BYOK chat, optional ChatGPT Plus/Pro sign-in (Codex Responses; personal use), workspace tools, ambient context, Accessibility, and screenshot/click.
 
 ## Run
 
@@ -17,8 +17,8 @@ That runs the Tauri 2 host (`crates/crosspond-app`) and the SvelteKit Vite serve
 
 Then:
 
-1. On first launch, Crosspond opens a welcome. Press **⌘,** (or **Open Settings**) and set Base URL, model, and API key. Optionally add an Exa API key for `web_search`. The Knowledge Vault path defaults to `~/Documents/Crosspond`; change it in Settings if you want a different folder.
-2. Click **Save**, then **Test Connection**, then **Continue**. On **Crosspond is ready**, click **Open** (or press the launcher shortcut) to show the command bar.
+1. On first launch, Crosspond opens a welcome. Press **⌘,** (or **Open Settings**) and open the **AI** tab: sign in with ChatGPT Plus/Pro and/or add one or more OpenAI Compatible endpoints (name, Base URL, API key). You can use both at once. Optionally add an Exa API key on the **Search** tab. The Knowledge Vault path defaults to `~/Documents/Crosspond` (**Knowledge** tab).
+2. Click **Save** / **Test** on each provider, then **Continue**. On **Crosspond is ready**, click **Open** (or press the launcher shortcut) to show the command bar. Pick the model (and ChatGPT effort) under the launcher prompt. If port 1455 is already in use (often Codex CLI), paste the ChatGPT redirect URL to finish sign-in.
 3. Grant Accessibility, Screen Recording, or Calendars later from Settings → Permissions, or when a tool needs them. Finder selection may also prompt for Automation.
 4. Select text in another app, or files in Finder — or leave Safari / Helium in front.
 5. Press **Option + Space** (change this in Settings) to show the bar from any app. A badge should show the app and “Selected text: N chars” or “N selected files”.

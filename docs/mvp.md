@@ -48,7 +48,7 @@ Polish: a human-readable receipt after each task, recent task history, and first
 
 - **Receipt** — after a task, the launcher keeps the summary in the conversation and lists artifacts with **Show in Finder**. Receipts stay on disk as `receipt.json` (no secrets, calendar notes, command output, or typed text). Changed action lines are not shown in the launcher.
 - **History** — **History** (or ↑ when the input is empty) lists recent conversations from `~/.crosspond/tasks/`, grouped by `conversation_id`. Opening an item shows the same transcript as the live chat (user turns, work steps, commentary, receipt) and the follow-up field continues that thread. **New** still starts a blank session.
-- **Onboarding** — first launch with no API key shows a welcome and Settings. Do not prompt for Accessibility yet. After a key is saved: “Press Option + Space anywhere” (or whatever shortcut is set in Settings). That shortcut and **Open** reveal the command bar; they do not dismiss the window.
+- **Onboarding** — first launch with no provider ready (no Compatible API key, and not signed in with ChatGPT) shows a welcome and Settings. Do not prompt for Accessibility yet. After a key is saved or ChatGPT sign-in succeeds: “Press Option + Space anywhere” (or whatever shortcut is set in Settings). That shortcut and **Open** reveal the command bar; they do not dismiss the window. Settings is tabbed (General / AI / Knowledge / Search / Permissions). The AI tab can keep ChatGPT and several OpenAI Compatible endpoints at once; the launcher chooses the model (and Codex effort).
 - **Mentions** — type `@` (or `＠`) in the compact bar to attach `@vault-query` (search accumulated knowledge), `@vault-save` (ingest), `@vault-later` (unread Source), `@screen` (screenshot the ambient window), `@computer` (screenshot then operate the Mac with UI tools), `@app` (running apps from NSWorkspace), `@files`, `@calendar`, or `@web`. Mentions are optional; ambient context and the Knowledge Brief still run without them. The WebView only sees kinds and app names — not note bodies, paths, or screenshot bytes.
 
 Demo: first launch → Settings → Option + Space → do work → see the transcript → hide → Option + Space → History → open a past conversation and follow up.
@@ -61,4 +61,6 @@ Phase 11 Whole-Mac tools still apply (any app, keyboard/scroll, shell/URL, Event
 
 ## Non-goals for MVP
 
-Projects, multi-agent orchestration, plugin/MCP marketplace, cloud accounts, Windows/Linux, local LLM runtime, drag, scheduled agents, voice, exposing cua-driver’s full MCP catalog, `kill_app`.
+Projects, multi-agent orchestration, plugin/MCP marketplace, Crosspond-owned cloud accounts, Windows/Linux, local LLM runtime, drag, scheduled agents, voice, exposing cua-driver’s full MCP catalog, `kill_app`.
+
+Personal ChatGPT Plus/Pro sign-in is an exception to “cloud accounts”: it uses the same public OAuth client as Codex CLI (not an official third-party subscription API). Crosspond does not create its own user accounts, and must not resell or multiplex one ChatGPT login across users.
