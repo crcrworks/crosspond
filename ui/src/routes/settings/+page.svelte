@@ -76,6 +76,23 @@
 			<div class="text-sm text-[var(--muted)]">Launch Crosspond</div>
 			<div><kbd>Option</kbd> + <kbd>Space</kbd></div>
 		</div>
+		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
+			Knowledge
+		</div>
+		<label class="flex flex-col gap-1">
+			<span class="text-sm text-[var(--muted)]">Vault path</span>
+			<input
+				bind:value={vaultPath}
+				placeholder={settings?.default_vault_path ?? ''}
+				class="rounded-md border px-2 py-1 font-mono text-sm"
+				style:border-color="var(--border)"
+				style:background="var(--bg)"
+			/>
+		</label>
+		<div class="text-sm text-[var(--muted)]">
+			Obsidian-compatible folder. Empty uses {settings?.default_vault_path ?? '~/Documents/Crosspond'}.
+			Created if it does not exist.
+		</div>
 		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">AI</div>
 		<div class="flex flex-col gap-1">
 			<div class="text-sm text-[var(--muted)]">Provider</div>
@@ -131,23 +148,6 @@
 		</label>
 		<div class="text-sm text-[var(--muted)]">
 			Required for web_search. Free credits at https://dashboard.exa.ai/api-keys
-		</div>
-		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
-			Knowledge
-		</div>
-		<label class="flex flex-col gap-1">
-			<span class="text-sm text-[var(--muted)]">Vault path</span>
-			<input
-				bind:value={vaultPath}
-				placeholder={settings?.default_vault_path ?? ''}
-				class="rounded-md border px-2 py-1 font-mono text-sm"
-				style:border-color="var(--border)"
-				style:background="var(--bg)"
-			/>
-		</label>
-		<div class="text-sm text-[var(--muted)]">
-			Obsidian-compatible folder. Empty uses {settings?.default_vault_path ?? '~/Documents/Crosspond'}.
-			Created if it does not exist.
 		</div>
 		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
 			Permissions
