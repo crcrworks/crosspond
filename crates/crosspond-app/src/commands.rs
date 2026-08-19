@@ -178,14 +178,15 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
         .ok()
         .flatten()
         .is_some_and(|key| !key.is_empty());
+    let vault_path = loaded
+        .effective_vault_path()
+        .unwrap_or_else(default_vault_path)
+        .display()
+        .to_string();
     SettingsView {
         base_url: loaded.base_url,
         model: loaded.model,
-        vault_path: loaded
-            .effective_vault_path()
-            .unwrap_or_else(default_vault_path)
-            .display()
-            .to_string(),
+        vault_path,
         default_vault_path: default_vault_path().display().to_string(),
         provider_key_stored,
         exa_key_stored,
