@@ -80,11 +80,11 @@ pub fn host_from_url(url: &str) -> Option<String> {
     if url.is_empty() {
         return None;
     }
-    let rest = url
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(url)
-        .trim();
+    let (scheme, rest) = url.split_once("://")?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return None;
+    }
+    let rest = rest.trim();
     if rest.is_empty() {
         return None;
     }
@@ -103,11 +103,7 @@ pub fn host_from_url(url: &str) -> Option<String> {
         hostport
     };
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    if host.is_empty() || host == "about" || host == "chrome" || host == "edge" || host == "brave" {
-        None
-    } else {
-        Some(host)
-    }
+    if host.is_empty() { None } else { Some(host) }
 }
 
 pub fn normalize_host(host: &str) -> String {
