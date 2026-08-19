@@ -7,7 +7,7 @@ mod state;
 
 use std::sync::Arc;
 
-use crosspond_core::{FileConfigStore, spawn_runtime_with_tools};
+use crosspond_core::{ConfigStore, FileConfigStore, GlobalHotkeyService, spawn_runtime_with_tools};
 use crosspond_macos::{
     MacOsContextCollector, MacOsGlobalHotkey, MacOsKeychainSecretStore, macos_agent_backends,
 };
@@ -34,8 +34,15 @@ pub fn run() {
         )),
     );
 
-    let (hotkey, start_visible) = match MacOsGlobalHotkey::register_default() {
-        Ok(hotkey) => (Box::new(hotkey) as _, false),
+    let app_config = config.load().unwrap_or_default();
+    let (hotkey, start_visible) = match MacOsGlobalHotkey::new() {
+        Ok(mut hotkey) => match hotkey.set_hotkey(&app_config.launcher_hotkey) {
+            Ok(()) => (Box::new(hotkey) as _, false),
+            Err(err) => {
+                eprintln!("crosspond: {err}; showing the launcher without a hotkey");
+                (Box::new(hotkey) as _, true)
+            }
+        },
         Err(err) => {
             eprintln!("crosspond: {err}; showing the launcher without a hotkey");
             (Box::new(NoopHotkey) as _, true)
@@ -66,6 +73,9 @@ pub fn run() {
             commands::open_settings,
             commands::load_settings,
             commands::save_config,
+            commands::set_launcher_hotkey,
+            commands::pause_launcher_hotkey,
+            commands::resume_launcher_hotkey,
             commands::save_secret,
             commands::test_connection,
             commands::list_history,

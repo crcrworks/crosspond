@@ -52,6 +52,11 @@ export type StartTaskResult = {
 	conversation_id: string;
 };
 
+export type HotkeyView = {
+	spec: string;
+	tokens: string[];
+};
+
 export type SettingsView = {
 	base_url: string;
 	model: string;
@@ -65,11 +70,13 @@ export type SettingsView = {
 		calendars: boolean;
 	};
 	computer_approval: ComputerApproval;
+	launcher_hotkey: HotkeyView;
 };
 
 export type Bootstrap = {
 	needs_onboarding: boolean;
 	computer_approval: ComputerApproval;
+	launcher_hotkey: HotkeyView;
 	badges: string[];
 	visible: boolean;
 };
@@ -79,6 +86,7 @@ export type LauncherShown = {
 	onboarding: boolean;
 	ready: boolean;
 	visible: boolean;
+	launcher_hotkey: HotkeyView;
 };
 
 export type WindowState =
