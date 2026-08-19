@@ -1,6 +1,17 @@
 <script lang="ts">
 	import { APPROVAL_MODES, approvalLabel } from '$lib/tools';
+	import { listModels, saveEffort, saveSelected } from '$lib/api';
+	import { listen } from '@tauri-apps/api/event';
+	import { onMount } from 'svelte';
 	import { composerExtraHeight } from '$lib/launcher-size';
+	import {
+		CUSTOM_MODEL,
+		EFFORTS,
+		effortLabel,
+		isCustomModelOption,
+		modelOptionValue,
+		parseModelOption
+	} from '$lib/models';
 	import {
 		chipLabel,
 		filterCatalog,
@@ -9,7 +20,7 @@
 		type Mention,
 		type MentionCatalogItem
 	} from '$lib/mentions';
-	import type { ComputerApproval } from '$lib/types';
+	import type { ComputerApproval, ModelGroup, ReasoningEffort, SelectedModel } from '$lib/types';
 	import Chevron from './Chevron.svelte';
 	import Icon from './Icon.svelte';
 
@@ -20,6 +31,7 @@
 		value = $bindable(''),
 		textarea = $bindable<HTMLTextAreaElement | undefined>(undefined),
 		menuOpen = $bindable(false),
+		pickerOpen = $bindable(false),
 		mentionOpen = $bindable(false),
 		mentions = $bindable<Mention[]>([]),
 		placeholder,
@@ -38,6 +50,7 @@
 		value: string;
 		textarea?: HTMLTextAreaElement;
 		menuOpen: boolean;
+		pickerOpen: boolean;
 		mentionOpen: boolean;
 		mentions: Mention[];
 		placeholder: string;
@@ -54,7 +67,6 @@
 	} = $props();
 
 	let root: HTMLDivElement | undefined = $state();
-	let activeIndex = $state(0);
 	let mentionIndex = $state(0);
 	let stage = $state<PickerStage | null>(null);
 	let triggerStart = $state(0);
@@ -63,13 +75,121 @@
 	let appsLoading = $state(false);
 	let appsLoadId = 0;
 	let composing = $state(false);
+	let groups = $state<ModelGroup[]>([]);
+	let selected = $state<SelectedModel>({ source: 'default', model: 'gpt-4o-mini' });
+	let effort = $state<ReasoningEffort>('medium');
+	let customSource = $state<string | null>(null);
+	let customModel = $state('');
 	const docked = $derived(variant === 'docked');
 	const sendReady = $derived(canSubmit && (value.trim().length > 0 || mentions.length > 0));
-	const kindItems = $derived(filterCatalog(stage === 'kinds' ? stageQuery : ''));
+	const activeStage = $derived(mentionOpen ? stage : null);
+	const kindItems = $derived(filterCatalog(activeStage === 'kinds' ? stageQuery : ''));
 	const filteredApps = $derived(
 		appHits.filter((name) => name.toLowerCase().includes(stageQuery.trim().toLowerCase()))
 	);
-	const mentionCount = $derived(stage === 'kinds' ? kindItems.length : filteredApps.length);
+	const mentionCount = $derived(activeStage === 'kinds' ? kindItems.length : filteredApps.length);
+	const chatgptSelected = $derived(selected.source === 'chatgpt');
+	const modelSelectValue = $derived(modelOptionValue(selected.source, selected.model));
+	const showCustom = $derived(pickerOpen && customSource !== null);
+	const selectedInList = $derived(
+		groups.some(
+			(group) =>
+				group.source === selected.source &&
+				group.models.some((model) => model.id === selected.model)
+		)
+	);
+	let pendingSaves = 0;
+
+	function closePickers() {
+		customSource = null;
+		pickerOpen = false;
+	}
+
+	async function refreshModels() {
+		try {
+			const catalog = await listModels();
+			groups = catalog.groups;
+			if (pendingSaves === 0) {
+				selected = catalog.selected;
+				effort = catalog.reasoning_effort;
+			}
+		} catch {
+			groups = [];
+		}
+	}
+
+	async function chooseModel(source: string, model: string) {
+		closePickers();
+		pendingSaves += 1;
+		selected = { source, model };
+		try {
+			selected = await saveSelected(source, model);
+		} catch {
+			/* keep local selection */
+		} finally {
+			pendingSaves -= 1;
+		}
+	}
+
+	async function commitCustom() {
+		const model = customModel.trim();
+		const source = customSource;
+		if (!model || !source) {
+			closePickers();
+			return;
+		}
+		await chooseModel(source, model);
+	}
+
+	async function chooseEffort(next: ReasoningEffort) {
+		if (!chatgptSelected) return;
+		pendingSaves += 1;
+		effort = next;
+		try {
+			effort = (await saveEffort(next)) as ReasoningEffort;
+		} catch {
+			/* keep local */
+		} finally {
+			pendingSaves -= 1;
+		}
+	}
+
+	function onModelActivate() {
+		customSource = null;
+		pickerOpen = true;
+		closeMentions();
+		menuOpen = false;
+	}
+
+	function onModelChange(event: Event) {
+		const value = (event.currentTarget as HTMLSelectElement).value;
+		const parsed = parseModelOption(value);
+		if (isCustomModelOption(parsed.model)) {
+			customSource = parsed.source;
+			customModel = selected.source === parsed.source ? selected.model : '';
+			pickerOpen = true;
+			return;
+		}
+		void chooseModel(parsed.source, parsed.model);
+	}
+
+	function onEffortChange(event: Event) {
+		void chooseEffort((event.currentTarget as HTMLSelectElement).value as ReasoningEffort);
+	}
+
+	function onApprovalChange(event: Event) {
+		const mode = (event.currentTarget as HTMLSelectElement).value as ComputerApproval;
+		if (mode !== approval) onapproval(mode);
+	}
+
+	function onPickerBlur() {
+		if (customSource !== null) return;
+		pickerOpen = false;
+	}
+
+	function focusCustom(node: HTMLInputElement) {
+		queueMicrotask(() => node.focus());
+	}
 
 	function captureRoot(node: HTMLDivElement) {
 		root = node;
@@ -103,6 +223,7 @@
 
 	function openKinds(start: number, query: string) {
 		menuOpen = false;
+		closePickers();
 		stage = 'kinds';
 		triggerStart = start;
 		stageQuery = query;
@@ -112,7 +233,7 @@
 
 	function syncTriggerFromValue() {
 		if (composing) return;
-		if (stage === 'app') return;
+		if (activeStage === 'app') return;
 		const cursor = textarea?.selectionStart ?? value.length;
 		const trigger = mentionTrigger(value, cursor);
 		if (!trigger) {
@@ -147,15 +268,14 @@
 	}
 
 	async function loadApps() {
-		if (appsLoading) return;
 		const id = (appsLoadId += 1);
 		appsLoading = true;
 		try {
 			const names = await onlistapps();
-			if (id !== appsLoadId) return;
+			if (id !== appsLoadId || !mentionOpen) return;
 			appHits = names;
 		} catch {
-			if (id !== appsLoadId) return;
+			if (id !== appsLoadId || !mentionOpen) return;
 			appHits = [];
 		} finally {
 			if (id === appsLoadId) appsLoading = false;
@@ -177,12 +297,12 @@
 	}
 
 	function selectActiveMention() {
-		if (stage === 'kinds') {
+		if (activeStage === 'kinds') {
 			const item = kindItems[mentionIndex];
 			if (item) selectKind(item);
 			return;
 		}
-		if (stage === 'app') {
+		if (activeStage === 'app') {
 			const name = filteredApps[mentionIndex] ?? stageQuery.trim();
 			if (name) addMention({ kind: 'app', name });
 		}
@@ -222,7 +342,7 @@
 
 	function onPromptInput() {
 		resize();
-		if (stage === 'app') {
+		if (activeStage === 'app') {
 			const cursor = textarea?.selectionStart ?? value.length;
 			stageQuery = value.slice(triggerStart, cursor);
 			return;
@@ -230,58 +350,15 @@
 		syncTriggerFromValue();
 	}
 
-	function openMenu() {
-		closeMentions();
-		activeIndex = Math.max(0, APPROVAL_MODES.indexOf(approval));
-		menuOpen = true;
-	}
-
-	function closeMenu() {
-		menuOpen = false;
-	}
-
-	function toggleMenu(event: MouseEvent) {
-		event.preventDefault();
-		event.stopPropagation();
-		if (menuOpen) closeMenu();
-		else openMenu();
-	}
-
-	function selectMode(mode: ComputerApproval) {
-		closeMenu();
-		if (mode !== approval) onapproval(mode);
-	}
-
 	function onWindowPointerDown(event: PointerEvent) {
 		if (!root) return;
 		if (root.contains(event.target as Node)) return;
-		closeMenu();
 		closeMentions();
-	}
-
-	function onModeKey(event: KeyboardEvent) {
-		if (event.key === 'Escape' && menuOpen) {
-			event.preventDefault();
-			closeMenu();
+		if (customSource !== null) {
+			void commitCustom();
 			return;
 		}
-		if (!menuOpen && (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ')) {
-			event.preventDefault();
-			openMenu();
-			return;
-		}
-		if (!menuOpen) return;
-		if (event.key === 'ArrowDown') {
-			event.preventDefault();
-			activeIndex = (activeIndex + 1) % APPROVAL_MODES.length;
-		} else if (event.key === 'ArrowUp') {
-			event.preventDefault();
-			activeIndex = (activeIndex - 1 + APPROVAL_MODES.length) % APPROVAL_MODES.length;
-		} else if (event.key === 'Enter' || event.key === ' ') {
-			event.preventDefault();
-			const mode = APPROVAL_MODES[activeIndex];
-			if (mode) selectMode(mode);
-		}
+		closePickers();
 	}
 
 	function onAction() {
@@ -290,18 +367,55 @@
 		else onsubmit();
 	}
 
-	$effect(() => {
-		if (!mentionOpen && stage !== null) {
-			appsLoadId += 1;
-			stage = null;
-			stageQuery = '';
-			appHits = [];
-			appsLoading = false;
-		}
+	onMount(() => {
+		void refreshModels();
+		let unlistenChanged: (() => void) | undefined;
+		let unlistenLogin: (() => void) | undefined;
+		let unlistenShown: (() => void) | undefined;
+		void listen('models-changed', () => {
+			void refreshModels();
+		}).then((fn) => {
+			unlistenChanged = fn;
+		});
+		void listen<{ ok: boolean }>('chatgpt-login', (event) => {
+			if (event.payload.ok) void refreshModels();
+		}).then((fn) => {
+			unlistenLogin = fn;
+		});
+		void listen('launcher-shown', () => {
+			void refreshModels();
+		}).then((fn) => {
+			unlistenShown = fn;
+		});
+		return () => {
+			unlistenChanged?.();
+			unlistenLogin?.();
+			unlistenShown?.();
+		};
 	});
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
+
+{#snippet approvalPicker()}
+	<div class="prompt-mode-wrap picker-native">
+		<select
+			class="prompt-mode picker-select picker-approval"
+			aria-label="Computer approval: {approvalLabel(approval)}"
+			value={approval}
+			onfocus={() => (menuOpen = true)}
+			onblur={() => (menuOpen = false)}
+			onchange={onApprovalChange}
+		>
+			{#each APPROVAL_MODES as mode (mode)}
+				<option value={mode}>{approvalLabel(mode)}</option>
+			{/each}
+		</select>
+		<span class="picker-caret">
+			<Chevron expanded />
+		</span>
+	</div>
+{/snippet}
 
 <div {@attach captureRoot} class={['prompt', variant]} data-tauri-drag-region="false">
 	<div class="prompt-stack">
@@ -342,38 +456,87 @@
 				}}
 			></textarea>
 		</label>
-	</div>
-	<div class="prompt-tools">
-		<div class="prompt-mode-wrap">
-			<button
-				type="button"
-				class="prompt-mode"
-				aria-haspopup="menu"
-				aria-expanded={menuOpen}
-				aria-label="Computer approval: {approvalLabel(approval)}"
-				onclick={toggleMenu}
-				onkeydown={onModeKey}
-			>
-				<span>{approvalLabel(approval)}</span>
-				<Chevron expanded />
-			</button>
-			{#if menuOpen}
-				<div class={['prompt-menu', docked ? 'up' : 'down']} role="menu" aria-label="Computer approval">
-					{#each APPROVAL_MODES as mode, index (mode)}
-						<button
-							type="button"
-							class={['prompt-option', { active: index === activeIndex, selected: mode === approval }]}
-							role="menuitem"
-							onpointerenter={() => (activeIndex = index)}
-							onclick={() => selectMode(mode)}
-						>
-							{approvalLabel(mode)}
-						</button>
-					{/each}
+		<div class="prompt-pickers">
+			<div class="prompt-mode-wrap picker-native">
+				{#if showCustom}
+					<input
+						{@attach focusCustom}
+						class="picker-custom-inline"
+						bind:value={customModel}
+						placeholder="Model id"
+						aria-label="Custom model"
+						onkeydown={(event) => {
+							if (event.key === 'Enter') {
+								event.preventDefault();
+								void commitCustom();
+							}
+							if (event.key === 'Escape') {
+								event.preventDefault();
+								closePickers();
+							}
+						}}
+						onblur={() => {
+							if (customModel.trim()) void commitCustom();
+							else closePickers();
+						}}
+					/>
+				{:else}
+					<select
+						class="prompt-mode picker-select"
+						aria-label="Model {selected.model}"
+						value={modelSelectValue}
+						onfocus={onModelActivate}
+						onmousedown={onModelActivate}
+						onblur={onPickerBlur}
+						onchange={onModelChange}
+					>
+						{#if !selectedInList}
+							<option value={modelSelectValue}>{selected.model || 'Model'}</option>
+						{/if}
+						{#each groups as group (group.source)}
+							<optgroup label={group.label}>
+								{#each group.models as model (group.source + model.id)}
+									<option value={modelOptionValue(group.source, model.id)}>{model.label}</option>
+								{/each}
+								<option value={modelOptionValue(group.source, CUSTOM_MODEL)}>Custom…</option>
+							</optgroup>
+						{/each}
+					</select>
+					<span class="picker-caret">
+						<Chevron expanded />
+					</span>
+				{/if}
+			</div>
+			{#if chatgptSelected}
+				<div class="prompt-mode-wrap picker-native">
+					<select
+						class="prompt-mode picker-select picker-effort"
+						aria-label="Reasoning effort {effortLabel(effort)}"
+						title="Codex reasoning effort"
+						value={effort}
+						onfocus={() => (pickerOpen = true)}
+						onblur={onPickerBlur}
+						onchange={onEffortChange}
+					>
+						{#each EFFORTS as item (item)}
+							<option value={item}>{effortLabel(item)}</option>
+						{/each}
+					</select>
+					<span class="picker-caret">
+						<Chevron expanded />
+					</span>
+				</div>
+			{/if}
+			{#if !docked}
+				<div class="prompt-pickers-end">
+					{@render approvalPicker()}
 				</div>
 			{/if}
 		</div>
-		{#if docked}
+	</div>
+	{#if docked}
+		<div class="prompt-tools">
+			{@render approvalPicker()}
 			<button
 				type="button"
 				class={['prompt-action', busy && 'stop']}
@@ -387,15 +550,15 @@
 					<Icon src="/icons/arrow-up.svg" color="var(--button-primary-text)" size={14} />
 				{/if}
 			</button>
-		{/if}
-	</div>
+		</div>
+	{/if}
 	{#if mentionOpen}
 		<div
 			class={['prompt-menu', 'mention-menu', docked ? 'up' : 'down']}
 			role="listbox"
 			aria-label="Mentions"
 		>
-			{#if stage === 'kinds'}
+			{#if activeStage === 'kinds'}
 				{#each kindItems as item, index (item.kind)}
 					<button
 						type="button"
@@ -412,7 +575,7 @@
 				{#if kindItems.length === 0}
 					<div class="mention-empty">No matches</div>
 				{/if}
-			{:else if stage === 'app'}
+			{:else if activeStage === 'app'}
 				{#each filteredApps as name, index (name)}
 					<button
 						type="button"

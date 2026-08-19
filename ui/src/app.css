@@ -71,13 +71,8 @@ kbd {
 }
 
 .prompt-slot.seamless {
-	align-items: center;
-	padding: 8px 16px 14px;
-}
-
-.prompt-slot.seamless.fill {
-	flex: 1;
-	min-height: 0;
+	align-items: flex-start;
+	padding: 8px 12px 8px;
 }
 
 .prompt-slot.docked {
@@ -110,18 +105,20 @@ kbd {
 }
 
 .prompt.seamless {
-	align-items: center;
+	flex: 1 0 auto;
+	align-items: flex-start;
 	border-color: transparent;
 	background: transparent;
-	padding: 4px 0;
+	height: auto;
+	padding: 0;
+}
+
+.prompt.seamless .prompt-stack {
+	gap: 4px;
 }
 
 .prompt.docked {
-	align-items: center;
-}
-
-.prompt-slot.seamless.fill .prompt {
-	height: 100%;
+	align-items: flex-start;
 }
 
 .prompt:focus-within {
@@ -206,6 +203,7 @@ kbd {
 
 .prompt.seamless .prompt-main {
 	align-items: center;
+	padding: 6px 0;
 }
 
 .prompt-tools {
@@ -218,6 +216,101 @@ kbd {
 
 .prompt.seamless .prompt-tools {
 	margin-top: 0;
+}
+
+.prompt-pickers {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	gap: 2px;
+	width: 100%;
+}
+
+.prompt-pickers-end {
+	display: flex;
+	margin-left: auto;
+	align-items: center;
+}
+
+.picker-native {
+	display: inline-flex;
+	position: relative;
+	align-items: center;
+	border-radius: 6px;
+}
+
+.picker-native:hover,
+.picker-native:focus-within {
+	background: var(--tone-muted-bg);
+}
+
+.picker-native:hover .prompt-mode,
+.picker-native:focus-within .prompt-mode {
+	color: var(--text);
+}
+
+.picker-select {
+	max-width: 168px;
+	appearance: none;
+	-webkit-appearance: none;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding-right: 24px;
+}
+
+.picker-select.picker-effort,
+.picker-select.picker-approval {
+	max-width: 88px;
+}
+
+.picker-caret {
+	display: flex;
+	position: absolute;
+	top: 0;
+	right: 5px;
+	bottom: 0;
+	align-items: center;
+	pointer-events: none;
+}
+
+.picker-caret :global(.chevron) {
+	width: 10px;
+	height: 10px;
+	color: var(--muted);
+	transform: none;
+}
+
+.picker-native:hover .picker-caret :global(.chevron),
+.picker-native:focus-within .picker-caret :global(.chevron) {
+	color: var(--text);
+}
+
+.picker-caret :global(path) {
+	stroke-width: 1.1;
+}
+
+.prompt-mode.disabled,
+.prompt-mode:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.picker-native:has(:disabled) .picker-caret {
+	opacity: 0.45;
+}
+
+.picker-custom-inline {
+	width: 140px;
+	height: 20px;
+	border: 0;
+	border-radius: 6px;
+	background: var(--tone-muted-bg);
+	padding: 0 6px;
+	font: inherit;
+	font-size: 11px;
+	line-height: 20px;
+	color: var(--text);
 }
 
 .prompt-mode-wrap {
@@ -247,6 +340,11 @@ kbd {
 	color: var(--text);
 }
 
+.picker-native .prompt-mode:hover,
+.picker-native .prompt-mode[aria-expanded='true'] {
+	background: transparent;
+}
+
 .prompt-mode :global(.chevron) {
 	width: 12px;
 	height: 12px;
@@ -255,6 +353,26 @@ kbd {
 
 .prompt-mode[aria-expanded='true'] :global(.chevron) {
 	transform: rotate(180deg);
+}
+
+select.prompt-mode.picker-select {
+	display: inline-block;
+	background: transparent;
+	padding-right: 24px;
+}
+
+select.prompt-mode.picker-select:hover,
+select.prompt-mode.picker-select:focus {
+	background: transparent;
+	color: var(--text);
+	outline: none;
+}
+
+.prompt.seamless select.prompt-mode.picker-select {
+	height: 20px;
+	padding: 0 24px 0 6px;
+	font-size: 11px;
+	line-height: 20px;
 }
 
 .prompt-menu {

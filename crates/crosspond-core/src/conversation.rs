@@ -555,6 +555,20 @@ mod tests {
     }
 
     #[test]
+    fn session_json_omits_encrypted_reasoning() {
+        let messages = vec![
+            Message::assistant("Done.").with_encrypted_reasoning(Some("enc-secret-blob".into())),
+        ];
+        let persisted = sanitize_messages(&messages);
+        let json = serde_json::to_string(&persisted).unwrap();
+        assert!(!json.contains("enc-secret-blob"));
+        assert!(!json.contains("encrypted"));
+        assert_eq!(persisted[0].content, "Done.");
+        let restored = restore_messages(&persisted);
+        assert!(restored[0].encrypted_reasoning.is_none());
+    }
+
+    #[test]
     fn replay_builds_work_and_text_blocks() {
         let events = vec![
             json!({"type": "reasoning", "text": "plan", "duration_ms": 1200}),

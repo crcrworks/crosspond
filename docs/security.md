@@ -2,7 +2,7 @@
 
 ## Secrets
 
-API keys go to macOS Keychain via `SecretStore`. They must not appear in:
+API keys and ChatGPT OAuth tokens go to macOS Keychain via `SecretStore`. They must not appear in:
 
 - `config.json`
 - `.env`
@@ -14,9 +14,13 @@ API keys go to macOS Keychain via `SecretStore`. They must not appear in:
 
 The Keychain items use service `com.crosspond.app`:
 
-- `provider.api_key` — OpenAI-compatible provider key
+- `provider.api_key` — default OpenAI-compatible endpoint (`id: default`, including keys stored before multiple endpoints existed)
+- `provider.api_key.{id}` — additional Compatible endpoints
 - `exa.api_key` — Exa API key for `web_search`
-- `credential.{ref}` — one JSON `{"username","password"}` bundle per Knowledge Vault `credential_ref`. The model never sees the values. Save only overwrites a ref that already exists on a vault note (`provider.api_key` / `exa.api_key` cannot be overwritten this way).
+- `provider.chatgpt_oauth` — one JSON blob `{ access, refresh, expires_at, account_id }` for ChatGPT Plus/Pro. Written atomically so refresh cannot split access/refresh. `SecretString` must not derive `Debug`.
+- `credential.{ref}` — one JSON `{"username","password"}` bundle per Knowledge Vault `credential_ref`. The model never sees the values. Save only overwrites a ref that already exists on a vault note (`provider.api_key` / `exa.api_key` / `provider.chatgpt_oauth` cannot be overwritten this way).
+
+ChatGPT login reuses Codex CLI’s public OAuth client. It is not an official third-party subscription API. Use it for a single person’s Plus/Pro session; do not resell or share one login across users. The authorize redirect is `http://localhost:1455/auth/callback`. The localhost waiter ignores non-callback requests and requires a matching `state`; if port 1455 is busy, Settings falls back to pasting the full redirect URL. The WebView must never receive access tokens, refresh tokens, JWTs, or ChatGPT account ids — only `chatgpt_signed_in`, short status, and model ids/labels from Rust `list_models`. Codex encrypted reasoning stays in the in-memory session and must not be written to `events.jsonl`, `session.json`, receipts, logs, or `Debug`. History restore therefore cannot round-trip encrypted reasoning after a restart. `reasoning.effort` is Codex-only and must not be sent to Compatible Chat Completions servers.
 
 Provider HTTP errors shown in the UI are short status-based messages. Raw provider JSON is not dumped to the user or to logs.
 

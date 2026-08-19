@@ -73,6 +73,7 @@ pub enum AgentEvent {
         task_id: TaskId,
     },
     ConnectionTested {
+        source: String,
         ok: bool,
         message: String,
     },
@@ -114,5 +115,19 @@ mod tests {
         let text = json.to_string();
         assert!(!text.contains("hunter2"));
         assert!(!text.contains("labuser"));
+    }
+
+    #[test]
+    fn connection_tested_includes_source() {
+        let event = AgentEvent::ConnectionTested {
+            source: "chatgpt".into(),
+            ok: false,
+            message: "rejected".into(),
+        };
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "connection_tested");
+        assert_eq!(json["source"], "chatgpt");
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["message"], "rejected");
     }
 }

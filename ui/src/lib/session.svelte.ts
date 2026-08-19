@@ -116,12 +116,19 @@ export class LauncherSession {
 		this.bump();
 	}
 
+	finishOnboarding() {
+		if (this.overlay !== 'onboarding') return;
+		this.overlay = 'none';
+		this.onboardingHint = null;
+		this.bump();
+	}
+
 	applyShown(badges: string[], onboarding: boolean, ready: boolean, visible: boolean) {
 		this.visible = visible;
 		if (!visible) return;
 		this.badges = badges;
 		if (onboarding) this.enterOnboarding(ready);
-		else if (this.overlay === 'onboarding' && ready) this.onboardingReady = true;
+		else this.finishOnboarding();
 	}
 
 	applyEvent(event: AgentEvent) {

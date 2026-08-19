@@ -1,11 +1,19 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use crosspond_core::{
     CommandSender, ConfigStore, ContextCapsule, ContextCollector, ConversationId,
-    GlobalHotkeyService, SecretStore, TaskId,
+    GlobalHotkeyService, SecretStore, TaskId, provider_is_ready,
 };
+
+pub struct PendingChatGptLogin {
+    pub verifier: String,
+    pub state: String,
+    pub cancel: Arc<AtomicBool>,
+}
 
 pub struct AppState {
     pub commands: CommandSender,
@@ -14,7 +22,16 @@ pub struct AppState {
     pub collector: Arc<dyn ContextCollector>,
     pub hotkey: Mutex<Box<dyn GlobalHotkeyService>>,
     pub inner: Mutex<InnerState>,
+    pub pending_chatgpt: Mutex<Option<PendingChatGptLogin>>,
+    pub models_cache: Mutex<Option<ModelsCacheEntry>>,
+    pub models_generation: AtomicU64,
     _runtime: JoinHandle<()>,
+}
+
+pub struct ModelsCacheEntry {
+    pub at: Instant,
+    pub generation: u64,
+    pub catalog: crate::commands::ModelsCatalog,
 }
 
 pub struct InnerState {
@@ -26,6 +43,8 @@ pub struct InnerState {
     pub in_conversation: bool,
     pub compact: bool,
     pub composing: bool,
+    /// First-launch overlay is up. Hotkey should reveal the bar, not hide.
+    pub onboarding: bool,
     /// Latest launcher resize request. Older queued resizes are dropped.
     pub resize_seq: u64,
     /// Settings is capturing a new shortcut; ignore launcher toggles.
@@ -41,6 +60,7 @@ impl AppState {
         hotkey: Box<dyn GlobalHotkeyService>,
         runtime: JoinHandle<()>,
     ) -> Self {
+        let onboarding = !provider_is_ready(&config.load().unwrap_or_default(), &*secrets);
         Self {
             commands,
             config,
@@ -56,9 +76,13 @@ impl AppState {
                 in_conversation: false,
                 compact: true,
                 composing: false,
+                onboarding,
                 resize_seq: 0,
                 capturing_hotkey: false,
             }),
+            pending_chatgpt: Mutex::new(None),
+            models_cache: Mutex::new(None),
+            models_generation: AtomicU64::new(0),
             _runtime: runtime,
         }
     }
@@ -69,6 +93,24 @@ impl AppState {
 
     pub fn lock_hotkey(&self) -> std::sync::MutexGuard<'_, Box<dyn GlobalHotkeyService>> {
         self.hotkey.lock().unwrap_or_else(|err| err.into_inner())
+    }
+
+    pub fn lock_pending_chatgpt(&self) -> std::sync::MutexGuard<'_, Option<PendingChatGptLogin>> {
+        self.pending_chatgpt
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+    }
+
+    pub fn invalidate_models(&self) {
+        self.models_generation.fetch_add(1, Ordering::SeqCst);
+        *self
+            .models_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = None;
+    }
+
+    pub fn models_generation(&self) -> u64 {
+        self.models_generation.load(Ordering::SeqCst)
     }
 }
 
