@@ -63,7 +63,7 @@ fn persist_allowed_browser_host(store: &dyn ConfigStore, host: &str) {
 fn computer_approval_prompt(mode: ComputerApprovalMode) -> &'static str {
     match mode {
         ComputerApprovalMode::Auto => {
-            "All tools run without asking the user, including computer actions, shell, external files, and non-http URLs. A new website host still needs Allow once before browser tools can run there."
+            "All tools run without asking the user, including computer actions, shell, external files, non-http URLs, and browser tools on a new website host. Unknown hosts are not added to Allowed Sites; blocked hosts are still refused."
         }
         ComputerApprovalMode::Agent => {
             "For computer actions, set ask_user true when the action is irreversible, submits a form, sends a message, logs in, purchases, deletes, or you are unsure. Set ask_user false for routine navigation the user clearly requested. Omit ask_user only if you want the user asked. Shell, external files, and non-http URLs still require Allow."
@@ -1144,7 +1144,9 @@ impl Runtime {
                 BrowserHostDecision::Blocked(host) => {
                     return ApprovalOutcome::Rejected(format!("blocked site {host}"));
                 }
-                BrowserHostDecision::NeedsAllow(host) => {
+                BrowserHostDecision::NeedsAllow(host)
+                    if computer_approval != ComputerApprovalMode::Auto =>
+                {
                     let title = format!("Allow {host}");
                     let description = "The Chrome extension can read and operate this site. Page contents stay out of Settings, receipts, and logs.".into();
                     match self
@@ -1158,7 +1160,9 @@ impl Runtime {
                         other => return other,
                     }
                 }
-                BrowserHostDecision::Skip | BrowserHostDecision::Allowed => {}
+                BrowserHostDecision::NeedsAllow(_)
+                | BrowserHostDecision::Skip
+                | BrowserHostDecision::Allowed => {}
             }
         }
         let risk = risk_for_tool(&call.name, scope, input);
@@ -1624,9 +1628,9 @@ mod tests {
     use crate::secret::SecretString;
     use crate::secret::memory::MemorySecretStore;
     use crosspond_tools::{
-        AccessibilityBackend, AppBackend, CalendarBackend, InputBackend, Screenshot,
-        ScreenshotBackend, ToolError, computer_and_screenshot_registry, computer_registry,
-        register_shell_tools,
+        AccessibilityBackend, AppBackend, BrowserBackend, CalendarBackend, InputBackend,
+        Screenshot, ScreenshotBackend, ToolError, computer_and_screenshot_registry,
+        computer_and_screenshot_registry_with_browser, computer_registry, register_shell_tools,
     };
 
     fn echo_builder() -> ProviderBuilder {
@@ -1793,7 +1797,8 @@ mod tests {
         );
         assert!(prompt.contains("runs without asking"));
         assert!(prompt.contains("All tools run without asking"));
-        assert!(prompt.contains("new website host still needs Allow"));
+        assert!(prompt.contains("not added to Allowed Sites"));
+        assert!(!prompt.contains("still needs Allow"));
         assert!(!prompt.contains("user must Allow"));
     }
 
@@ -3540,6 +3545,146 @@ mod tests {
         join.await.unwrap();
     }
 
+    fn browser_snapshot_provider() -> ProviderBuilder {
+        Arc::new(|_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "browser_snapshot",
+                "{}".into(),
+                "I can see the page.",
+            ))
+        })
+    }
+
+    #[tokio::test]
+    async fn auto_browser_snapshot_skips_host_allow_and_does_not_persist() {
+        let snapshots = Arc::new(Mutex::new(0));
+        let tools = test_browser_registry(Arc::new(TestBrowser::note_com(Arc::clone(&snapshots))));
+        let (runtime, _tmp) = test_runtime(browser_snapshot_provider(), seeded_secrets(), tools);
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let config = Arc::clone(&runtime.config);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "read this page",
+            )))
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "auto mode must not prompt for a new website host"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert_eq!(*snapshots.lock().expect("snapshots"), 1);
+        assert!(
+            config.load().unwrap().browser_allowed_hosts.is_empty(),
+            "Auto must not add the host to Allowed Sites"
+        );
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auto_browser_snapshot_still_rejects_blocked_host() {
+        let snapshots = Arc::new(Mutex::new(0));
+        let tools = test_browser_registry(Arc::new(TestBrowser::note_com(Arc::clone(&snapshots))));
+        let (runtime, _tmp) = test_runtime(browser_snapshot_provider(), seeded_secrets(), tools);
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                browser_blocked_hosts: vec!["note.com".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        let config = Arc::clone(&runtime.config);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "read this page",
+            )))
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "blocked hosts must not prompt"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert_eq!(*snapshots.lock().expect("snapshots"), 0);
+        assert!(config.load().unwrap().browser_allowed_hosts.is_empty());
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_browser_snapshot_prompts_and_persists_host() {
+        let snapshots = Arc::new(Mutex::new(0));
+        let tools = test_browser_registry(Arc::new(TestBrowser::note_com(Arc::clone(&snapshots))));
+        let (runtime, _tmp) = test_runtime(browser_snapshot_provider(), seeded_secrets(), tools);
+        let config = Arc::clone(&runtime.config);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "read this page",
+            )))
+            .unwrap();
+
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired {
+                approval_id, title, ..
+            } => {
+                assert!(title.contains("note.com"));
+                command_tx
+                    .send(RuntimeCommand::Approve(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert_eq!(*snapshots.lock().expect("snapshots"), 1);
+        assert_eq!(
+            config.load().unwrap().browser_allowed_hosts,
+            vec!["note.com".to_string()]
+        );
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
     #[tokio::test]
     async fn manual_run_command_requires_approval() {
         let marker =
@@ -4128,6 +4273,98 @@ mod tests {
 
     fn test_computer_registry(ax: Arc<dyn AccessibilityBackend>) -> ToolRegistry {
         computer_registry(ax, Arc::new(TestApps))
+    }
+
+    fn test_browser_registry(browser: Arc<dyn BrowserBackend>) -> ToolRegistry {
+        computer_and_screenshot_registry_with_browser(
+            Arc::new(RecordingAx {
+                pressed: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(TestShot {
+                pids: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(TestApps),
+            Arc::new(TestInput),
+            Arc::new(TestCalendar),
+            browser,
+        )
+    }
+
+    struct TestBrowser {
+        host: String,
+        snapshots: Arc<Mutex<u32>>,
+    }
+
+    impl TestBrowser {
+        fn note_com(snapshots: Arc<Mutex<u32>>) -> Self {
+            Self {
+                host: "note.com".into(),
+                snapshots,
+            }
+        }
+    }
+
+    impl BrowserBackend for TestBrowser {
+        fn connected(&self) -> bool {
+            true
+        }
+
+        fn current_host(&self) -> Option<String> {
+            Some(self.host.clone())
+        }
+
+        fn tabs(&self) -> Result<String, ToolError> {
+            Ok(format!("1. Note — https://{}/ (active)", self.host))
+        }
+
+        fn snapshot(&self) -> Result<String, ToolError> {
+            *self.snapshots.lock().expect("snapshots") += 1;
+            Ok(format!(
+                "Page: Note\nURL: https://{}/\n\nheading \"Hello\" [a1f3-e1]\n",
+                self.host
+            ))
+        }
+
+        fn text(&self) -> Result<String, ToolError> {
+            Ok("Hello from note.com".into())
+        }
+
+        fn navigate(&self, action: &str, _url: Option<&str>) -> Result<String, ToolError> {
+            Ok(format!("Navigated {action}"))
+        }
+
+        fn click(&self, element_ref: &str) -> Result<String, ToolError> {
+            Ok(format!("Clicked {element_ref}"))
+        }
+
+        fn type_text(&self, element_ref: &str, _text: &str) -> Result<String, ToolError> {
+            Ok(format!("Typed into {element_ref}"))
+        }
+
+        fn fill(&self, element_ref: &str, _text: &str) -> Result<String, ToolError> {
+            Ok(format!("Filled {element_ref}"))
+        }
+
+        fn press_key(&self, key: &str) -> Result<String, ToolError> {
+            Ok(format!("Pressed {key}"))
+        }
+
+        fn scroll(
+            &self,
+            direction: &str,
+            amount: u32,
+            _element_ref: Option<&str>,
+        ) -> Result<String, ToolError> {
+            Ok(format!("Scrolled {direction} {amount}"))
+        }
+
+        fn select_option(&self, element_ref: &str, value: &str) -> Result<String, ToolError> {
+            Ok(format!("Selected {value} in {element_ref}"))
+        }
+
+        fn new_tab(&self, url: Option<&str>) -> Result<String, ToolError> {
+            Ok(format!("Opened tab {}", url.unwrap_or("about:blank")))
+        }
     }
 
     struct RecordingAx {

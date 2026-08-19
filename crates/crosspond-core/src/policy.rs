@@ -81,7 +81,12 @@ pub fn evaluate_with(
 ) -> PolicyDecision {
     match risk {
         RiskLevel::ReadOnly | RiskLevel::WorkspaceWrite => PolicyDecision::Allow,
-        RiskLevel::BrowserSite => PolicyDecision::RequireApproval,
+        RiskLevel::BrowserSite => match computer {
+            ComputerApprovalMode::Auto => PolicyDecision::Allow,
+            ComputerApprovalMode::Agent | ComputerApprovalMode::Manual => {
+                PolicyDecision::RequireApproval
+            }
+        },
         RiskLevel::ComputerAction => match computer {
             ComputerApprovalMode::Auto => PolicyDecision::Allow,
             ComputerApprovalMode::Manual => PolicyDecision::RequireApproval,
@@ -146,7 +151,8 @@ fn risk_for_tool_scope(name: &str, scope: PathScope) -> RiskLevel {
     }
 }
 
-/// First-visit site gate for Chromium tools. Independent of `computer_approval`.
+/// First-visit site gate for Chromium tools. The decision is independent of
+/// `computer_approval`; Auto skips the Allow card and must not persist the host.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BrowserHostDecision {
     Skip,
@@ -498,14 +504,14 @@ mod tests {
     }
 
     #[test]
-    fn browser_site_always_requires_approval() {
+    fn browser_site_requires_approval_except_auto() {
         assert_eq!(
             evaluate_with(
                 RiskLevel::BrowserSite,
                 ComputerApprovalMode::Auto,
                 AgentAsk::Unspecified
             ),
-            PolicyDecision::RequireApproval
+            PolicyDecision::Allow
         );
         assert_eq!(
             evaluate_with(
@@ -573,6 +579,30 @@ mod tests {
         assert_eq!(
             browser_host_decision("browser_snapshot", None, &[], &[]),
             BrowserHostDecision::Skip
+        );
+    }
+
+    #[test]
+    fn auto_still_reports_unknown_hosts_without_persisting_them() {
+        assert_eq!(
+            browser_host_decision("browser_snapshot", Some("note.com"), &[], &[]),
+            BrowserHostDecision::NeedsAllow("note.com".into())
+        );
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::BrowserSite,
+                ComputerApprovalMode::Auto,
+                AgentAsk::Unspecified
+            ),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::ComputerAction,
+                ComputerApprovalMode::Auto,
+                AgentAsk::Unspecified
+            ),
+            PolicyDecision::Allow
         );
     }
 }

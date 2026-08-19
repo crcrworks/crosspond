@@ -586,8 +586,9 @@
 				></textarea>
 			</label>
 			<div class="text-sm text-[var(--muted)]">
-				One host per line. A new site still needs Allow, even in Auto. Blocked hosts are refused.
-				Page contents are not shown here.
+				One host per line. Manual and AI ask once per new site, then save it here. Auto runs
+				without asking and does not add hosts. Blocked hosts are always refused. Page contents
+				are not shown here.
 			</div>
 			<Button label="Save" onclick={() => void onSaveBrowser()} variant="primary" />
 			{@render feedbackLine('browser')}

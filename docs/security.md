@@ -36,8 +36,8 @@ Calendar event notes/bodies may be returned to the model from `calendar_events`,
 | Risk | Default |
 | --- | --- |
 | Read-only (`list_apps`, `get_accessibility_snapshot`, `take_screenshot`, `browser_tabs`, `web_search`, `fetch_url`, `calendar_events`, scratch `read_file` / `list_directory`) | auto |
-| Browser snapshot/text on a host not in `browser_allowed_hosts` | Allow even in Auto, then persist the host |
-| Computer action (`open_app`, `focus_app`, `ui_press`, `ui_set_value`, `ui_click`, `ui_type`, `ui_hotkey`, `ui_scroll`, `browser_click`, `browser_fill`, `browser_type`, `browser_press_key`, `browser_scroll`, `browser_select`, `browser_navigate`, `browser_new_tab`) | `computer_approval`: Manual always asks; Auto never asks (except a new browser host); Agent asks unless the model sets `ask_user: false` |
+| Browser snapshot/text on a host not in `browser_allowed_hosts` | Manual/AI: Allow once, then persist the host. Auto: run without asking and do not persist |
+| Computer action (`open_app`, `focus_app`, `ui_press`, `ui_set_value`, `ui_click`, `ui_type`, `ui_hotkey`, `ui_scroll`, `browser_click`, `browser_fill`, `browser_type`, `browser_press_key`, `browser_scroll`, `browser_select`, `browser_navigate`, `browser_new_tab`) | `computer_approval`: Manual always asks; Auto never asks (unknown browser hosts are session-only and not added to Allowed Sites); Agent asks unless the model sets `ask_user: false` |
 | Scratch-space write | auto |
 | External read or write (`read_file` / `list_directory` / `write_file` / `create_directory` outside scratch) | approval, except Auto |
 | Shell (`run_command`) | approval, except Auto |
