@@ -50,8 +50,20 @@ export function loadSettings() {
 	return invoke<SettingsView>('load_settings');
 }
 
-export function saveConfig(baseUrl: string, model: string, vaultPath: string) {
-	return invoke('save_config', { baseUrl, model, vaultPath });
+export function saveConfig(
+	baseUrl: string,
+	model: string,
+	vaultPath: string,
+	browserAllowedHosts: string[] = [],
+	browserBlockedHosts: string[] = []
+) {
+	return invoke('save_config', {
+		baseUrl,
+		model,
+		vaultPath,
+		browserAllowedHosts,
+		browserBlockedHosts
+	});
 }
 
 export function setLauncherHotkey(spec: string) {

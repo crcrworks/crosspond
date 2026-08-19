@@ -108,7 +108,7 @@ pub fn mention_routing(mentions: &[Mention]) -> String {
             }
             Mention::Computer => {
                 lines.push(
-                    "- A screenshot of the user's frontmost window is attached. Look at that image, then operate the computer with get_accessibility_snapshot, take_screenshot, and UI tools (ui_press, ui_click, ui_type, ui_hotkey, ui_scroll) to complete the request. Do not only describe the screen."
+                    "- A screenshot of the user's frontmost window is attached. If the work is in Chrome, Arc, Brave, or Edge, use browser_snapshot and browser_* ref tools rather than Accessibility or screenshots. For native apps, operate with get_accessibility_snapshot, take_screenshot, and UI tools (ui_press, ui_click, ui_type, ui_hotkey, ui_scroll). Do not only describe the screen."
                         .into(),
                 );
             }
@@ -237,6 +237,7 @@ mod tests {
         assert!(text.contains("screenshot"));
         assert!(text.contains("ui_press"));
         assert!(text.contains("ui_click"));
+        assert!(text.contains("browser_snapshot"));
         assert!(text.contains("Do not only describe the screen"));
         let screen = mention_routing(&[Mention::Screen]);
         assert!(!screen.contains("ui_press"));

@@ -14,7 +14,7 @@ use crosspond_model::{
 };
 use crosspond_tools::{
     KnowledgeBackend, PathScope, ScratchReason, ScratchSpace, ToolContext, ToolRegistry,
-    classify_write_path, filesystem_registry,
+    classify_write_path, filesystem_registry, is_browser_tool, normalize_host, site_is_allowed,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -28,7 +28,8 @@ use crate::history::history_title;
 use crate::ids::{ConversationId, TaskId};
 use crate::mention::{self, Mention};
 use crate::policy::{
-    AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate_with, risk_for_tool,
+    AgentAsk, BrowserHostDecision, ComputerApprovalMode, PolicyDecision, RiskLevel,
+    browser_host_decision, evaluate_with, risk_for_tool,
 };
 use crate::receipt::{
     Receipt, append_event_log, receipt_action_line, tool_ui_summary, write_receipt, write_task_meta,
@@ -42,10 +43,25 @@ pub const MISSING_API_KEY_MESSAGE: &str =
 
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn persist_allowed_browser_host(store: &dyn ConfigStore, host: &str) {
+    let host = normalize_host(host);
+    if host.is_empty() {
+        return;
+    }
+    let Ok(mut config) = store.load() else {
+        return;
+    };
+    if site_is_allowed(&config.browser_allowed_hosts, &host) {
+        return;
+    }
+    config.browser_allowed_hosts.push(host);
+    let _ = store.save(&config);
+}
+
 fn computer_approval_prompt(mode: ComputerApprovalMode) -> &'static str {
     match mode {
         ComputerApprovalMode::Auto => {
-            "All tools run without asking the user, including computer actions, shell, external files, and non-http URLs."
+            "All tools run without asking the user, including computer actions, shell, external files, and non-http URLs. A new website host still needs Allow once before browser tools can run there."
         }
         ComputerApprovalMode::Agent => {
             "For computer actions, set ask_user true when the action is irreversible, submits a form, sends a message, logs in, purchases, deletes, or you are unsure. Set ask_user false for routine navigation the user clearly requested. Omit ask_user only if you want the user asked. Shell, external files, and non-http URLs still require Allow."
@@ -96,9 +112,10 @@ Routing:\n\
 - Public facts from the web → web_search / fetch_url. Never put selected text, calendar details, passwords, or private file contents into a web_search query.\n\
 - Another Mac app → list_apps / open_app (and optional app= on snapshot/screenshot/UI tools). Do not list_directory unless the task is about local files.\n\
 {knowledge_route}\
-- Labeled UI controls → get_accessibility_snapshot (pass app= if not the ambient frontmost app), then ui_press. Prefer ui_press over ui_click.\n\
-- Unlabeled UI → take_screenshot then ui_click with exact image pixels (origin top-left). Use stated width×height; do not normalize to 1000×1000 or use screen coordinates.\n\
-- Typing / shortcuts / scrolling → ui_type, ui_hotkey, ui_scroll after a snapshot of the target app.\n\
+- Chromium pages (Chrome, Arc, Brave, Edge) when the Crosspond extension is connected → browser_snapshot for a compact outline with refs such as a1f3-e2, then browser_click / browser_fill / browser_type / browser_press_key / browser_scroll / browser_select. Do not use get_accessibility_snapshot or take_screenshot for those tabs. If browser_* tools say the extension is not connected, tell the user to load it from Settings; do not fall back to Accessibility or screenshots for Chromium.\n\
+- Native Mac apps and Safari: labeled UI controls → get_accessibility_snapshot (pass app= if not the ambient frontmost app), then ui_press. Prefer ui_press over ui_click.\n\
+- Native unlabeled UI → take_screenshot then ui_click with exact image pixels (origin top-left). Use stated width×height; do not normalize to 1000×1000 or use screen coordinates.\n\
+- Typing / shortcuts / scrolling in native apps → ui_type, ui_hotkey, ui_scroll after a snapshot of the target app.\n\
 {shell_route}\
 ui_click returns a fresh post-click screenshot. Verify before another click; do not retry against an older image.\n\
 Click coordinates and node ids are only valid for the latest snapshot/screenshot.\n\
@@ -1076,6 +1093,35 @@ impl Runtime {
             .load()
             .map(|config| config.computer_approval)
             .unwrap_or_default();
+        if is_browser_tool(&call.name) {
+            let host = self.tools.target_host(&call.name, context, input);
+            let config = self.config.load().unwrap_or_default();
+            match browser_host_decision(
+                &call.name,
+                host.as_deref(),
+                &config.browser_allowed_hosts,
+                &config.browser_blocked_hosts,
+            ) {
+                BrowserHostDecision::Blocked(host) => {
+                    return ApprovalOutcome::Rejected(format!("blocked site {host}"));
+                }
+                BrowserHostDecision::NeedsAllow(host) => {
+                    let title = format!("Allow {host}");
+                    let description = "The Chrome extension can read and operate this site. Page contents stay out of Settings, receipts, and logs.".into();
+                    match self
+                        .prompt_tool_approval(task_id, task_dir, &call.name, title, description)
+                        .await
+                    {
+                        ApprovalOutcome::Allowed => {
+                            persist_allowed_browser_host(self.config.as_ref(), &host);
+                            return ApprovalOutcome::Allowed;
+                        }
+                        other => return other,
+                    }
+                }
+                BrowserHostDecision::Skip | BrowserHostDecision::Allowed => {}
+            }
+        }
         let risk = risk_for_tool(&call.name, scope, input);
         if evaluate_with(risk, computer_approval, AgentAsk::from_tool_input(input))
             != PolicyDecision::RequireApproval
@@ -1090,11 +1136,31 @@ impl Runtime {
             }
             return ApprovalOutcome::Allowed;
         }
-        let approval_id = ApprovalId::new();
         let (title, description) = self.tools.approval_prompt(&call.name, context, input);
+        match self
+            .prompt_tool_approval(task_id, task_dir, &call.name, title, description)
+            .await
+        {
+            ApprovalOutcome::Allowed => {
+                context.allow_external = true;
+                ApprovalOutcome::Allowed
+            }
+            other => other,
+        }
+    }
+
+    async fn prompt_tool_approval(
+        &mut self,
+        task_id: TaskId,
+        task_dir: &Path,
+        tool: &str,
+        title: String,
+        description: String,
+    ) -> ApprovalOutcome {
+        let approval_id = ApprovalId::new();
         append_event_log(
             task_dir,
-            json!({ "type": "approval_required", "tool": call.name }),
+            json!({ "type": "approval_required", "tool": tool }),
         );
         if self
             .events
@@ -1112,17 +1178,16 @@ impl Runtime {
             ApprovalWait::Approved => {
                 append_event_log(
                     task_dir,
-                    json!({ "type": "approval_granted", "tool": call.name }),
+                    json!({ "type": "approval_granted", "tool": tool }),
                 );
-                context.allow_external = true;
                 ApprovalOutcome::Allowed
             }
             ApprovalWait::Rejected => {
                 append_event_log(
                     task_dir,
-                    json!({ "type": "approval_rejected", "tool": call.name }),
+                    json!({ "type": "approval_rejected", "tool": tool }),
                 );
-                ApprovalOutcome::Rejected(format!("The user rejected tool `{}`.", call.name))
+                ApprovalOutcome::Rejected(format!("The user rejected tool `{tool}`."))
             }
             ApprovalWait::Cancelled { reset } => ApprovalOutcome::Cancelled { reset },
         }
@@ -1627,7 +1692,24 @@ mod tests {
         );
         assert!(prompt.contains("runs without asking"));
         assert!(prompt.contains("All tools run without asking"));
+        assert!(prompt.contains("new website host still needs Allow"));
         assert!(!prompt.contains("user must Allow"));
+    }
+
+    #[test]
+    fn system_prompt_routes_chromium_to_browser_tools() {
+        let prompt = system_prompt(
+            None,
+            &ContextCapsule::default(),
+            &[],
+            ComputerApprovalMode::Manual,
+            false,
+            "",
+            "",
+        );
+        assert!(prompt.contains("browser_snapshot"));
+        assert!(prompt.contains("do not fall back"));
+        assert!(prompt.contains("get_accessibility_snapshot"));
     }
 
     fn lab_indexed_vault() -> (IndexedVault, PathBuf, PathBuf) {

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crosspond_chrome_host::{EXTENSION_ID, resolve_extension_dir};
 use crosspond_core::{
     AppConfig, ApprovalId, ComputerApprovalMode, ConversationId, ConversationView, HotkeyView,
     LauncherHotkey, MISSING_API_KEY_MESSAGE, Mention, Receipt, RuntimeCommand, SecretKey,
@@ -9,6 +10,7 @@ use crosspond_core::{
     open_conversation as load_conversation, parse_vault_path_input, provider_key_is_set,
 };
 use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
+use crosspond_tools::parse_host_list;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
@@ -36,6 +38,11 @@ pub struct SettingsView {
     pub permissions: PermissionSnapshot,
     pub computer_approval: ComputerApprovalMode,
     pub launcher_hotkey: HotkeyView,
+    pub browser_connected: bool,
+    pub browser_extension_id: String,
+    pub browser_extension_path: String,
+    pub browser_allowed_hosts: Vec<String>,
+    pub browser_blocked_hosts: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -160,8 +167,8 @@ pub fn open_settings(app: AppHandle) -> Result<(), String> {
     }
     WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("/settings".into()))
         .title("Settings")
-        .inner_size(480.0, 640.0)
-        .min_inner_size(400.0, 480.0)
+        .inner_size(480.0, 720.0)
+        .min_inner_size(400.0, 520.0)
         .resizable(true)
         .on_new_window(|url, _| {
             crate::navigation::handle_new_window(&url);
@@ -187,6 +194,11 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
         .unwrap_or_else(default_vault_path)
         .display()
         .to_string();
+    let browser_extension_path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| resolve_extension_dir(&exe))
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "extension/chrome".into());
     SettingsView {
         base_url: loaded.base_url,
         model: loaded.model,
@@ -197,6 +209,11 @@ pub fn load_settings(state: State<AppState>) -> SettingsView {
         permissions: PermissionSnapshot::current(),
         computer_approval: loaded.computer_approval,
         launcher_hotkey: loaded.launcher_hotkey.view(),
+        browser_connected: state.browser.is_connected(),
+        browser_extension_id: EXTENSION_ID.into(),
+        browser_extension_path,
+        browser_allowed_hosts: loaded.browser_allowed_hosts,
+        browser_blocked_hosts: loaded.browser_blocked_hosts,
     }
 }
 
@@ -205,6 +222,8 @@ pub fn save_config(
     base_url: String,
     model: String,
     vault_path: String,
+    browser_allowed_hosts: Option<Vec<String>>,
+    browser_blocked_hosts: Option<Vec<String>>,
     state: State<AppState>,
 ) -> Result<(), String> {
     let mut config = state.config.load().unwrap_or_default();
@@ -220,6 +239,12 @@ pub fn save_config(
         model.trim().to_string()
     };
     config.vault_path = Some(parse_vault_path_input(&vault_path));
+    if let Some(hosts) = browser_allowed_hosts {
+        config.browser_allowed_hosts = parse_host_list(hosts);
+    }
+    if let Some(hosts) = browser_blocked_hosts {
+        config.browser_blocked_hosts = parse_host_list(hosts);
+    }
     state.config.save(&config).map_err(|err| err.to_string())?;
     state.commands.send(RuntimeCommand::ReloadKnowledge);
     Ok(())

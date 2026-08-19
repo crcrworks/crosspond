@@ -2,13 +2,14 @@
 resolver = "2"
 members = [
     "crates/crosspond-app",
+    "crates/crosspond-chrome-host",
     "crates/crosspond-core",
     "crates/crosspond-knowledge",
     "crates/crosspond-macos",
     "crates/crosspond-model",
     "crates/crosspond-tools",
 ]
-default-members = ["crates/crosspond-app"]
+default-members = ["crates/crosspond-app", "crates/crosspond-chrome-host"]
 
 [workspace.package]
 version = "0.0.1"
@@ -18,6 +19,7 @@ license = "UNLICENSED"
 publish = false
 
 [workspace.dependencies]
+crosspond-chrome-host = { path = "crates/crosspond-chrome-host" }
 crosspond-core = { path = "crates/crosspond-core" }
 crosspond-knowledge = { path = "crates/crosspond-knowledge" }
 crosspond-macos = { path = "crates/crosspond-macos" }

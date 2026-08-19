@@ -21,6 +21,8 @@
 	let baseUrl = $state('');
 	let model = $state('');
 	let vaultPath = $state('');
+	let allowedHosts = $state('');
+	let blockedHosts = $state('');
 	let apiKey = $state('');
 	let exaKey = $state('');
 	let saveStatus = $state<string | null>(null);
@@ -40,6 +42,8 @@
 			baseUrl = loaded.base_url;
 			model = loaded.model;
 			vaultPath = loaded.vault_path;
+			allowedHosts = loaded.browser_allowed_hosts.join('\n');
+			blockedHosts = loaded.browser_blocked_hosts.join('\n');
 		})();
 		let unlisten: (() => void) | undefined;
 		void listen<AgentEvent>('agent-event', (event) => {
@@ -56,13 +60,21 @@
 	});
 
 	async function persist() {
-		await saveConfig(baseUrl, model, vaultPath);
+		await saveConfig(
+			baseUrl,
+			model,
+			vaultPath,
+			splitHostLines(allowedHosts),
+			splitHostLines(blockedHosts)
+		);
 		await saveSecret('provider', apiKey);
 		await saveSecret('exa', exaKey);
 		if (apiKey.trim()) apiKey = '';
 		if (exaKey.trim()) exaKey = '';
 		settings = await loadSettings();
 		vaultPath = settings.vault_path;
+		allowedHosts = settings.browser_allowed_hosts.join('\n');
+		blockedHosts = settings.browser_blocked_hosts.join('\n');
 	}
 
 	async function onSave() {
@@ -146,6 +158,13 @@
 
 	function onWindowBlur() {
 		void cancelRecording();
+	}
+
+	function splitHostLines(text: string): string[] {
+		return text
+			.split('\n')
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0);
 	}
 </script>
 
@@ -256,6 +275,48 @@
 		</label>
 		<div class="text-sm text-[var(--muted)]">
 			Required for web_search. Free credits at https://dashboard.exa.ai/api-keys
+		</div>
+		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
+			Browser
+		</div>
+		<div class="surface flex flex-col gap-2">
+			<div class="flex flex-row items-center gap-2">
+				<div class="text-sm">Chrome extension</div>
+				<Badge
+					label={settings?.browser_connected ? 'Connected' : 'Not connected'}
+					tone={settings?.browser_connected ? 'green' : 'muted'}
+				/>
+			</div>
+			<div class="text-sm text-[var(--muted)]">
+				chrome://extensions → Developer mode → Load unpacked → the folder below. Chromium pages then
+				use DOM snapshots instead of Accessibility.
+			</div>
+			<div class="font-mono text-sm break-all">{settings?.browser_extension_path ?? 'extension/chrome'}</div>
+		</div>
+		<label class="flex flex-col gap-1">
+			<span class="text-sm text-[var(--muted)]">Allowed sites</span>
+			<textarea
+				bind:value={allowedHosts}
+				rows="4"
+				placeholder="example.com"
+				class="rounded-md border px-2 py-1 font-mono text-sm"
+				style:border-color="var(--border)"
+				style:background="var(--bg)"
+			></textarea>
+		</label>
+		<label class="flex flex-col gap-1">
+			<span class="text-sm text-[var(--muted)]">Blocked sites</span>
+			<textarea
+				bind:value={blockedHosts}
+				rows="3"
+				class="rounded-md border px-2 py-1 font-mono text-sm"
+				style:border-color="var(--border)"
+				style:background="var(--bg)"
+			></textarea>
+		</label>
+		<div class="text-sm text-[var(--muted)]">
+			One host per line. A new site still needs Allow, even in Auto. Blocked hosts are refused. Page
+			contents are not shown here.
 		</div>
 		<div class="pt-2 text-xs font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
 			Permissions

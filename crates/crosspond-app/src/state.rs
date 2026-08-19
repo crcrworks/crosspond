@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
+use crosspond_chrome_host::BrowserBridge;
 use crosspond_core::{
     CommandSender, ConfigStore, ContextCapsule, ContextCollector, ConversationId,
     GlobalHotkeyService, SecretStore, TaskId,
@@ -14,6 +15,7 @@ pub struct AppState {
     pub collector: Arc<dyn ContextCollector>,
     pub hotkey: Mutex<Box<dyn GlobalHotkeyService>>,
     pub inner: Mutex<InnerState>,
+    pub browser: Arc<BrowserBridge>,
     _runtime: JoinHandle<()>,
 }
 
@@ -40,6 +42,7 @@ impl AppState {
         collector: Arc<dyn ContextCollector>,
         hotkey: Box<dyn GlobalHotkeyService>,
         runtime: JoinHandle<()>,
+        browser: Arc<BrowserBridge>,
     ) -> Self {
         Self {
             commands,
@@ -59,6 +62,7 @@ impl AppState {
                 resize_seq: 0,
                 capturing_hotkey: false,
             }),
+            browser,
             _runtime: runtime,
         }
     }

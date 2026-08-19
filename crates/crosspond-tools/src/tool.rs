@@ -102,6 +102,11 @@ pub trait Tool: Send + Sync {
     fn approval_prompt(&self, _context: &ToolContext, _input: &Value) -> (String, String) {
         (format!("Run `{}`", self.definition().name), String::new())
     }
+
+    /// Registrable site host for browser tools (no URL path or query).
+    fn target_host(&self, _context: &ToolContext, _input: &Value) -> Option<String> {
+        None
+    }
 }
 
 pub fn truncate_output(text: String) -> String {

@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+mod browser;
 mod commands;
 mod events;
 mod launcher;
@@ -12,10 +13,11 @@ use crosspond_core::{ConfigStore, FileConfigStore, GlobalHotkeyService, spawn_ru
 use crosspond_macos::{
     MacOsContextCollector, MacOsGlobalHotkey, MacOsKeychainSecretStore, macos_agent_backends,
 };
-use crosspond_tools::computer_and_screenshot_registry;
+use crosspond_tools::computer_and_screenshot_registry_with_browser;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Manager, RunEvent, WindowEvent};
 
+use crate::browser::start_browser_backend;
 use crate::state::{AppState, NoopHotkey};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -23,15 +25,17 @@ pub fn run() {
     let config = Arc::new(FileConfigStore::in_home());
     let secrets: Arc<dyn crosspond_core::SecretStore> = Arc::new(MacOsKeychainSecretStore);
     let (accessibility, screenshot, apps, input, calendar) = macos_agent_backends();
+    let (browser_bridge, browser_backend) = start_browser_backend();
     let (channels, runtime) = spawn_runtime_with_tools(
         Arc::clone(&config) as _,
         Arc::clone(&secrets),
-        Arc::new(computer_and_screenshot_registry(
+        Arc::new(computer_and_screenshot_registry_with_browser(
             Arc::new(accessibility),
             Arc::new(screenshot),
             Arc::new(apps),
             Arc::new(input),
             Arc::new(calendar),
+            browser_backend,
         )),
     );
 
@@ -57,6 +61,7 @@ pub fn run() {
         Arc::new(MacOsContextCollector),
         hotkey,
         runtime,
+        browser_bridge,
     );
     let events = channels.events;
 
