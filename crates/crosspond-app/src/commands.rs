@@ -423,11 +423,18 @@ pub fn reveal_history_artifact(task_id: String, name: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn set_ui_flags(compact: bool, composing: bool, in_conversation: bool, state: State<AppState>) {
+pub fn set_ui_flags(
+    compact: bool,
+    composing: bool,
+    in_conversation: bool,
+    onboarding: bool,
+    state: State<AppState>,
+) {
     let mut inner = state.lock_inner();
     inner.compact = compact;
     inner.composing = composing;
     inner.in_conversation = in_conversation;
+    inner.onboarding = onboarding;
 }
 
 #[tauri::command]

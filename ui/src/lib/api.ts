@@ -110,8 +110,13 @@ export function revealHistoryArtifact(taskId: string, name: string) {
 	return invoke('reveal_history_artifact', { taskId, name });
 }
 
-export function setUiFlags(compact: boolean, composing: boolean, inConversation: boolean) {
-	return invoke('set_ui_flags', { compact, composing, inConversation });
+export function setUiFlags(
+	compact: boolean,
+	composing: boolean,
+	inConversation: boolean,
+	onboarding: boolean
+) {
+	return invoke('set_ui_flags', { compact, composing, inConversation, onboarding });
 }
 
 export function syncLauncherSize(compact: boolean, badgeLines: number, extraHeight: number) {

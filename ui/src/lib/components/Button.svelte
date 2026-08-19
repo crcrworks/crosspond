@@ -10,7 +10,7 @@
 	} = $props();
 </script>
 
-<button type="button" class={['btn', variant]} {onclick}>
+<button type="button" class={['btn', variant]} {onclick} data-tauri-drag-region="false">
 	{label}
 </button>
 
