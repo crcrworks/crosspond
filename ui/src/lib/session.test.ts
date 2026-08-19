@@ -64,6 +64,7 @@ describe('LauncherSession onboarding', () => {
 		session.enterOnboarding(false);
 		session.applyEvent({
 			type: 'connection_tested',
+			source: 'chatgpt',
 			ok: true,
 			message: 'ok'
 		});

@@ -20,7 +20,7 @@ export type AgentEvent =
 	| { type: 'task_completed'; task_id: string; summary: string; receipt: Receipt }
 	| { type: 'task_failed'; task_id: string; message: string }
 	| { type: 'task_cancelled'; task_id: string }
-	| { type: 'connection_tested'; ok: boolean; message: string };
+	| { type: 'connection_tested'; source: string; ok: boolean; message: string };
 
 export type Receipt = {
 	task_id: string;

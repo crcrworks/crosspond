@@ -32,9 +32,8 @@
 	let apiKeys = $state<Record<string, string>>({});
 	let exaKey = $state('');
 	let redirectUrl = $state('');
-	let saveStatus = $state<string | null>(null);
-	let testStatus = $state<{ ok: boolean; message: string } | null>(null);
 	let loginStatus = $state<{ ok: boolean; message: string } | null>(null);
+	let feedback = $state<Record<string, { ok: boolean; message: string }>>({});
 	let loginMode = $state<'idle' | 'browser' | 'manual'>('idle');
 	let authorizeUrl = $state('');
 	let recording = $state(false);
@@ -53,7 +52,10 @@
 		let unlisten: (() => void) | undefined;
 		void listen<AgentEvent>('agent-event', (event) => {
 			if (event.payload.type === 'connection_tested') {
-				testStatus = { ok: event.payload.ok, message: event.payload.message };
+				setFeedback(event.payload.source, {
+					ok: event.payload.ok,
+					message: event.payload.message
+				});
 			}
 		}).then((fn) => {
 			unlisten = fn;
@@ -89,6 +91,14 @@
 		apiKeys = next;
 	}
 
+	function setFeedback(key: string, next: { ok: boolean; message: string } | null) {
+		if (next) {
+			feedback[key] = next;
+			return;
+		}
+		delete feedback[key];
+	}
+
 	async function persistVault() {
 		await saveConfig(vaultPath);
 		if (exaKey.trim()) {
@@ -113,70 +123,64 @@
 	async function onSaveVault() {
 		try {
 			await persistVault();
-			saveStatus = 'Saved.';
-			testStatus = null;
+			setFeedback('knowledge', { ok: true, message: 'Saved.' });
 		} catch (error) {
-			saveStatus = null;
-			testStatus = { ok: false, message: String(error) };
+			setFeedback('knowledge', { ok: false, message: String(error) });
 		}
 	}
 
 	async function onSaveSearch() {
 		try {
 			await persistVault();
-			saveStatus = 'Saved.';
+			setFeedback('search', { ok: true, message: 'Saved.' });
 		} catch (error) {
-			saveStatus = null;
-			testStatus = { ok: false, message: String(error) };
+			setFeedback('search', { ok: false, message: String(error) });
 		}
 	}
 
 	async function onSaveEndpoint(endpoint: CompatEndpoint) {
 		try {
 			await persistEndpoint(endpoint);
-			saveStatus = 'Saved.';
-			testStatus = null;
+			setFeedback(endpoint.id, { ok: true, message: 'Saved.' });
 		} catch (error) {
-			saveStatus = null;
-			testStatus = { ok: false, message: String(error) };
+			setFeedback(endpoint.id, { ok: false, message: String(error) });
 		}
 	}
 
 	async function onTestEndpoint(endpoint: CompatEndpoint) {
 		try {
 			await persistEndpoint(endpoint);
-			saveStatus = 'Saved.';
-			testStatus = { ok: true, message: 'Testing connection…' };
+			setFeedback(endpoint.id, { ok: true, message: 'Testing connection…' });
 			await testCompatConnection(endpoint.id);
 		} catch (error) {
-			testStatus = { ok: false, message: String(error) };
+			setFeedback(endpoint.id, { ok: false, message: String(error) });
 		}
 	}
 
 	async function onTestChatgpt() {
 		try {
-			testStatus = { ok: true, message: 'Testing connection…' };
+			setFeedback('chatgpt', { ok: true, message: 'Testing connection…' });
 			await testCompatConnection('chatgpt');
 		} catch (error) {
-			testStatus = { ok: false, message: String(error) };
+			setFeedback('chatgpt', { ok: false, message: String(error) });
 		}
 	}
 
 	async function onAddCompat() {
 		try {
 			applySettings(await addCompat());
-			saveStatus = 'Added an OpenAI Compatible endpoint.';
+			setFeedback('add', { ok: true, message: 'Added an OpenAI Compatible endpoint.' });
 		} catch (error) {
-			testStatus = { ok: false, message: String(error) };
+			setFeedback('add', { ok: false, message: String(error) });
 		}
 	}
 
 	async function onRemoveCompat(id: string) {
 		try {
 			applySettings(await deleteCompat(id));
-			saveStatus = 'Removed.';
+			setFeedback('add', { ok: true, message: 'Removed.' });
 		} catch (error) {
-			testStatus = { ok: false, message: String(error) };
+			setFeedback(id, { ok: false, message: String(error) });
 		}
 	}
 
@@ -232,7 +236,7 @@
 	async function startRecording() {
 		if (recording) return;
 		hotkeyError = null;
-		saveStatus = null;
+		setFeedback('general', null);
 		draftTokens = [];
 		try {
 			await pauseLauncherHotkey();
@@ -257,7 +261,7 @@
 		if (!settings) return;
 		settings = { ...settings, launcher_hotkey: view };
 		hotkeyError = null;
-		saveStatus = 'Shortcut saved.';
+		setFeedback('general', { ok: true, message: 'Shortcut saved.' });
 	}
 
 	async function onRecordKey(event: KeyboardEvent) {
@@ -292,8 +296,7 @@
 
 	function selectTab(next: TabId) {
 		tab = next;
-		saveStatus = null;
-		testStatus = null;
+		feedback = {};
 	}
 </script>
 
@@ -301,6 +304,15 @@
 
 <div class="h-full overflow-y-auto px-6 py-4 text-[var(--text)]" style:background="var(--bg)">
 	<div class="flex flex-col gap-4">
+		{#snippet feedbackLine(key: string)}
+			{@const item = feedback[key]}
+			{#if item}
+				<div class="text-sm" style:color={item.ok ? 'var(--ok)' : 'var(--danger)'}
+					>{item.message}</div
+				>
+			{/if}
+		{/snippet}
+
 		<div class="settings-tabs" role="tablist" aria-label="Settings">
 			<button
 				type="button"
@@ -366,6 +378,8 @@
 				</div>
 				{#if hotkeyError}
 					<div class="text-sm" style:color="var(--danger)">{hotkeyError}</div>
+				{:else}
+					{@render feedbackLine('general')}
 				{/if}
 			</div>
 		{:else if tab === 'knowledge'}
@@ -384,6 +398,7 @@
 					'~/Documents/Crosspond'}. Created if it does not exist.
 			</div>
 			<Button label="Save" onclick={() => void onSaveVault()} variant="primary" />
+			{@render feedbackLine('knowledge')}
 		{:else if tab === 'ai'}
 			<div class="text-sm text-[var(--muted)]">
 				Sign in or add API keys here. Pick the model in the launcher.
@@ -399,6 +414,7 @@
 						<Button label="Sign out" onclick={() => void onChatgptSignOut()} />
 						<Button label="Test Connection" onclick={() => void onTestChatgpt()} />
 					</div>
+					{@render feedbackLine('chatgpt')}
 				{:else}
 					<Button
 						label="Sign in with ChatGPT"
@@ -475,9 +491,11 @@
 							<Button label="Remove" onclick={() => void onRemoveCompat(endpoint.id)} />
 						{/if}
 					</div>
+					{@render feedbackLine(endpoint.id)}
 				</div>
 			{/each}
 			<Button label="Add OpenAI Compatible" onclick={() => void onAddCompat()} />
+			{@render feedbackLine('add')}
 		{:else if tab === 'search'}
 			<label class="flex flex-col gap-1">
 				<span class="text-sm text-[var(--muted)]">Exa API Key</span>
@@ -496,6 +514,7 @@
 				Required for web_search. Free credits at https://dashboard.exa.ai/api-keys
 			</div>
 			<Button label="Save" onclick={() => void onSaveSearch()} variant="primary" />
+			{@render feedbackLine('search')}
 		{:else}
 			<div class="text-sm text-[var(--muted)]">
 				Chat works without these. Enable them when you want selected text, screenshots, or calendar
@@ -525,15 +544,6 @@
 					</div>
 				{/each}
 			{/if}
-		{/if}
-
-		{#if saveStatus}
-			<div class="text-sm text-[var(--muted)]">{saveStatus}</div>
-		{/if}
-		{#if testStatus}
-			<div class="text-sm" style:color={testStatus.ok ? 'var(--ok)' : 'var(--danger)'}
-				>{testStatus.message}</div
-			>
 		{/if}
 	</div>
 </div>

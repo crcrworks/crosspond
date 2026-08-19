@@ -335,6 +335,10 @@ impl Runtime {
         let secrets = Arc::clone(&self.secrets);
         let build = self.build.clone();
         tokio::spawn(async move {
+            let source_id = source
+                .clone()
+                .or_else(|| config.load().ok().map(|loaded| loaded.selected.source))
+                .unwrap_or_default();
             let (ok, message) = match load_provider_for(&*config, secrets, build, source.as_deref())
             {
                 Ok(provider) => match provider.test_connection().await {
@@ -343,7 +347,11 @@ impl Runtime {
                 },
                 Err(message) => (false, message),
             };
-            let _ = events.send(AgentEvent::ConnectionTested { ok, message });
+            let _ = events.send(AgentEvent::ConnectionTested {
+                source: source_id,
+                ok,
+                message,
+            });
         });
     }
 
