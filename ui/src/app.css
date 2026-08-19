@@ -72,7 +72,7 @@ kbd {
 
 .prompt-slot.seamless {
 	align-items: flex-start;
-	padding: 4px 12px 8px;
+	padding: 8px 12px 8px;
 }
 
 .prompt-slot.docked {
@@ -114,7 +114,7 @@ kbd {
 }
 
 .prompt.seamless .prompt-stack {
-	gap: 2px;
+	gap: 4px;
 }
 
 .prompt.docked {
@@ -203,6 +203,7 @@ kbd {
 
 .prompt.seamless .prompt-main {
 	align-items: center;
+	padding: 6px 0;
 }
 
 .prompt-tools {
