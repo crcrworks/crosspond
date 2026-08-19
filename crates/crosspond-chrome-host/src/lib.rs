@@ -115,22 +115,44 @@ pub fn native_host_manifest_json(host_path: &Path) -> Value {
     json!({
         "name": NATIVE_HOST_NAME,
         "description": "Crosspond Chrome bridge",
-        "path": host_path,
+        "path": host_path.to_string_lossy(),
         "type": "stdio",
         "allowed_origins": [format!("chrome-extension://{EXTENSION_ID}/")]
     })
 }
 
+pub fn home_dir() -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into()))
+}
+
+/// Staged copy Chrome launches: `~/.crosspond/bin/crosspond-chrome-host`.
+pub fn installed_host_binary_path() -> PathBuf {
+    installed_host_binary_path_for(&home_dir())
+}
+
+pub fn installed_host_binary_path_for(home: &Path) -> PathBuf {
+    home.join(".crosspond")
+        .join("bin")
+        .join("crosspond-chrome-host")
+}
+
 /// Chromium native-messaging host directories on this OS.
 pub fn native_host_dirs() -> Vec<PathBuf> {
-    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into()));
+    native_host_dirs_for(&home_dir())
+}
+
+pub fn native_host_dirs_for(home: &Path) -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let support = home.join("Library/Application Support");
         vec![
             support.join("Google/Chrome/NativeMessagingHosts"),
             support.join("Google/Chrome Canary/NativeMessagingHosts"),
+            support.join("Google/Chrome Beta/NativeMessagingHosts"),
+            support.join("Google/Chrome Dev/NativeMessagingHosts"),
+            support.join("Google/Chrome for Testing/NativeMessagingHosts"),
             support.join("Chromium/NativeMessagingHosts"),
+            support.join("Helium/NativeMessagingHosts"),
             support.join("BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             support.join("Microsoft Edge/NativeMessagingHosts"),
             support.join("Arc/User Data/NativeMessagingHosts"),
@@ -144,22 +166,79 @@ pub fn native_host_dirs() -> Vec<PathBuf> {
         vec![
             config.join("google-chrome/NativeMessagingHosts"),
             config.join("google-chrome-unstable/NativeMessagingHosts"),
+            config.join("google-chrome-for-testing/NativeMessagingHosts"),
             config.join("chromium/NativeMessagingHosts"),
+            config.join("helium/NativeMessagingHosts"),
             config.join("BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             config.join("microsoft-edge/NativeMessagingHosts"),
         ]
     }
 }
 
+fn stage_host_binary(source: &Path, dest: &Path) -> Result<(), String> {
+    let Some(dir) = dest.parent() else {
+        return Err(format!("invalid host path {}", dest.display()));
+    };
+    fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+    }
+    if dest.exists()
+        && dest
+            .canonicalize()
+            .ok()
+            .as_deref()
+            .is_some_and(|canonical| canonical == source)
+    {
+        return Ok(());
+    }
+    fs::copy(source, dest).map_err(|err| format!("{}: {err}", dest.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dest, fs::Permissions::from_mode(0o700))
+            .map_err(|err| format!("{}: {err}", dest.display()))?;
+    }
+    Ok(())
+}
+
 pub fn install_native_host_manifests(host_path: &Path) -> Result<Vec<PathBuf>, String> {
-    let body = serde_json::to_vec_pretty(&native_host_manifest_json(host_path))
+    install_native_host_manifests_in(&home_dir(), host_path)
+}
+
+/// Copy the host binary to `~/.crosspond/bin` and register it with Chromium.
+pub fn install_native_host_manifests_in(
+    home: &Path,
+    host_path: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let source = host_path
+        .canonicalize()
+        .map_err(|err| format!("{}: {err}", host_path.display()))?;
+    let staged = installed_host_binary_path_for(home);
+    stage_host_binary(&source, &staged)?;
+    let staged = staged
+        .canonicalize()
+        .map_err(|err| format!("{}: {err}", staged.display()))?;
+    let body = serde_json::to_vec_pretty(&native_host_manifest_json(&staged))
         .map_err(|err| err.to_string())?;
     let mut written = Vec::new();
-    for dir in native_host_dirs() {
-        fs::create_dir_all(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+    let mut last_err = None;
+    for dir in native_host_dirs_for(home) {
+        if let Err(err) = fs::create_dir_all(&dir) {
+            last_err = Some(format!("{}: {err}", dir.display()));
+            continue;
+        }
         let path = dir.join(format!("{NATIVE_HOST_NAME}.json"));
-        fs::write(&path, &body).map_err(|err| format!("{}: {err}", path.display()))?;
+        if let Err(err) = fs::write(&path, &body) {
+            last_err = Some(format!("{}: {err}", path.display()));
+            continue;
+        }
         written.push(path);
+    }
+    if written.is_empty() {
+        return Err(last_err.unwrap_or_else(|| "no native-host directories".into()));
     }
     Ok(written)
 }
@@ -446,5 +525,49 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate.ends_with("extension/chrome"))
         );
+    }
+
+    #[test]
+    fn service_worker_reads_native_host_last_error() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../extension/chrome/service_worker.js");
+        let text = fs::read_to_string(&path).expect("service worker");
+        assert!(text.contains("chrome.runtime.connectNative"));
+        assert!(text.contains("chrome.runtime.lastError"));
+    }
+
+    #[test]
+    fn install_stages_binary_and_writes_host_manifest() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("crosspond-nmh-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let bin = root.join("fake-host");
+        fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let home = root.join("home");
+        let written = install_native_host_manifests_in(&home, &bin).unwrap();
+        assert!(!written.is_empty());
+        let staged = installed_host_binary_path_for(&home)
+            .canonicalize()
+            .unwrap();
+        assert!(staged.is_file());
+        let manifest = written
+            .iter()
+            .find(|path| path.ends_with(format!("{NATIVE_HOST_NAME}.json")))
+            .expect("host manifest");
+        let json: Value = serde_json::from_slice(&fs::read(manifest).unwrap()).unwrap();
+        assert_eq!(json["name"], NATIVE_HOST_NAME);
+        assert_eq!(json["type"], "stdio");
+        let path = json["path"].as_str().expect("absolute path");
+        assert_eq!(Path::new(path), staged.as_path());
+        let _ = fs::remove_dir_all(&root);
     }
 }

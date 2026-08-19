@@ -1,29 +1,46 @@
 const HOST_NAME = "com.crosspond.chrome";
 const GROUP_TITLE = "Crosspond";
+const RETRY_MS = 2500;
 
 let port = null;
 let connecting = false;
+let retryTimer = null;
+
+function scheduleReconnect() {
+  if (retryTimer) {
+    return;
+  }
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    connectNative();
+  }, RETRY_MS);
+}
 
 function connectNative() {
   if (port || connecting) {
     return;
   }
   connecting = true;
+  let next;
   try {
-    port = chrome.runtime.connectNative(HOST_NAME);
-  } catch (error) {
+    next = chrome.runtime.connectNative(HOST_NAME);
+  } catch {
     connecting = false;
-    port = null;
-    setTimeout(connectNative, 1500);
+    scheduleReconnect();
     return;
   }
+  port = next;
   connecting = false;
   port.onMessage.addListener((message) => {
     void handleHostMessage(message);
   });
   port.onDisconnect.addListener(() => {
+    // Must read lastError or Chrome shows "Unchecked runtime.lastError:
+    // Specified native messaging host not found" when Crosspond has not
+    // written the host manifest yet.
+    const _ignored = chrome.runtime.lastError;
     port = null;
-    setTimeout(connectNative, 1000);
+    scheduleReconnect();
   });
 }
 
