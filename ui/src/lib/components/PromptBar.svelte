@@ -468,27 +468,25 @@
 					</span>
 				{/if}
 			</div>
-			<div class="prompt-mode-wrap picker-native">
-				<select
-					class="prompt-mode picker-select picker-effort"
-					aria-label="Reasoning effort {effortLabel(effort)}"
-					disabled={!chatgptSelected}
-					title={chatgptSelected ? 'Codex reasoning effort' : 'Effort applies to ChatGPT models'}
-					value={effort}
-					onfocus={() => (pickerOpen = true)}
-					onblur={onPickerBlur}
-					onchange={onEffortChange}
-				>
-					{#each EFFORTS as item (item)}
-						<option value={item}>{effortLabel(item)}</option>
-					{/each}
-				</select>
-				<span class="picker-caret">
-					<Chevron expanded />
-				</span>
-			</div>
-			{#if docked && !chatgptSelected}
-				<span class="picker-note">Effort is Codex only</span>
+			{#if chatgptSelected}
+				<div class="prompt-mode-wrap picker-native">
+					<select
+						class="prompt-mode picker-select picker-effort"
+						aria-label="Reasoning effort {effortLabel(effort)}"
+						title="Codex reasoning effort"
+						value={effort}
+						onfocus={() => (pickerOpen = true)}
+						onblur={onPickerBlur}
+						onchange={onEffortChange}
+					>
+						{#each EFFORTS as item (item)}
+							<option value={item}>{effortLabel(item)}</option>
+						{/each}
+					</select>
+					<span class="picker-caret">
+						<Chevron expanded />
+					</span>
+				</div>
 			{/if}
 			{#if !docked}
 				<div class="prompt-pickers-end">

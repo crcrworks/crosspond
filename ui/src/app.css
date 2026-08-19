@@ -300,14 +300,6 @@ kbd {
 	opacity: 0.45;
 }
 
-.picker-note {
-	margin-left: 4px;
-	font-size: 10px;
-	line-height: 1.4;
-	color: var(--muted);
-	white-space: nowrap;
-}
-
 .picker-custom-inline {
 	width: 140px;
 	height: 20px;
