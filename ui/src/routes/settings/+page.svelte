@@ -3,6 +3,8 @@
 	import {
 		loadSettings,
 		openSystemSettings,
+		pauseLauncherHotkey,
+		resumeLauncherHotkey,
 		saveConfig,
 		saveSecret,
 		setLauncherHotkey,
@@ -47,7 +49,10 @@
 		}).then((fn) => {
 			unlisten = fn;
 		});
-		return () => unlisten?.();
+		return () => {
+			unlisten?.();
+			void resumeLauncherHotkey();
+		};
 	});
 
 	async function persist() {
@@ -82,16 +87,28 @@
 		}
 	}
 
-	function startRecording() {
-		recording = true;
-		draftTokens = [];
+	async function startRecording() {
+		if (recording) return;
 		hotkeyError = null;
 		saveStatus = null;
+		draftTokens = [];
+		try {
+			await pauseLauncherHotkey();
+			recording = true;
+		} catch (error) {
+			hotkeyError = String(error);
+		}
 	}
 
-	function stopRecording() {
+	async function cancelRecording() {
+		if (!recording) return;
 		recording = false;
 		draftTokens = [];
+		try {
+			await resumeLauncherHotkey();
+		} catch (error) {
+			hotkeyError = String(error);
+		}
 	}
 
 	function applyHotkey(view: HotkeyView) {
@@ -105,24 +122,34 @@
 		if (!recording) return;
 		event.preventDefault();
 		if (event.key === 'Escape') {
-			stopRecording();
+			void cancelRecording();
 			return;
 		}
 		if (event.repeat) return;
 		draftTokens = modifierTokens(event);
 		const spec = specFromKeyboardEvent(event);
 		if (!spec) return;
-		stopRecording();
+		recording = false;
+		draftTokens = [];
 		try {
 			const view = await setLauncherHotkey(spec);
 			applyHotkey(view);
 		} catch (error) {
 			hotkeyError = String(error);
+			try {
+				await resumeLauncherHotkey();
+			} catch (resumeError) {
+				hotkeyError = `${error}; ${resumeError}`;
+			}
 		}
+	}
+
+	function onWindowBlur() {
+		void cancelRecording();
 	}
 </script>
 
-<svelte:window onkeydown={onRecordKey} />
+<svelte:window onkeydown={onRecordKey} onblur={onWindowBlur} />
 
 <div class="h-full overflow-y-auto px-6 py-4 text-[var(--text)]" style:background="var(--bg)">
 	<div class="flex flex-col gap-4">

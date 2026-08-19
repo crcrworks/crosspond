@@ -74,6 +74,8 @@ pub fn run() {
             commands::load_settings,
             commands::save_config,
             commands::set_launcher_hotkey,
+            commands::pause_launcher_hotkey,
+            commands::resume_launcher_hotkey,
             commands::save_secret,
             commands::test_connection,
             commands::list_history,

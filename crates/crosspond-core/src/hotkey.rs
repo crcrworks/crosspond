@@ -13,6 +13,8 @@ pub trait GlobalHotkeyService: Send {
     fn poll(&self) -> Option<HotkeyEvent>;
     /// Replace the registered launcher shortcut. Must run on the main thread.
     fn set_hotkey(&mut self, spec: &LauncherHotkey) -> Result<(), String>;
+    /// Drop the current shortcut so Settings can record a replacement.
+    fn clear_hotkey(&mut self) -> Result<(), String>;
 }
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]

@@ -228,22 +228,60 @@ pub fn set_launcher_hotkey(
     state: State<AppState>,
 ) -> Result<HotkeyView, String> {
     let parsed = LauncherHotkey::parse(&spec).map_err(|err| err.to_string())?;
-    apply_hotkey_on_main_thread(&app, &parsed)?;
+    on_main(&app, {
+        let parsed = parsed.clone();
+        move |state| {
+            state.lock_hotkey().set_hotkey(&parsed)?;
+            state.lock_inner().capturing_hotkey = false;
+            Ok(())
+        }
+    })?;
     let mut config = state.config.load().unwrap_or_default();
     config.launcher_hotkey = parsed.clone();
     state.config.save(&config).map_err(|err| err.to_string())?;
     Ok(parsed.view())
 }
 
-fn apply_hotkey_on_main_thread(app: &AppHandle, spec: &LauncherHotkey) -> Result<(), String> {
+#[tauri::command]
+pub fn pause_launcher_hotkey(app: AppHandle) -> Result<(), String> {
+    on_main(&app, |state| {
+        state.lock_inner().capturing_hotkey = true;
+        let result = state.lock_hotkey().clear_hotkey();
+        if result.is_err() {
+            state.lock_inner().capturing_hotkey = false;
+        }
+        result
+    })
+}
+
+#[tauri::command]
+pub fn resume_launcher_hotkey(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<HotkeyView, String> {
+    let parsed = state.config.load().unwrap_or_default().launcher_hotkey;
+    on_main(&app, {
+        let parsed = parsed.clone();
+        move |state| {
+            state.lock_hotkey().set_hotkey(&parsed)?;
+            state.lock_inner().capturing_hotkey = false;
+            Ok(())
+        }
+    })?;
+    Ok(parsed.view())
+}
+
+fn on_main<T: Send + 'static>(
+    app: &AppHandle,
+    op: impl FnOnce(&AppState) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let spec = spec.clone();
     let handle = app.clone();
     app.run_on_main_thread(move || {
         let result = handle
             .try_state::<AppState>()
             .ok_or_else(|| "app not ready".to_string())
-            .and_then(|state| state.lock_hotkey().set_hotkey(&spec));
+            .and_then(|state| op(&state));
         let _ = tx.send(result);
     })
     .map_err(|err| err.to_string())?;

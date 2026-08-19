@@ -188,6 +188,9 @@ pub fn toggle(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
+    if state.lock_inner().capturing_hotkey {
+        return;
+    }
     let window = launcher_window(app);
     let window_key = window
         .as_ref()

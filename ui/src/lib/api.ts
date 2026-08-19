@@ -58,6 +58,14 @@ export function setLauncherHotkey(spec: string) {
 	return invoke<HotkeyView>('set_launcher_hotkey', { spec });
 }
 
+export function pauseLauncherHotkey() {
+	return invoke('pause_launcher_hotkey');
+}
+
+export function resumeLauncherHotkey() {
+	return invoke<HotkeyView>('resume_launcher_hotkey');
+}
+
 export function saveSecret(kind: 'provider' | 'exa', value: string) {
 	return invoke('save_secret', { kind, value });
 }

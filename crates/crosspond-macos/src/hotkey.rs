@@ -72,6 +72,23 @@ impl GlobalHotkeyService for MacOsGlobalHotkey {
         }
     }
 
+    fn clear_hotkey(&mut self) -> Result<(), String> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(())
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(old) = self.registered.take() {
+                self.manager
+                    .unregister(old)
+                    .map_err(|err| format!("failed to unregister shortcut: {err}"))?;
+            }
+            Ok(())
+        }
+    }
+
     fn set_hotkey(&mut self, spec: &LauncherHotkey) -> Result<(), String> {
         #[cfg(not(target_os = "macos"))]
         {
