@@ -98,6 +98,10 @@ export function openSystemSettings(kind: 'accessibility' | 'screen_recording' | 
 	return invoke('open_system_settings', { kind });
 }
 
+export function openExternalUrl(url: string) {
+	return invoke('open_external_url', { url });
+}
+
 export function revealArtifact(name: string) {
 	return invoke('reveal_artifact', { name });
 }

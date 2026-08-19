@@ -163,6 +163,10 @@ pub fn open_settings(app: AppHandle) -> Result<(), String> {
         .inner_size(480.0, 640.0)
         .min_inner_size(400.0, 480.0)
         .resizable(true)
+        .on_new_window(|url, _| {
+            crate::navigation::handle_new_window(&url);
+            tauri::webview::NewWindowResponse::Deny
+        })
         .build()
         .map_err(|err| err.to_string())?;
     Ok(())
@@ -434,6 +438,11 @@ pub fn sync_launcher_size(compact: bool, badge_lines: u32, extra_height: f64, ap
 #[tauri::command]
 pub fn list_mention_apps() -> Vec<String> {
     list_running_app_names()
+}
+
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    crate::navigation::open_external_url(&url)
 }
 
 fn reveal_in_finder(path: &Path) -> Result<(), String> {
