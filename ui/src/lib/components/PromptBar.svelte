@@ -458,7 +458,11 @@
 					<Chevron expanded />
 				</button>
 				{#if showModelMenu}
-					<div class={['prompt-menu', 'picker-menu', docked ? 'up' : 'down']} role="menu" aria-label="Models">
+					<div
+						class={['prompt-menu', 'picker-menu', 'picker-wide', docked ? 'up' : 'down']}
+						role="menu"
+						aria-label="Models"
+					>
 						{#each groups as group (group.source)}
 							<div class="prompt-group">{group.label}</div>
 							{#each group.models as model (group.source + model.id)}
@@ -492,7 +496,7 @@
 					</div>
 				{/if}
 				{#if showCustom}
-					<div class={['prompt-menu', 'picker-menu', docked ? 'up' : 'down']}>
+					<div class={['prompt-menu', 'picker-menu', 'picker-wide', docked ? 'up' : 'down']}>
 						<input
 							class="picker-custom"
 							bind:value={customModel}
