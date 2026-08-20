@@ -27,10 +27,18 @@ fn stage_chrome_host_sidecar() {
     let target_dir = std::env::var("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| manifest_dir.join("../..").join("target"));
-    let built = target_dir.join(profile).join("crosspond-chrome-host");
-    if built.is_file() {
-        let _ = fs::copy(&built, &dest);
-        return;
+    let built = [
+        target_dir
+            .join(&triple)
+            .join(&profile)
+            .join("crosspond-chrome-host"),
+        target_dir.join(&profile).join("crosspond-chrome-host"),
+    ];
+    for candidate in built {
+        if candidate.is_file() {
+            let _ = fs::copy(&candidate, &dest);
+            return;
+        }
     }
 
     let _ = fs::write(&dest, []);

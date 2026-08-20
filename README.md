@@ -49,11 +49,18 @@ Ship from `main` with the same two-step flow as other crcrworks apps:
 2. `/prepare-release` — starts **Prepare Release PR**, then fill `PUBLIC_CHANGELOG.md` (do not commit from the skill)
 3. After you commit the changelog and the PR is ready: `/release` — squash-merges if needed and starts **Publish Release**
 
-Publish creates `vX.Y.Z`, a GitHub Release (the `.dmg` is the download), and updater files (`Crosspond.app.tar.gz`, `latest.json`). Apple Silicon only. The launcher checks that Release when the window is shown and offers **Update available** on the right of the header.
+Publish creates a **draft** `vX.Y.Z` GitHub Release first, then signs and notarizes the Apple Silicon `.dmg` / updater files, verifies Gatekeeper, and only then publishes. Users never see `/releases/latest` (or `latest.json`) until that last step. The launcher checks that public Release when the window is shown and offers **Update available**. `tauri dev` does not check for updates.
 
 The repo must be **public** (or Releases must be downloadable without auth) or in-app updates cannot fetch `latest.json`.
 
-Prepare Release PR and Publish Release run only from **main**, on the GitHub Environment **`release`**. Jobs then refuse anyone who is not a repository **admin**. Put signing secrets on that environment (not as ordinary repository secrets) so a write collaborator cannot read them from some other workflow.
+Prepare Release PR and Publish Release run only from **main** and refuse anyone who is not a repository **admin**. Apple / updater secrets are injected only into the macOS **bundle** job via GitHub Environment **`release`**.
+
+### Before the first public Release
+
+These are blockers for shipping a downloadable `.dmg`. Do not skip them.
+
+- **OSS license** — `Cargo.toml` is still `UNLICENSED`. Public source and a GitHub Release are not a license. Choose MIT / Apache-2.0 / GPL (or another) yourself, then add `LICENSE` and set `workspace.package.license`. This change does not pick one.
+- **Bundle identifier** — `crates/crosspond-app/tauri.conf.json` uses `com.crosspond.app`. Changing it after the first signed build is painful (Gatekeeper, updater, Keychain). Confirm you want this id before `/release`.
 
 ### GitHub Environment `release`
 
@@ -63,30 +70,30 @@ The environment **`release`** is already on the repo. Confirm Settings → Envir
 - Deployment branches: **`main` only**
 - Allow administrators to bypass configured protection rules: on (so you are not stuck approving your own `/release`)
 
-Add the secrets below on **that environment**, not as ordinary repository secrets.
+Add the secrets below on **that environment**, not as ordinary repository secrets. The personal Developer ID is for binaries **you** publish; forks must use their own certificate.
 
 ### Environment secrets
 
-Put these on **`release`**. Do not commit private keys. The personal Developer ID is for binaries **you** publish; forks must use their own certificate.
+All of the following are **required** for a public Release (unsigned builds must not be published):
 
-**Updater (required)** — the matching public key is already in `crates/crosspond-app/tauri.conf.json`. The private key generated with this change lives only on the machine that created it (`~/.tauri/crosspond.key`). Copy it into the environment:
+**Updater** — the matching public key is already in `crates/crosspond-app/tauri.conf.json`. The private key lives only on the machine that created it (`~/.tauri/crosspond.key`):
 
 - `TAURI_SIGNING_PRIVATE_KEY` — contents of `~/.tauri/crosspond.key`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — empty unless you set a password
 
 If that file is gone, generate a new pair with `npx --prefix ui tauri signer generate -w ~/.tauri/crosspond.key --ci` and replace the `plugins.updater.pubkey` value.
 
-**Apple signing / notarization (needed for Gatekeeper)** — create a **Developer ID Application** certificate, export a `.p12`, and add:
+**Apple Developer ID** — export a **Developer ID Application** `.p12`:
 
 - `APPLE_CERTIFICATE` — base64 of the `.p12` (`base64 -i certificate.p12 | pbcopy`)
 - `APPLE_CERTIFICATE_PASSWORD` — `.p12` password
-- `APPLE_SIGNING_IDENTITY` — e.g. `Developer ID Application: Example Ltd (TEAMID)`
-- `APPLE_TEAM_ID`
+- `APPLE_SIGNING_IDENTITY` — optional; Tauri can infer it from the certificate
+- `APPLE_TEAM_ID` — required when notarizing with Apple ID
 
-Notarization, pick one:
+**Notarization**, pick one complete set:
 
 - App Store Connect API key: `APPLE_API_KEY` (key id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the `.p8` file body)
-- or `APPLE_ID` plus an app-specific `APPLE_PASSWORD`
+- or `APPLE_ID` plus an app-specific `APPLE_PASSWORD` and `APPLE_TEAM_ID`
 
 Optional repository secret (not environment): `RELEASE_PLEASE_TOKEN` (a PAT) if `github.token` cannot open the release PR.
 

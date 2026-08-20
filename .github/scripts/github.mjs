@@ -105,3 +105,36 @@ export async function writeRepoFile(owner, repo, path, branch, content, sha, mes
 		}),
 	});
 }
+
+export function canStartPublish({ requestedVersion, existingRelease, publishedVersions }) {
+	assertExactSemver(requestedVersion, "requestedVersion");
+	if (existingRelease && existingRelease.draft !== true) {
+		throw new Error(`GitHub Release v${requestedVersion} is already published.`);
+	}
+	for (const published of publishedVersions) {
+		assertExactSemver(published, "published version");
+		if (compareSemver(requestedVersion, published) <= 0) {
+			throw new Error(
+				`Release metadata version ${requestedVersion} is not newer than published version ${published}.`,
+			);
+		}
+	}
+}
+
+export function requiredReleaseAssetNames(names) {
+	const list = names ?? [];
+	const missing = [];
+	if (!list.some((name) => name.endsWith(".dmg"))) {
+		missing.push(".dmg");
+	}
+	if (!list.some((name) => name.endsWith(".app.tar.gz"))) {
+		missing.push(".app.tar.gz");
+	}
+	if (!list.some((name) => name.endsWith(".app.tar.gz.sig"))) {
+		missing.push(".app.tar.gz.sig");
+	}
+	if (!list.includes("latest.json")) {
+		missing.push("latest.json");
+	}
+	return missing;
+}

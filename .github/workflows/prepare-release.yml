@@ -1,7 +1,6 @@
 name: Prepare Release PR
 
-# Manual only, from main. Jobs use the `release` environment (required
-# reviewers + environment secrets) and then refuse non-admin actors.
+# Manual only, from main. Refuses non-admin actors. Does not need Apple secrets.
 on:
   workflow_dispatch:
     inputs:
@@ -23,7 +22,6 @@ jobs:
   prepare:
     name: Create or update release PR
     runs-on: ubuntu-latest
-    environment: release
     steps:
       - name: Checkout
         uses: actions/checkout@v4

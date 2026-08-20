@@ -74,7 +74,7 @@ The system prompt includes this untrusted-content line. Ambient selected text an
 
 ## Release signing
 
-GitHub Release binaries may be signed with the maintainer’s personal Developer ID. That identity is for artifacts this repository publishes, not for forks. Updater and Apple secrets live on the GitHub Environment `release` (not ordinary repository secrets). Prepare Release PR and Publish Release require `main` plus a repository admin; write collaborators cannot complete a signed release.
+GitHub Release binaries may be signed with the maintainer’s personal Developer ID. That identity is for artifacts this repository publishes, not for forks. Updater and Apple secrets live on the GitHub Environment `release` and are injected only into the macOS bundle job. Prepare Release PR and Publish Release require `main` plus a repository admin; write collaborators cannot complete a signed release. The GitHub Release stays draft until signature and notarization checks succeed.
 
 ## Cancellation
 

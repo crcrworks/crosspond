@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { updateNoticeState } from './updater';
+import { shouldCheckForUpdates, updateNoticeState } from './updater';
 
 describe('updateNoticeState', () => {
 	it('hides when nothing is available', () => {
@@ -21,5 +21,12 @@ describe('updateNoticeState', () => {
 		expect(
 			updateNoticeState({ available: true, dismissed: true, installing: true })
 		).toBe('installing');
+	});
+});
+
+describe('shouldCheckForUpdates', () => {
+	it('skips Vite / tauri dev', () => {
+		expect(shouldCheckForUpdates(true)).toBe(false);
+		expect(shouldCheckForUpdates(false)).toBe(true);
 	});
 });

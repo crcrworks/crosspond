@@ -1,5 +1,9 @@
 export type UpdateNotice = 'hidden' | 'available' | 'installing';
 
+export function shouldCheckForUpdates(dev: boolean): boolean {
+	return !dev;
+}
+
 export function updateNoticeState(input: {
 	available: boolean;
 	dismissed: boolean;

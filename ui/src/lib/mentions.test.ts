@@ -39,13 +39,10 @@ describe('filterCatalog', () => {
 		expect(filterCatalog('vault').map((item) => item.kind)).toEqual([
 			'vault_query',
 			'vault_save',
-			'vault_later',
-			'vault_procedure'
+			'vault_later'
 		]);
 		expect(filterCatalog('save').map((item) => item.kind)).toEqual(['vault_save']);
 		expect(filterCatalog('later').map((item) => item.kind)).toEqual(['vault_later']);
-		expect(filterCatalog('procedure').map((item) => item.kind)).toEqual(['vault_procedure']);
-		expect(filterCatalog('手順').map((item) => item.kind)).toEqual(['vault_procedure']);
 		expect(filterCatalog('computer').map((item) => item.kind)).toEqual(['computer']);
 		expect(filterCatalog('browser').map((item) => item.kind)).toEqual(['browser']);
 		expect(filterCatalog('borser').map((item) => item.kind)).toEqual(['browser']);
@@ -75,15 +72,6 @@ describe('takeInlineMentions', () => {
 		expect(taken.mentions.map((item) => item.kind)).toEqual(['vault_query', 'computer']);
 	});
 
-	it('accepts @vault-procedure and the procedure alias', () => {
-		expect(
-			takeInlineMentions('@vault-procedure 経費精算して').mentions.map((item) => item.kind)
-		).toEqual(['vault_procedure']);
-		expect(takeInlineMentions('@procedure').mentions.map((item) => item.kind)).toEqual([
-			'vault_procedure'
-		]);
-	});
-
 	it('accepts @search and the @web alias', () => {
 		expect(takeInlineMentions('@search 調べて').mentions.map((item) => item.kind)).toEqual([
 			'search'
@@ -108,9 +96,6 @@ describe('displayPrompt', () => {
 		expect(displayPrompt([{ kind: 'computer' }], '進めて')).toBe('@computer 進めて');
 		expect(displayPrompt([{ kind: 'search' }], '調べて')).toBe('@search 調べて');
 		expect(displayPrompt([{ kind: 'browser' }], 'クリックして')).toBe('@browser クリックして');
-		expect(displayPrompt([{ kind: 'vault_procedure' }], '経費精算して')).toBe(
-			'@vault-procedure 経費精算して'
-		);
 	});
 });
 
@@ -127,7 +112,6 @@ describe('mergeMentions', () => {
 describe('chipLabel', () => {
 	it('labels vault query without a note title', () => {
 		expect(chipLabel({ kind: 'vault_query' })).toBe('Vault query');
-		expect(chipLabel({ kind: 'vault_procedure' })).toBe('Vault procedure');
 		expect(chipLabel({ kind: 'screen' })).toBe('Screen');
 		expect(chipLabel({ kind: 'computer' })).toBe('Computer');
 		expect(chipLabel({ kind: 'search' })).toBe('Search');

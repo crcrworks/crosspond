@@ -15,7 +15,8 @@ Crosspond の GitHub Release を実行する。**Publish Release** ワークフ�
 - リポジトリルートで作業する
 - `gh` CLI が認証済みであること
 - `PUBLIC_CHANGELOG.md` が埋まった prepare PR が存在する（または main にマージ済みである）こと
-- GitHub Environment **`release`** に Updater 署名鍵と（可能なら）Apple 署名・公証が載っていること。手順は [README.md](../../../README.md) の Release 節
+- GitHub Environment **`release`** に Updater 署名鍵と Apple 署名・公証が揃っていること。手順は [README.md](../../../README.md) の Release 節
+- `Cargo.toml` が `UNLICENSED` のままなら、初回 public Release の前にライセンスを決める必要があることをユーザに伝える
 - 起動する GitHub ユーザーが repository **admin** であること（Write では失敗する）
 
 ## 手順
@@ -96,11 +97,13 @@ gh run view <databaseId> --log-failed
 ## ワークフロー概要（参考）
 
 **Publish Release** (`publish-release.yml`) は次を行う:
-1. main のバージョン整合性と未公開タグを検証
+1. main のバージョン整合性を検証（公開済み Release は拒否。失敗した draft は再利用可）
 2. fmt / clippy / テスト
-3. Release Please で GitHub Release と `v*` タグを作成
+3. Release Please で **draft** の GitHub Release と `v*` タグを作成
 4. `PUBLIC_CHANGELOG.md` を Release 本文にする
-5. macOS で署名・公証して成果物をその Release に載せる
+5. Environment `release` の Apple / updater 秘密鍵で macOS を署名・公証し、draft に成果物を載せる
+6. `.dmg` / `.app.tar.gz` / `.sig` / `latest.json` と codesign / Gatekeeper / stapler を検証
+7. 検証成功後にだけ draft を解除して公開する
 
 ## やってはいけないこと
 
@@ -114,5 +117,6 @@ gh run view <databaseId> --log-failed
 - **タグが既に存在**: そのバージョンは publish 済み。次バージョンで prepare からやり直す
 - **オープンな prepare PR が複数**: 最新バージョンの PR だけを対象にし、ユーザに確認する
 - **TAURI_SIGNING_PRIVATE_KEY missing**: README の Release 節に従い、Environment **`release`** に Secrets を入れる
-- **公証失敗**: Apple Developer ID の .p12 と App Store Connect API キー（または Apple ID）を確認する
+- **Apple secrets missing**: 署名・公証が揃うまで public Release にはしない
+- **公証失敗 / stapler / spctl**: draft のまま残る。Secrets と Developer ID を直して Publish を再実行する
 - **Only repository admins / waiting for a reviewer**: Write コラボレータでは動かない。admin で `--ref main` から起動する。Environment の Required reviewers で止まっているときは所有者として Approve する

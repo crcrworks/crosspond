@@ -19,8 +19,6 @@ pub struct LearnRequest {
     pub prompt: String,
     pub actions: Vec<String>,
     pub followed_procedure: bool,
-    /// User asked to save via `@vault-procedure`. Skips command/question heuristics.
-    pub explicit: bool,
     pub resources: Vec<LinkedResource>,
 }
 
@@ -66,16 +64,11 @@ impl<'a> ProcedureLearner<'a> {
     }
 
     pub fn propose(&self, request: &LearnRequest) -> Result<Option<ProcedureProposal>, VaultError> {
-        if request.actions.len() < MIN_ACTIONS {
+        if request.followed_procedure || request.actions.len() < MIN_ACTIONS {
             return Ok(None);
         }
-        if !request.explicit {
-            if request.followed_procedure {
-                return Ok(None);
-            }
-            if !looks_like_command(&request.prompt) || looks_like_question(&request.prompt) {
-                return Ok(None);
-            }
+        if !looks_like_command(&request.prompt) || looks_like_question(&request.prompt) {
+            return Ok(None);
         }
         if looks_like_secret(&request.prompt)
             || request
@@ -278,7 +271,6 @@ mod tests {
                 prompt: "経費精算して".into(),
                 actions: vec!["Opened Expense Portal".into(), "Clicked Submit".into()],
                 followed_procedure: false,
-                explicit: false,
                 resources: vec![LinkedResource {
                     id: portal.id.clone().unwrap(),
                     title: "Expense Portal".into(),
@@ -332,7 +324,6 @@ mod tests {
                     prompt: "経費精算って何".into(),
                     actions: actions.clone(),
                     followed_procedure: false,
-                    explicit: false,
                     resources: Vec::new(),
                 })
                 .unwrap()
@@ -344,7 +335,6 @@ mod tests {
                     prompt: "経費精算して".into(),
                     actions: actions.clone(),
                     followed_procedure: true,
-                    explicit: false,
                     resources: Vec::new(),
                 })
                 .unwrap()
@@ -356,7 +346,6 @@ mod tests {
                     prompt: "経費精算して".into(),
                     actions: vec!["Opened app".into()],
                     followed_procedure: false,
-                    explicit: false,
                     resources: Vec::new(),
                 })
                 .unwrap()
@@ -368,32 +357,11 @@ mod tests {
                     prompt: "経費精算して".into(),
                     actions: vec!["api_key=sk-test".into(), "Clicked Submit".into()],
                     followed_procedure: false,
-                    explicit: false,
                     resources: Vec::new(),
                 })
                 .unwrap()
                 .is_none()
         );
-        let _ = fs::remove_dir_all(vault);
-        let _ = fs::remove_file(sqlite);
-    }
-
-    #[test]
-    fn explicit_request_saves_a_question_shaped_prompt() {
-        let (vault, sqlite) = temp_paths();
-        let indexed = IndexedVault::open(&vault, &sqlite).unwrap();
-        let learner = ProcedureLearner::new(&indexed);
-        let proposal = learner
-            .propose(&LearnRequest {
-                prompt: "経費精算って何".into(),
-                actions: vec!["Opened app".into(), "Clicked Submit".into()],
-                followed_procedure: true,
-                explicit: true,
-                resources: Vec::new(),
-            })
-            .unwrap()
-            .expect("explicit proposal");
-        assert_eq!(proposal.title, "経費精算");
         let _ = fs::remove_dir_all(vault);
         let _ = fs::remove_file(sqlite);
     }

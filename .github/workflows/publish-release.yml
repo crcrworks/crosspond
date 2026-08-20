@@ -1,7 +1,7 @@
 name: Publish Release
 
-# Manual only, from main. Jobs use the `release` environment (required
-# reviewers + Apple / updater secrets) and then refuse non-admin actors.
+# Manual only, from main. Non-admins fail the admin gate. Apple / updater
+# secrets are only available on the `bundle` job (`environment: release`).
 on:
   workflow_dispatch:
 
@@ -18,7 +18,6 @@ jobs:
   validate:
     name: Validate release
     runs-on: ubuntu-latest
-    environment: release
     outputs:
       tag_name: ${{ steps.release-metadata.outputs.tag_name }}
       version: ${{ steps.release-metadata.outputs.version }}
@@ -88,59 +87,12 @@ jobs:
             exit 1
           fi
 
-      - name: Validate release has not been published
+      - name: Validate release is unpublished or a leftover draft
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           TAG_NAME: ${{ steps.release-metadata.outputs.tag_name }}
           VERSION: ${{ steps.release-metadata.outputs.version }}
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import { execFileSync } from "node:child_process";
-          import { assertExactSemver, compareSemver } from "./.github/scripts/github.mjs";
-
-          const version = process.env.VERSION;
-          const tagName = process.env.TAG_NAME;
-          assertExactSemver(version, "VERSION");
-
-          function fail(message) {
-            console.error(
-              `${message}\n\nPrepare Release PR を次バージョンで作成し、PUBLIC_CHANGELOG.md を埋めてマージしてから Publish を再実行してください。`,
-            );
-            process.exit(1);
-          }
-
-          const remoteTags = execFileSync(
-            "git",
-            ["ls-remote", "--tags", "--refs", "origin", "refs/tags/v*"],
-            { encoding: "utf8" },
-          );
-          const publishedVersions = remoteTags
-            .split("\n")
-            .map((line) => /refs\/tags\/v([0-9]+\.[0-9]+\.[0-9]+)$/.exec(line)?.[1])
-            .filter(Boolean);
-
-          if (publishedVersions.includes(version)) {
-            fail(`Tag ${tagName} already exists on origin.`);
-          }
-
-          const sorted = [...publishedVersions].sort(compareSemver);
-          const latest = sorted[sorted.length - 1];
-          if (latest && compareSemver(version, latest) <= 0) {
-            fail(
-              `Release metadata version ${version} is not newer than latest published version ${latest}.`,
-            );
-          }
-          NODE
-
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            {
-              echo "GitHub Release ${TAG_NAME} already exists."
-              echo
-              echo "Prepare Release PR を次バージョンで作成し、PUBLIC_CHANGELOG.md を埋めてマージしてから Publish を再実行してください。"
-            } >&2
-            exit 1
-          fi
+        run: bash .github/scripts/assert-can-publish.sh
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -167,7 +119,7 @@ jobs:
         run: cargo test -p crosspond-core -p crosspond-model -p crosspond-tools -p crosspond-knowledge -p crosspond-chrome-host
 
       - name: Release script tests
-        run: node --test .github/scripts/public-changelog.test.mjs
+        run: node --test .github/scripts/*.test.mjs
 
       - name: Install UI dependencies
         working-directory: ui
@@ -192,14 +144,13 @@ jobs:
             exit 1
           fi
 
-  publish:
-    name: Tag and publish GitHub Release
+  draft_release:
+    name: Create draft GitHub Release
     runs-on: ubuntu-latest
-    environment: release
     needs: validate
     outputs:
-      tag_name: ${{ steps.verify-release.outputs.tag_name }}
-      release_id: ${{ steps.verify-release.outputs.release_id }}
+      tag_name: ${{ steps.release-id.outputs.tag_name }}
+      release_id: ${{ steps.release-id.outputs.release_id }}
       version: ${{ needs.validate.outputs.version }}
     steps:
       - name: Checkout main
@@ -224,7 +175,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash .github/scripts/require-repo-admin.sh
 
+      - name: Reuse leftover draft if present
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if draft_json="$(gh release view "$TAG_NAME" --json id,isDraft 2>/dev/null)"; then
+            is_draft="$(printf '%s' "$draft_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("isDraft") is True)')"
+            release_id="$(printf '%s' "$draft_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+            if [[ "$is_draft" != "True" ]]; then
+              echo "GitHub Release ${TAG_NAME} is already public." >&2
+              exit 1
+            fi
+            echo "reuse=true" >> "$GITHUB_OUTPUT"
+            echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+          else
+            echo "reuse=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run Release Please
+        if: ${{ steps.existing.outputs.reuse != 'true' }}
         id: release
         uses: googleapis/release-please-action@v4
         with:
@@ -235,34 +207,46 @@ jobs:
           skip-github-pull-request: true
           target-branch: main
 
-      - name: Verify published release
-        id: verify-release
+      - name: Record draft release id
+        id: release-id
         env:
           EXPECTED_TAG: ${{ needs.validate.outputs.tag_name }}
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
+          REUSE: ${{ steps.existing.outputs.reuse }}
+          REUSE_ID: ${{ steps.existing.outputs.release_id }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
         run: |
           set -euo pipefail
-          if [[ "${RELEASE_CREATED}" != "true" ]]; then
-            echo "Release Please did not create a release (release_created=${RELEASE_CREATED})." >&2
-            exit 1
-          fi
-          if [[ "${TAG_NAME}" != "${EXPECTED_TAG}" ]]; then
-            echo "Expected ${EXPECTED_TAG}, but Release Please created ${TAG_NAME}." >&2
-            exit 1
+          if [[ "${REUSE}" == "true" ]]; then
+            tag="$EXPECTED_TAG"
+            release_id="$REUSE_ID"
+          else
+            if [[ "${RELEASE_CREATED}" != "true" ]]; then
+              echo "Release Please did not create a release (release_created=${RELEASE_CREATED})." >&2
+              exit 1
+            fi
+            if [[ "${TAG_NAME}" != "${EXPECTED_TAG}" ]]; then
+              echo "Expected ${EXPECTED_TAG}, but Release Please created ${TAG_NAME}." >&2
+              exit 1
+            fi
+            tag="$TAG_NAME"
+            git fetch origin "refs/tags/${tag}:refs/tags/${tag}"
+            tested_sha="$(git rev-parse HEAD)"
+            tag_sha="$(git rev-list -n 1 "${tag}")"
+            if [[ "${tag_sha}" != "${tested_sha}" ]]; then
+              echo "Release tag ${tag} points to ${tag_sha}, but CI tested ${tested_sha}." >&2
+              exit 1
+            fi
+            release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq .id)"
           fi
 
-          git fetch origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
-          tested_sha="$(git rev-parse HEAD)"
-          tag_sha="$(git rev-list -n 1 "${TAG_NAME}")"
-          if [[ "${tag_sha}" != "${tested_sha}" ]]; then
-            echo "Release tag ${TAG_NAME} points to ${tag_sha}, but CI tested ${tested_sha}." >&2
+          draft="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --jq .draft)"
+          if [[ "${draft}" != "true" ]]; then
+            echo "GitHub Release ${tag} must stay draft until artifacts are verified." >&2
             exit 1
           fi
-
-          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}" --jq .id)"
-          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${tag}" >> "$GITHUB_OUTPUT"
           echo "release_id=${release_id}" >> "$GITHUB_OUTPUT"
 
       - name: Use public changelog as release notes
@@ -273,19 +257,21 @@ jobs:
         run: |
           set -euo pipefail
           node .github/scripts/extract-public-release-notes.mjs > /tmp/release-notes.md
-          gh release edit "$TAG_NAME" --notes-file /tmp/release-notes.md
+          gh release edit "$TAG_NAME" --notes-file /tmp/release-notes.md --draft
 
   bundle:
-    name: Build and upload macOS app
-    needs: publish
-    if: ${{ needs.publish.outputs.release_id != '' }}
+    name: Sign, notarize, and upload macOS app
+    needs: draft_release
+    if: ${{ needs.draft_release.outputs.release_id != '' }}
     runs-on: macos-latest
     environment: release
+    outputs:
+      tag_name: ${{ needs.draft_release.outputs.tag_name }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.publish.outputs.tag_name }}
+          ref: ${{ needs.draft_release.outputs.tag_name }}
 
       - name: Require admin on main
         env:
@@ -311,14 +297,18 @@ jobs:
         working-directory: ui
         run: npm ci
 
-      - name: Require updater signing key
+      - name: Require Apple signing, notarization, and updater key
         env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY must be set so updater artifacts can be signed." >&2
-            exit 1
-          fi
+        run: bash .github/scripts/require-apple-signing.sh
 
       - name: Write App Store Connect API key
         env:
@@ -329,7 +319,7 @@ jobs:
             echo "APPLE_API_KEY_PATH=${RUNNER_TEMP}/AuthKey.p8" >> "$GITHUB_ENV"
           fi
 
-      - name: Build and upload
+      - name: Build and upload to draft release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -347,5 +337,47 @@ jobs:
           projectPath: crates/crosspond-app
           tauriScript: npm --prefix ${{ github.workspace }}/ui exec -- tauri
           args: --target aarch64-apple-darwin
-          releaseId: ${{ needs.publish.outputs.release_id }}
+          releaseId: ${{ needs.draft_release.outputs.release_id }}
           includeUpdaterJson: true
+
+      - name: Verify signature, notarization, and draft assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/verify-macos-release.sh ${{ needs.draft_release.outputs.tag_name }} aarch64-apple-darwin
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - bundle
+      - draft_release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Require admin on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/require-repo-admin.sh
+
+      - name: Publish draft after verified artifacts
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          TAG_NAME: ${{ needs.draft_release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          draft="$(gh release view "$TAG_NAME" --json isDraft --jq .isDraft)"
+          if [[ "$draft" != "true" ]]; then
+            echo "Expected ${TAG_NAME} to still be a draft before publishing." >&2
+            exit 1
+          fi
+          gh release edit "$TAG_NAME" --draft=false
+          published="$(gh release view "$TAG_NAME" --json isDraft --jq .isDraft)"
+          if [[ "$published" != "false" ]]; then
+            echo "Failed to publish GitHub Release ${TAG_NAME}." >&2
+            exit 1
+          fi
+          echo "Published ${TAG_NAME}. latest.json is now at /releases/latest/download/latest.json"

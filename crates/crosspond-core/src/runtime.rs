@@ -245,7 +245,6 @@ pub fn spawn_runtime_with(
                 session_context: ContextCapsule::default(),
                 staged_inputs: Vec::new(),
                 knowledge,
-                procedure_learn: None,
                 _vault_watch: vault_watch,
             }));
         })
@@ -275,7 +274,6 @@ struct Runtime {
     session_context: ContextCapsule,
     staged_inputs: Vec<StagedInput>,
     knowledge: Option<Arc<IndexedVault>>,
-    procedure_learn: Option<ProcedureLearnCandidate>,
     _vault_watch: Option<VaultWatcher>,
 }
 
@@ -317,7 +315,6 @@ async fn run_loop(mut runtime: Runtime) {
                 runtime.session_scratch = None;
                 runtime.session_context = ContextCapsule::default();
                 runtime.staged_inputs.clear();
-                runtime.procedure_learn = None;
             }
             RuntimeCommand::ResumeSession(id) => runtime.resume_session(id),
             RuntimeCommand::TestConnection => runtime.spawn_test_connection(),
@@ -503,42 +500,6 @@ impl Runtime {
                 });
                 return;
             }
-        }
-
-        if procedure_mention_only(&request) {
-            let candidate = self.procedure_learn.take();
-            let summary = match self
-                .offer_procedure_learn(task_id, &task_dir, candidate.as_ref())
-                .await
-            {
-                LearnOffer::Cancelled { reset } => {
-                    if !reset {
-                        self.procedure_learn = candidate;
-                    }
-                    self.finish_cancelled(
-                        task_id,
-                        &stored_prompt,
-                        &task_dir,
-                        reset,
-                        reused_scratch,
-                        &[],
-                        None,
-                        &[],
-                    );
-                    return;
-                }
-                LearnOffer::Saved { title } => format!("Saved as a Procedure: {title}."),
-                LearnOffer::Skipped => "Did not save a Procedure.".into(),
-                LearnOffer::Unavailable => "Nothing to save as a Procedure.".into(),
-            };
-            self.complete_without_model(
-                task_id,
-                &task_dir,
-                &stored_prompt,
-                summary,
-                reused_scratch,
-            );
-            return;
         }
 
         let routed_brief = self.knowledge.as_ref().and_then(|vault| {
@@ -808,33 +769,30 @@ impl Runtime {
                         actions: receipt_actions,
                         artifacts,
                     };
-                    let candidate =
-                        procedure_learn_candidate(&request.prompt, &receipt, routed_brief.as_ref());
-                    if request.mentions.iter().any(Mention::is_vault_procedure) {
-                        match self
-                            .offer_procedure_learn(task_id, &task_dir, Some(&candidate))
-                            .await
-                        {
-                            LearnOffer::Cancelled { reset } => {
-                                self.finish_cancelled(
-                                    task_id,
-                                    &stored_prompt,
-                                    &task_dir,
-                                    reset,
-                                    reused_scratch,
-                                    &receipt.artifacts,
-                                    routed_brief.as_ref(),
-                                    &receipt.actions,
-                                );
-                                return;
-                            }
-                            LearnOffer::Saved { .. } | LearnOffer::Skipped => {
-                                self.procedure_learn = None;
-                            }
-                            LearnOffer::Unavailable => {}
+                    match self
+                        .offer_procedure_learn(
+                            task_id,
+                            &task_dir,
+                            &stored_prompt,
+                            &receipt,
+                            routed_brief.as_ref(),
+                        )
+                        .await
+                    {
+                        LearnOffer::Cancelled { reset } => {
+                            self.finish_cancelled(
+                                task_id,
+                                &stored_prompt,
+                                &task_dir,
+                                reset,
+                                reused_scratch,
+                                &receipt.artifacts,
+                                routed_brief.as_ref(),
+                                &receipt.actions,
+                            );
+                            return;
                         }
-                    } else {
-                        self.remember_procedure_learn(candidate);
+                        LearnOffer::Done => {}
                     }
                     self.record_activity(
                         routed_brief.as_ref(),
@@ -892,74 +850,40 @@ impl Runtime {
         let _ = self.events.send(AgentEvent::TaskCancelled { task_id });
     }
 
-    fn complete_without_model(
-        &mut self,
-        task_id: TaskId,
-        task_dir: &Path,
-        stored_prompt: &str,
-        summary: String,
-        reused_scratch: bool,
-    ) {
-        let path = self.finish_scratch(reused_scratch, &[], false);
-        let receipt = Receipt {
-            task_id: task_id.to_string(),
-            summary: summary.clone(),
-            actions: Vec::new(),
-            artifacts: Vec::new(),
-        };
-        let _ = write_receipt(task_dir, &receipt);
-        append_event_log(
-            task_dir,
-            json!({ "type": "assistant_text", "text": summary }),
-        );
-        self.write_meta(
-            task_dir,
-            task_id,
-            stored_prompt,
-            "completed",
-            path.as_deref(),
-        );
-        self.session.push(Message::user(stored_prompt.to_string()));
-        self.session.push(Message::assistant(summary.clone()));
-        write_session(task_dir, &self.session);
-        append_event_log(task_dir, json!({ "type": "task_completed" }));
-        let _ = self.events.send(AgentEvent::TaskCompleted {
-            task_id,
-            summary,
-            receipt,
-        });
-    }
-
-    fn remember_procedure_learn(&mut self, candidate: ProcedureLearnCandidate) {
-        let Some(vault) = &self.knowledge else {
-            return;
-        };
-        if ProcedureLearner::new(vault)
-            .propose(&candidate.learn_request())
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            self.procedure_learn = Some(candidate);
-        }
-    }
-
     async fn offer_procedure_learn(
         &mut self,
         task_id: TaskId,
         task_dir: &Path,
-        candidate: Option<&ProcedureLearnCandidate>,
+        prompt: &str,
+        receipt: &Receipt,
+        brief: Option<&KnowledgeBrief>,
     ) -> LearnOffer {
-        let Some(candidate) = candidate else {
-            return LearnOffer::Unavailable;
-        };
         let proposal = {
             let Some(vault) = &self.knowledge else {
-                return LearnOffer::Unavailable;
+                return LearnOffer::Done;
             };
-            match ProcedureLearner::new(vault).propose(&candidate.learn_request()) {
+            let resources = brief
+                .map(|brief| {
+                    brief
+                        .resources
+                        .iter()
+                        .filter_map(|item| {
+                            parse_note_id(&item.id).map(|id| LinkedResource {
+                                id,
+                                title: item.title.clone(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            match ProcedureLearner::new(vault).propose(&LearnRequest {
+                prompt: prompt.to_string(),
+                actions: receipt.actions.clone(),
+                followed_procedure: brief.is_some_and(|brief| brief.follow.is_some()),
+                resources,
+            }) {
                 Ok(Some(proposal)) => proposal,
-                _ => return LearnOffer::Unavailable,
+                _ => return LearnOffer::Done,
             }
         };
         let approval_id = ApprovalId::new();
@@ -982,13 +906,11 @@ impl Runtime {
                 if let Some(vault) = &self.knowledge {
                     let _ = ProcedureLearner::new(vault).save(&proposal);
                 }
-                LearnOffer::Saved {
-                    title: proposal.title,
-                }
+                LearnOffer::Done
             }
             ApprovalWait::Rejected => {
                 append_event_log(task_dir, json!({ "type": "procedure_learn_skipped" }));
-                LearnOffer::Skipped
+                LearnOffer::Done
             }
             ApprovalWait::Cancelled { reset } => LearnOffer::Cancelled { reset },
         }
@@ -1745,7 +1667,6 @@ impl Runtime {
         self.session_scratch = None;
         self.session_context = ContextCapsule::default();
         self.staged_inputs.clear();
-        self.procedure_learn = None;
         self.conversation_id = Some(id);
         self.session = load_session_messages(&self.tasks_root, &id.to_string());
     }
@@ -1842,63 +1763,8 @@ enum CredentialWait {
 }
 
 enum LearnOffer {
-    Saved { title: String },
-    Skipped,
-    Unavailable,
+    Done,
     Cancelled { reset: bool },
-}
-
-#[derive(Clone)]
-struct ProcedureLearnCandidate {
-    prompt: String,
-    actions: Vec<String>,
-    resources: Vec<LinkedResource>,
-    followed_procedure: bool,
-}
-
-impl ProcedureLearnCandidate {
-    fn learn_request(&self) -> LearnRequest {
-        LearnRequest {
-            prompt: self.prompt.clone(),
-            actions: self.actions.clone(),
-            followed_procedure: self.followed_procedure,
-            explicit: true,
-            resources: self.resources.clone(),
-        }
-    }
-}
-
-fn procedure_mention_only(request: &StartTaskRequest) -> bool {
-    request.prompt.trim().is_empty()
-        && !request.mentions.is_empty()
-        && request.mentions.iter().all(Mention::is_vault_procedure)
-}
-
-fn procedure_learn_candidate(
-    prompt: &str,
-    receipt: &Receipt,
-    brief: Option<&KnowledgeBrief>,
-) -> ProcedureLearnCandidate {
-    let resources = brief
-        .map(|brief| {
-            brief
-                .resources
-                .iter()
-                .filter_map(|item| {
-                    parse_note_id(&item.id).map(|id| LinkedResource {
-                        id,
-                        title: item.title.clone(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    ProcedureLearnCandidate {
-        prompt: prompt.to_string(),
-        actions: receipt.actions.clone(),
-        resources,
-        followed_procedure: brief.is_some_and(|brief| brief.follow.is_some()),
-    }
 }
 
 fn tool_call_needs_credentials(name: &str, input: &Value) -> bool {
@@ -2130,7 +1996,6 @@ mod tests {
             session_context: ContextCapsule::default(),
             staged_inputs: Vec::new(),
             knowledge: None,
-            procedure_learn: None,
             _vault_watch: None,
         };
         (runtime, TempHome(root))
@@ -2544,9 +2409,12 @@ mod tests {
         let join = tokio::spawn(run_loop(runtime));
 
         let first = TaskId::new();
-        let mut request = StartTaskRequest::new(first, "経費精算して");
-        request.mentions = vec![Mention::VaultProcedure];
-        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                first,
+                "経費精算して",
+            )))
+            .unwrap();
         let required = drain_until(&mut event_rx, |event| {
             matches!(event, AgentEvent::ApprovalRequired { .. })
         })
@@ -2627,9 +2495,12 @@ mod tests {
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
 
-        let mut request = StartTaskRequest::new(TaskId::new(), "経費精算して");
-        request.mentions = vec![Mention::VaultProcedure];
-        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "経費精算して",
+            )))
+            .unwrap();
         let required = drain_until(&mut event_rx, |event| {
             matches!(event, AgentEvent::ApprovalRequired { .. })
         })
@@ -2647,175 +2518,6 @@ mod tests {
         })
         .await;
         assert!(knowledge.find_procedure("経費精算", 8).unwrap().is_empty());
-
-        drop(command_tx);
-        join.await.unwrap();
-        let _ = tmp;
-        let _ = std::fs::remove_dir_all(vault);
-        let _ = std::fs::remove_file(sqlite);
-    }
-
-    #[tokio::test]
-    async fn guided_run_without_mention_does_not_prompt_to_save_procedure() {
-        let phase = Arc::new(Mutex::new(0u8));
-        let build: ProviderBuilder = {
-            let phase = Arc::clone(&phase);
-            Arc::new(move |_, _| {
-                Arc::new(TeachThenEchoProvider {
-                    requests: Arc::new(Mutex::new(Vec::new())),
-                    phase: Arc::clone(&phase),
-                })
-            })
-        };
-        let id = uuid::Uuid::now_v7();
-        let vault = std::env::temp_dir().join(format!("crosspond-learn-auto-vault-{id}"));
-        let sqlite = std::env::temp_dir().join(format!("crosspond-learn-auto-db-{id}.sqlite"));
-        let indexed = IndexedVault::open(&vault, &sqlite).unwrap();
-        let knowledge = Arc::new(indexed);
-        let (mut runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
-        runtime.knowledge = Some(Arc::clone(&knowledge));
-        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
-        let join = tokio::spawn(run_loop(runtime));
-
-        command_tx
-            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
-                TaskId::new(),
-                "経費精算して",
-            )))
-            .unwrap();
-        let event = drain_until(&mut event_rx, |event| {
-            matches!(
-                event,
-                AgentEvent::TaskCompleted { .. } | AgentEvent::ApprovalRequired { .. }
-            )
-        })
-        .await;
-        assert!(
-            matches!(event, AgentEvent::TaskCompleted { .. }),
-            "{event:?}"
-        );
-        assert!(knowledge.find_procedure("経費精算", 8).unwrap().is_empty());
-
-        drop(command_tx);
-        join.await.unwrap();
-        let _ = tmp;
-        let _ = std::fs::remove_dir_all(vault);
-        let _ = std::fs::remove_file(sqlite);
-    }
-
-    #[tokio::test]
-    async fn vault_procedure_mention_saves_previous_run() {
-        let phase = Arc::new(Mutex::new(0u8));
-        let build: ProviderBuilder = {
-            let phase = Arc::clone(&phase);
-            Arc::new(move |_, _| {
-                Arc::new(TeachThenEchoProvider {
-                    requests: Arc::new(Mutex::new(Vec::new())),
-                    phase: Arc::clone(&phase),
-                })
-            })
-        };
-        let id = uuid::Uuid::now_v7();
-        let vault = std::env::temp_dir().join(format!("crosspond-learn-later-vault-{id}"));
-        let sqlite = std::env::temp_dir().join(format!("crosspond-learn-later-db-{id}.sqlite"));
-        let indexed = IndexedVault::open(&vault, &sqlite).unwrap();
-        let knowledge = Arc::new(indexed);
-        let (mut runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
-        runtime.knowledge = Some(Arc::clone(&knowledge));
-        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
-        let join = tokio::spawn(run_loop(runtime));
-
-        command_tx
-            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
-                TaskId::new(),
-                "経費精算して",
-            )))
-            .unwrap();
-        let first = drain_until(&mut event_rx, |event| {
-            matches!(
-                event,
-                AgentEvent::TaskCompleted { .. } | AgentEvent::ApprovalRequired { .. }
-            )
-        })
-        .await;
-        assert!(
-            matches!(first, AgentEvent::TaskCompleted { .. }),
-            "{first:?}"
-        );
-
-        let mut request = StartTaskRequest::new(TaskId::new(), "");
-        request.mentions = vec![Mention::VaultProcedure];
-        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
-        let required = drain_until(&mut event_rx, |event| {
-            matches!(event, AgentEvent::ApprovalRequired { .. })
-        })
-        .await;
-        match required {
-            AgentEvent::ApprovalRequired {
-                approval_id, title, ..
-            } => {
-                assert_eq!(title, "Save this as a Procedure?");
-                command_tx
-                    .send(RuntimeCommand::Approve(approval_id))
-                    .unwrap();
-            }
-            other => panic!("{other:?}"),
-        }
-        let completed = drain_until(&mut event_rx, |event| {
-            matches!(event, AgentEvent::TaskCompleted { .. })
-        })
-        .await;
-        match completed {
-            AgentEvent::TaskCompleted { summary, .. } => {
-                assert!(summary.contains("Saved as a Procedure"));
-                assert!(summary.contains("経費精算"));
-            }
-            other => panic!("{other:?}"),
-        }
-        assert!(
-            knowledge
-                .find_procedure("経費精算", 8)
-                .unwrap()
-                .iter()
-                .any(|hit| hit.title == "経費精算")
-        );
-
-        drop(command_tx);
-        join.await.unwrap();
-        let _ = tmp;
-        let _ = std::fs::remove_dir_all(vault);
-        let _ = std::fs::remove_file(sqlite);
-    }
-
-    #[tokio::test]
-    async fn vault_procedure_without_prior_run_reports_nothing_to_save() {
-        let id = uuid::Uuid::now_v7();
-        let vault = std::env::temp_dir().join(format!("crosspond-learn-empty-vault-{id}"));
-        let sqlite = std::env::temp_dir().join(format!("crosspond-learn-empty-db-{id}.sqlite"));
-        let indexed = IndexedVault::open(&vault, &sqlite).unwrap();
-        let knowledge = Arc::new(indexed);
-        let (mut runtime, tmp) =
-            test_runtime(echo_builder(), seeded_secrets(), filesystem_registry());
-        runtime.knowledge = Some(Arc::clone(&knowledge));
-        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
-        let join = tokio::spawn(run_loop(runtime));
-
-        let mut request = StartTaskRequest::new(TaskId::new(), "");
-        request.mentions = vec![Mention::VaultProcedure];
-        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
-        let completed = drain_until(&mut event_rx, |event| {
-            matches!(
-                event,
-                AgentEvent::TaskCompleted { .. } | AgentEvent::ApprovalRequired { .. }
-            )
-        })
-        .await;
-        match completed {
-            AgentEvent::TaskCompleted { summary, .. } => {
-                assert!(summary.contains("Nothing to save as a Procedure"));
-            }
-            other => panic!("{other:?}"),
-        }
 
         drop(command_tx);
         join.await.unwrap();

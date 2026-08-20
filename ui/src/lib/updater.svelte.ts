@@ -1,11 +1,13 @@
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { updateNoticeState, type UpdateNotice } from './updater';
+import { dev } from '$app/environment';
+import { shouldCheckForUpdates, updateNoticeState, type UpdateNotice } from './updater';
 
 export class AppUpdater {
 	available = $state(false);
 	installing = $state(false);
 	dismissed = $state(false);
+	checking = $state(false);
 	#pending: Update | null = null;
 
 	get notice(): UpdateNotice {
@@ -17,7 +19,9 @@ export class AppUpdater {
 	}
 
 	onLauncherShown = async (onboarding: boolean) => {
-		if (onboarding || this.dismissed || this.installing) return;
+		if (!shouldCheckForUpdates(dev)) return;
+		if (onboarding || this.dismissed || this.installing || this.checking) return;
+		this.checking = true;
 		try {
 			const update = await check();
 			if (update) {
@@ -27,6 +31,8 @@ export class AppUpdater {
 		} catch {
 			this.available = false;
 			this.#pending = null;
+		} finally {
+			this.checking = false;
 		}
 	};
 

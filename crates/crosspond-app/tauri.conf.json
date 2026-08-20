@@ -5,13 +5,13 @@
   "identifier": "com.crosspond.app",
   "build": {
     "beforeDevCommand": {
-      "script": "bash ../../scripts/stage-chrome-host.sh && npm run dev",
-      "cwd": "../../ui"
+      "script": "bash scripts/stage-chrome-host.sh && npm --prefix ui run dev",
+      "cwd": "../.."
     },
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": {
-      "script": "bash ../../scripts/stage-chrome-host.sh --release && npm run build",
-      "cwd": "../../ui"
+      "script": "bash scripts/stage-chrome-host.sh --release && npm --prefix ui run build",
+      "cwd": "../.."
     },
     "frontendDist": "../../ui/build"
   },
