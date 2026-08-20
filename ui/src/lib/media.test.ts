@@ -55,18 +55,12 @@ describe('composerCanSend', () => {
 describe('displayPrompt with attachments', () => {
 	it('puts file names before mentions and text', () => {
 		expect(
-			displayPrompt(
-				[{ kind: 'screen' }],
-				'これは何',
-				[{ id: '1', name: 'photo.png', kind: 'image' }]
-			)
+			displayPrompt([{ kind: 'screen' }], 'これは何', [{ name: 'photo.png' }])
 		).toBe('photo.png @screen これは何');
-		expect(displayPrompt([], '', [{ id: '1', name: 'clip.mov', kind: 'video' }])).toBe(
-			'clip.mov'
+		expect(displayPrompt([], '', [{ name: 'clip.mov' }])).toBe('clip.mov');
+		expect(displayPrompt([], 'これは何', [{ name: '/Users/me/photo.png' }])).toBe(
+			'photo.png これは何'
 		);
-		expect(
-			displayPrompt([], 'これは何', [{ id: '1', name: '/Users/me/photo.png', kind: 'image' }])
-		).toBe('photo.png これは何');
 	});
 });
 

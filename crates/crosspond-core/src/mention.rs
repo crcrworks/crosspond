@@ -177,14 +177,6 @@ pub fn mention_routing(mentions: &[Mention]) -> String {
     lines.join("\n")
 }
 
-pub fn model_user_text(
-    prompt: &str,
-    mentions: &[Mention],
-    attachments: &[UserAttachment],
-) -> String {
-    model_user_text_with_staged(prompt, mentions, attachments, &[])
-}
-
 pub fn model_user_text_with_staged(
     prompt: &str,
     mentions: &[Mention],
@@ -314,7 +306,7 @@ mod tests {
         assert!(text.contains("browser_fill"));
         assert!(text.contains("Do not use get_accessibility_snapshot or take_screenshot"));
         assert!(!text.contains("ui_press"));
-        let empty = model_user_text("  ", &[Mention::Browser], &[]);
+        let empty = model_user_text_with_staged("  ", &[Mention::Browser], &[], &[]);
         assert!(empty.contains("Operate the current Chromium tab"));
         assert!(empty.contains("browser_snapshot"));
     }
@@ -351,7 +343,7 @@ mod tests {
 
     #[test]
     fn empty_query_mention_asks_to_search_knowledge() {
-        let text = model_user_text("  ", &[Mention::VaultQuery], &[]);
+        let text = model_user_text_with_staged("  ", &[Mention::VaultQuery], &[], &[]);
         assert!(text.contains("knowledge_search"));
         assert!(text.contains("Search accumulated knowledge"));
         assert!(!text.contains("cp_"));
@@ -360,10 +352,10 @@ mod tests {
 
     #[test]
     fn empty_computer_mention_asks_to_operate() {
-        let text = model_user_text("  ", &[Mention::Computer], &[]);
+        let text = model_user_text_with_staged("  ", &[Mention::Computer], &[], &[]);
         assert!(text.contains("operate the computer"));
         assert!(text.contains("ui_press"));
-        let screen = model_user_text("  ", &[Mention::Screen], &[]);
+        let screen = model_user_text_with_staged("  ", &[Mention::Screen], &[], &[]);
         assert!(screen.contains("Look at the attached screen and continue."));
         assert!(!screen.contains("operate the computer"));
     }
@@ -387,7 +379,7 @@ mod tests {
             width: None,
             height: None,
         };
-        let text = model_user_text("  ", &[], &[image]);
+        let text = model_user_text_with_staged("  ", &[], &[image], &[]);
         assert!(text.contains("photo.png"));
         assert!(text.contains("Look at the attached image"));
         assert!(!text.contains("/Users"));

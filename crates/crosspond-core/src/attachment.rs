@@ -328,7 +328,7 @@ mod tests {
             width: None,
             height: None,
         };
-        let staged = stage_user_attachments(&input, &[attachment.clone()]);
+        let staged = stage_user_attachments(&input, std::slice::from_ref(&attachment));
         assert_eq!(staged[0].relative, "input/clip.mov");
         assert_eq!(
             fs::read_to_string(input.join("clip.mov")).unwrap(),
