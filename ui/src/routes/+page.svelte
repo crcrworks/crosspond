@@ -16,12 +16,14 @@
 		setComputerApproval,
 		setUiFlags,
 		startTask,
+		submitCredential,
 		syncLauncherSize
 	} from '$lib/api';
 	import ActivityLabel from '$lib/components/ActivityLabel.svelte';
 	import ApprovalCard from '$lib/components/ApprovalCard.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import ConversationHeader from '$lib/components/ConversationHeader.svelte';
+	import CredentialCard from '$lib/components/CredentialCard.svelte';
 	import HistoryPanel from '$lib/components/HistoryPanel.svelte';
 	import Onboarding from '$lib/components/Onboarding.svelte';
 	import PromptBar from '$lib/components/PromptBar.svelte';
@@ -96,7 +98,13 @@
 	}
 
 	function syncLauncherWindow() {
-		const composing = session.composing || mentionOpen || modeMenuOpen || pickerOpen;
+		const composing =
+			session.composing ||
+			mentionOpen ||
+			modeMenuOpen ||
+			pickerOpen ||
+			session.pendingApproval !== null ||
+			session.pendingCredential !== null;
 		const inConversation = session.inConversation;
 		const onboarding = session.overlay === 'onboarding';
 		if (onboarding) {
@@ -453,6 +461,30 @@
 							session.bump();
 							if (id) void reject(id);
 						}}
+					/>
+				{/if}
+				{#if session.pendingCredential}
+					<CredentialCard
+						title={session.pendingCredential.title}
+						credentialRef={session.pendingCredential.credentialRef}
+						destination={session.pendingCredential.destination}
+						saveOffered={session.pendingCredential.saveOffered}
+						onfill={(username, password, save) => {
+							const id = session.pendingCredential?.id;
+							session.pendingCredential = null;
+							session.state = 'running';
+							session.bump();
+							if (id) void submitCredential(id, username, password, save);
+						}}
+						oncancel={() => {
+							const id = session.pendingCredential?.id;
+							session.pendingCredential = null;
+							session.state = 'running';
+							session.bump();
+							if (id) void reject(id);
+						}}
+						oncompositionstart={() => (session.composing = true)}
+						oncompositionend={() => (session.composing = false)}
 					/>
 				{/if}
 			{/if}

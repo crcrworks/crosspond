@@ -32,6 +32,10 @@ export function reject(id: string) {
 	return invoke('reject', { id });
 }
 
+export function submitCredential(id: string, username: string, password: string, save: boolean) {
+	return invoke('submit_credential', { id, username, password, save });
+}
+
 export function cancel() {
 	return invoke('cancel');
 }

@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 
-use crate::browser::{BrowserBackend, BrowserTransport, EXTENSION_DISCONNECTED, host_from_url};
+use crate::browser::{
+    BrowserBackend, BrowserTransport, EXTENSION_DISCONNECTED, HttpAuthChallenge, host_from_url,
+    http_auth_required_message, normalize_host,
+};
 use crate::browser_snapshot::{BoundRef, render_cdp_ax_tree};
 use crate::tool::ToolError;
 
@@ -22,6 +25,7 @@ struct Session {
     refs: HashMap<String, BoundRef>,
     url: String,
     title: String,
+    http_auth: Option<HttpAuthChallenge>,
 }
 
 pub struct ExtensionBrowser {
@@ -193,6 +197,76 @@ impl ExtensionBrowser {
     fn select_all(&self, tab_id: i64) -> Result<(), ToolError> {
         dispatch_key(self, tab_id, "a", 4)
     }
+
+    fn challenge_from_result(&self, result: &Value) -> Option<HttpAuthChallenge> {
+        if result.get("http_auth_required").and_then(Value::as_bool) != Some(true)
+            && result.get("pending").and_then(Value::as_bool) != Some(true)
+        {
+            return None;
+        }
+        let url = result
+            .get("url")
+            .and_then(Value::as_str)
+            .or_else(|| result.get("origin").and_then(Value::as_str))
+            .unwrap_or("");
+        let host = host_from_url(url)
+            .or_else(|| {
+                result
+                    .get("host")
+                    .and_then(Value::as_str)
+                    .map(normalize_host)
+                    .filter(|host| !host.is_empty())
+            })
+            .unwrap_or_else(|| "this site".into());
+        Some(HttpAuthChallenge {
+            host,
+            scheme: result
+                .get("scheme")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            realm: result
+                .get("realm")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        })
+    }
+
+    fn take_http_auth_message(&self, result: &Value) -> Option<String> {
+        let challenge = self.challenge_from_result(result)?;
+        {
+            let mut session = self.session();
+            session.http_auth = Some(challenge.clone());
+        }
+        Some(http_auth_required_message(
+            &challenge.host,
+            &challenge.scheme,
+            &challenge.realm,
+        ))
+    }
+
+    fn apply_navigation_result(&self, result: &Value, line: String) -> Result<String, ToolError> {
+        {
+            let mut session = self.session();
+            if let Some(id) = result.get("tabId").and_then(Value::as_i64) {
+                session.tab_id = Some(id);
+            }
+            session.refs.clear();
+            session.epoch.clear();
+            if let Some(url) = result.get("url").and_then(Value::as_str) {
+                session.url = url.to_string();
+            }
+            if let Some(title) = result.get("title").and_then(Value::as_str) {
+                session.title = title.to_string();
+            }
+        }
+        if let Some(message) = self.take_http_auth_message(result) {
+            return Ok(message);
+        }
+        self.session().http_auth = None;
+        self.with_action_snapshot(line)
+    }
 }
 
 impl BrowserBackend for ExtensionBrowser {
@@ -267,20 +341,12 @@ impl BrowserBackend for ExtensionBrowser {
             body["url"] = json!(url);
         }
         let result = self.request(body)?;
+        if let Some(url) = url
+            && result.get("url").and_then(Value::as_str).is_none()
         {
-            let mut session = self.session();
-            session.refs.clear();
-            session.epoch.clear();
-            if let Some(url) = result.get("url").and_then(Value::as_str) {
-                session.url = url.to_string();
-            } else if let Some(url) = url {
-                session.url = url.to_string();
-            }
-            if let Some(title) = result.get("title").and_then(Value::as_str) {
-                session.title = title.to_string();
-            }
+            self.session().url = url.to_string();
         }
-        self.with_action_snapshot(format!("Navigated {action}"))
+        self.apply_navigation_result(&result, format!("Navigated {action}"))
     }
 
     fn click(&self, element_ref: &str) -> Result<String, ToolError> {
@@ -392,28 +458,50 @@ impl BrowserBackend for ExtensionBrowser {
             body["url"] = json!(url);
         }
         let result = self.request(body)?;
-        let tab_id = result
-            .get("tabId")
-            .and_then(Value::as_i64)
-            .ok_or_else(|| ToolError::Failed("new tab did not return a tab id".into()))?;
-        {
-            let mut session = self.session();
-            session.tab_id = Some(tab_id);
-            session.refs.clear();
-            session.epoch.clear();
-            session.url = result
-                .get("url")
-                .and_then(Value::as_str)
-                .or(url)
-                .unwrap_or("")
-                .to_string();
-            session.title = result
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+        if result.get("tabId").and_then(Value::as_i64).is_none() {
+            return Err(ToolError::Failed("new tab did not return a tab id".into()));
         }
-        self.with_action_snapshot(format!("Opened tab {}", url.unwrap_or("about:blank")))
+        self.apply_navigation_result(
+            &result,
+            format!("Opened tab {}", url.unwrap_or("about:blank")),
+        )
+    }
+
+    fn pending_http_auth(&self) -> Option<HttpAuthChallenge> {
+        if let Some(challenge) = self.session().http_auth.clone() {
+            return Some(challenge);
+        }
+        let tab_id = self.session().tab_id?;
+        let result = self
+            .request(json!({ "op": "pending_http_auth", "tabId": tab_id }))
+            .ok()?;
+        self.take_http_auth_message(&result)?;
+        self.session().http_auth.clone()
+    }
+
+    fn continue_http_auth(&self, username: &str, password: &str) -> Result<String, ToolError> {
+        let tab_id = self.ensure_tab()?;
+        let result = self.request(json!({
+            "op": "continue_http_auth",
+            "tabId": tab_id,
+            "username": username,
+            "password": password,
+        }))?;
+        if let Some(message) = self.take_http_auth_message(&result) {
+            return Ok(message);
+        }
+        self.session().http_auth = None;
+        self.with_action_snapshot("Filled HTTP authentication. Values were not returned.".into())
+    }
+
+    fn cancel_http_auth(&self) -> Result<String, ToolError> {
+        self.session().http_auth = None;
+        let Some(tab_id) = self.session().tab_id else {
+            return Ok(String::new());
+        };
+        let _ = self.request(json!({ "op": "cancel_http_auth", "tabId": tab_id }));
+        self.session().http_auth = None;
+        Ok(String::new())
     }
 
     fn describe_ref(&self, element_ref: &str) -> Option<String> {
@@ -587,12 +675,16 @@ mod tests {
 
     struct FakeTransport {
         calls: Mutex<Vec<String>>,
+        requests: Mutex<Vec<Value>>,
+        http_auth_pending: Mutex<bool>,
     }
 
     impl FakeTransport {
         fn new() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                requests: Mutex::new(Vec::new()),
+                http_auth_pending: Mutex::new(false),
             }
         }
     }
@@ -603,6 +695,10 @@ mod tests {
         }
 
         fn call(&self, request: Value) -> Result<Value, ToolError> {
+            self.requests
+                .lock()
+                .expect("requests")
+                .push(request.clone());
             let op = request
                 .get("op")
                 .and_then(Value::as_str)
@@ -618,11 +714,55 @@ mod tests {
                         "active": true
                     }]
                 }),
-                "attach" | "navigate" | "new_tab" => json!({
+                "attach" => json!({
                     "tabId": 7,
                     "title": "Example",
                     "url": "https://example.com/"
                 }),
+                "navigate" | "new_tab" => {
+                    let url = request.get("url").and_then(Value::as_str).unwrap_or("");
+                    if url.contains("/inner/") {
+                        *self.http_auth_pending.lock().expect("auth") = true;
+                        json!({
+                            "tabId": 7,
+                            "http_auth_required": true,
+                            "url": url,
+                            "scheme": "digest",
+                            "realm": "lab-share"
+                        })
+                    } else {
+                        *self.http_auth_pending.lock().expect("auth") = false;
+                        json!({
+                            "tabId": 7,
+                            "title": "Example",
+                            "url": "https://example.com/"
+                        })
+                    }
+                }
+                "pending_http_auth" => {
+                    if *self.http_auth_pending.lock().expect("auth") {
+                        json!({
+                            "pending": true,
+                            "url": "https://files.example.invalid/inner/",
+                            "scheme": "digest",
+                            "realm": "lab-share"
+                        })
+                    } else {
+                        json!({ "pending": false })
+                    }
+                }
+                "continue_http_auth" => {
+                    *self.http_auth_pending.lock().expect("auth") = false;
+                    json!({
+                        "tabId": 7,
+                        "title": "Share",
+                        "url": "https://files.example.invalid/inner/"
+                    })
+                }
+                "cancel_http_auth" => {
+                    *self.http_auth_pending.lock().expect("auth") = false;
+                    json!({ "cancelled": true })
+                }
                 "cdp" => {
                     let method = request
                         .get("method")
@@ -714,5 +854,77 @@ mod tests {
                 .iter()
                 .any(|call| call == "Runtime.evaluate")
         );
+    }
+
+    #[test]
+    fn navigate_http_auth_does_not_echo_secrets() {
+        let transport = Arc::new(FakeTransport::new());
+        let browser = ExtensionBrowser::new(Arc::clone(&transport) as Arc<dyn BrowserTransport>);
+        let text = browser
+            .navigate(
+                "goto",
+                Some("https://files.example.invalid/inner/lab-share/"),
+            )
+            .unwrap();
+        assert!(text.contains("digest authentication required"));
+        assert!(text.contains("fill_credential"));
+        assert!(!text.contains("hunter2"));
+        assert!(!text.contains("labuser"));
+        let challenge = browser.pending_http_auth().expect("pending");
+        assert_eq!(challenge.host, "files.example.invalid");
+        let filled = browser.continue_http_auth("labuser", "hunter2").unwrap();
+        assert!(filled.contains("Filled HTTP authentication"));
+        assert!(!filled.contains("hunter2"));
+        assert!(!filled.contains("labuser"));
+        let requests = transport.requests.lock().unwrap().clone();
+        let continue_req = requests
+            .iter()
+            .find(|request| request.get("op").and_then(Value::as_str) == Some("continue_http_auth"))
+            .expect("continue_http_auth");
+        assert_eq!(continue_req["username"], "labuser");
+        assert_eq!(continue_req["password"], "hunter2");
+        for request in &requests {
+            if request.get("op").and_then(Value::as_str) == Some("continue_http_auth") {
+                continue;
+            }
+            let text = request.to_string();
+            assert!(!text.contains("hunter2"), "{text}");
+            assert!(!text.contains("labuser"), "{text}");
+        }
+        assert!(
+            transport
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call == "continue_http_auth")
+        );
+        assert!(browser.pending_http_auth().is_none());
+    }
+
+    #[test]
+    fn cancel_http_auth_does_not_send_secrets() {
+        let transport = Arc::new(FakeTransport::new());
+        let browser = ExtensionBrowser::new(Arc::clone(&transport) as Arc<dyn BrowserTransport>);
+        browser
+            .navigate(
+                "goto",
+                Some("https://files.example.invalid/inner/lab-share/"),
+            )
+            .unwrap();
+        assert!(browser.pending_http_auth().is_some());
+        browser.cancel_http_auth().unwrap();
+        assert!(browser.pending_http_auth().is_none());
+        let requests = transport.requests.lock().unwrap().clone();
+        assert!(
+            requests.iter().any(
+                |request| request.get("op").and_then(Value::as_str) == Some("cancel_http_auth")
+            )
+        );
+        for request in &requests {
+            let text = request.to_string();
+            assert!(!text.contains("hunter2"), "{text}");
+            assert!(!text.contains("labuser"), "{text}");
+        }
     }
 }
