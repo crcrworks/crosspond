@@ -94,10 +94,13 @@ jobs:
         with:
           toolchain: 1.96.0
 
-      - name: cargo audit
-        uses: rustsec/audit-check@v2.0.0
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit
+
+      - name: cargo audit
+        run: cargo audit
 
       - name: Node.js
         uses: actions/setup-node@v4
