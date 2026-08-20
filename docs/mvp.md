@@ -69,7 +69,7 @@ Safari, Firefox, Web Store listing, raw CDP, and an in-app browser are later.
 
 ## Agent Skills
 
-Installed skills live in `~/.crosspond/skills/<name>/SKILL.md`. The folder name must match the YAML `name`. There is no skill picker: `StartTask` injects **name + description only** (about 40 entries). Matching work calls `skill_read`. If the user asks to add a skill, the host uses `skill_search` then `skill_install` (GitHub `owner/repo` or a GitHub URL). No `npx skills`, zip, or arbitrary git.
+Installed skills live in `~/.crosspond/skills/<name>/SKILL.md`. The folder name must match the YAML `name`. There is no skill picker: `StartTask` injects **name + description only** (about 40 entries) after a host safety scan; `fail` skills are omitted. Matching work calls `skill_read`, which scans again. If the user asks to add a skill, the host uses `skill_search` then `skill_install` (GitHub `owner/repo` or a GitHub URL). No `npx skills`, zip, or arbitrary git.
 
 The host scans SKILL.md and other text **before** the model sees search hits and **before** anything is written. Search returns name / source / installs / `safety` / finding labels — never bodies. `fail` is always refused (including Auto): no Allow card, nothing on disk, error categories only. `warn` and `unknown` always show Allow, including Auto. `pass` follows the usual ExternalWrite policy. A public audit, when available, is auxiliary and never overrides a local `fail`. Heuristics are incomplete; Allow stays.
 

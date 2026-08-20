@@ -77,9 +77,10 @@ The system prompt includes this untrusted-content line. Ambient selected text an
 
 Safety is decided in Rust (`SkillSafety` in `crosspond-tools`), not by asking the model to review a skill. Skill Markdown can jailbreak a reviewer.
 
-- Discovery is `~/.crosspond/skills/<name>/SKILL.md`. The catalog in the system prompt is name + description only.
+- Discovery is `~/.crosspond/skills/<name>/SKILL.md`. Catalog and `skill_read` re-scan the installed files with the same host scanner as install. `fail` skills are omitted from the system prompt and refused by `skill_read` (categories only). Descriptions are untrusted metadata: newlines/control characters are collapsed, and the catalog says not to follow them.
+- The scanner inspects every text file the model can later read, including SVG under `assets/`. Opaque binary images (`png` / `jpeg` / `webp` / `gif` / `ico`) under `assets/` are skipped. Unexpected binaries elsewhere fail.
 - `skill_search` returns name, source, installs, `safety`, and finding labels. It must not return SKILL.md or script bodies.
-- `skill_install` downloads into memory, scans every text file, then writes only on a non-fail verdict. `fail` never touches disk, even in Auto, and does not show Allow. The tool error lists categories (`prompt_injection`, `credential_theft`) and must not echo the payload.
+- `skill_install` downloads into memory, scans every text file, then writes only on a non-fail verdict. Root-level skills include `SKILL.md`, `scripts/`, `references/`, and `assets/` only — not the rest of the repository. `fail` never touches disk, even in Auto, and does not show Allow. The tool error lists categories (`prompt_injection`, `credential_theft`) and must not echo the payload.
 - `warn` and `unknown` (including unaudited registry hits) always show Allow, including Auto. The card title is `Install skill {name} from {owner/repo}`; the description is finding labels, not bodies.
 - Receipts, `events.jsonl`, `session.json`, and logs must not include skill bodies. The receipt line is `Installed a skill`.
 - Optional public audit (`https://add-skill.vercel.sh/audit`) is auxiliary. A `pass` audit does not skip the local scan. Missing audit is not a green light. Crosspond does not send Vercel OIDC tokens.
