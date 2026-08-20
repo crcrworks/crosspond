@@ -48,13 +48,24 @@ describe('LauncherSession completion', () => {
 		expect(session.placeholder).toBe('Ask a follow-up...');
 		expect(session.transcript.blocks()[0]).toMatchObject({ kind: 'user', text: 'Press Continue' });
 		session.mentions = [{ kind: 'screen' }];
+		session.attachments = [{ id: '1', name: 'photo.png', kind: 'image' }];
 		session.beginTask('task-2', 'conv-1', 'and then stop');
 		expect(session.mentions).toEqual([]);
+		expect(session.attachments).toEqual([]);
 		expect(session.transcript.blocks()).toHaveLength(3);
 		expect(session.transcript.blocks()[2]).toMatchObject({
 			kind: 'user',
 			text: 'and then stop'
 		});
+	});
+
+	it('resetLocal drops pending attachment chips', () => {
+		const session = new LauncherSession();
+		session.attachments = [{ id: '1', name: 'photo.png', kind: 'image' }];
+		session.mentions = [{ kind: 'screen' }];
+		session.resetLocal();
+		expect(session.attachments).toEqual([]);
+		expect(session.mentions).toEqual([]);
 	});
 });
 

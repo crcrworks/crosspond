@@ -230,6 +230,7 @@ kbd {
 	display: flex;
 	margin-left: auto;
 	align-items: center;
+	gap: 2px;
 }
 
 .picker-native {
@@ -429,6 +430,33 @@ select.prompt-mode.picker-select:focus {
 	border-radius: 6px;
 	background: var(--button-primary);
 	cursor: pointer;
+}
+
+.prompt-attach {
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	cursor: pointer;
+}
+
+.prompt-attach:hover:not(:disabled) {
+	background: var(--tone-muted-bg);
+}
+
+.prompt-attach:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+.prompt.seamless .prompt-attach {
+	width: 20px;
+	height: 20px;
 }
 
 .prompt-action:hover {

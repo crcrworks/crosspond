@@ -55,7 +55,7 @@
 	const expanded = $derived(!session.compact);
 	const extraHeight = $derived(
 		textExtra +
-			(session.mentions.length > 0 ? MENTION_CHIP_ROW : 0) +
+			(session.mentions.length > 0 || session.attachments.length > 0 ? MENTION_CHIP_ROW : 0) +
 			(session.compact && mentionOpen ? MENTION_MENU_HEIGHT : 0)
 	);
 	const canSubmit = $derived(
@@ -179,13 +179,17 @@
 		const taken = takeInlineMentions(session.input);
 		const mentions = mergeMentions(session.mentions, taken.mentions);
 		const prompt = taken.prompt;
-		if (prompt.length === 0 && mentions.length === 0) return;
+		if (prompt.length === 0 && mentions.length === 0 && session.attachments.length === 0) return;
 		try {
-			const started = await startTask(prompt, mentions);
+			const started = await startTask(
+				prompt,
+				mentions,
+				session.attachments.map((item) => item.id)
+			);
 			session.beginTask(
 				started.task_id,
 				started.conversation_id,
-				displayPrompt(mentions, prompt)
+				displayPrompt(mentions, prompt, session.attachments)
 			);
 			resetComposerSize();
 		} catch (error) {
@@ -289,7 +293,7 @@
 			void hideLauncher();
 			return;
 		}
-		if (event.key === 'ArrowUp' && !modeMenuOpen && !pickerOpen && !mentionOpen && session.input.length === 0 && session.overlay === 'none' && session.mentions.length === 0) {
+		if (event.key === 'ArrowUp' && !modeMenuOpen && !pickerOpen && !mentionOpen && session.input.length === 0 && session.overlay === 'none' && session.mentions.length === 0 && session.attachments.length === 0) {
 			event.preventDefault();
 			void onHistory();
 		}
@@ -366,6 +370,7 @@
 				bind:pickerOpen
 				bind:mentionOpen
 				bind:mentions={session.mentions}
+				bind:attachments={session.attachments}
 				placeholder={session.placeholder}
 				approval={session.computerApproval}
 				busy={session.busy}

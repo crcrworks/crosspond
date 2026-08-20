@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { APPROVAL_MODES, approvalLabel } from '$lib/tools';
-	import { listModels, saveEffort, saveSelected } from '$lib/api';
+	import { listModels, pickMedia, attachPastedImage, removeAttachment, saveEffort, saveSelected } from '$lib/api';
 	import { listen } from '@tauri-apps/api/event';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { composerExtraHeight } from '$lib/launcher-size';
 	import {
 		CUSTOM_MODEL,
@@ -21,6 +21,16 @@
 		type MentionCatalogItem
 	} from '$lib/mentions';
 	import type { ComputerApproval, ModelGroup, ReasoningEffort, SelectedModel } from '$lib/types';
+	import {
+		MAX_ATTACHMENTS,
+		clipboardFiles,
+		composerCanSend,
+		fileNameOnly,
+		fileToBase64,
+		isClipboardPathText,
+		pastedImages,
+		type MediaAttachment
+	} from '$lib/media';
 	import Chevron from './Chevron.svelte';
 	import Icon from './Icon.svelte';
 
@@ -34,6 +44,7 @@
 		pickerOpen = $bindable(false),
 		mentionOpen = $bindable(false),
 		mentions = $bindable<Mention[]>([]),
+		attachments = $bindable<MediaAttachment[]>([]),
 		placeholder,
 		approval,
 		busy = false,
@@ -53,6 +64,7 @@
 		pickerOpen: boolean;
 		mentionOpen: boolean;
 		mentions: Mention[];
+		attachments: MediaAttachment[];
 		placeholder: string;
 		approval: ComputerApproval;
 		busy?: boolean;
@@ -81,7 +93,9 @@
 	let customSource = $state<string | null>(null);
 	let customModel = $state('');
 	const docked = $derived(variant === 'docked');
-	const sendReady = $derived(canSubmit && (value.trim().length > 0 || mentions.length > 0));
+	const sendReady = $derived(
+		canSubmit && composerCanSend(value, mentions.length, attachments.length)
+	);
 	const activeStage = $derived(mentionOpen ? stage : null);
 	const kindItems = $derived(filterCatalog(activeStage === 'kinds' ? stageQuery : ''));
 	const filteredApps = $derived(
@@ -267,6 +281,74 @@
 		queueMicrotask(() => textarea?.focus());
 	}
 
+	async function removeMedia(id: string) {
+		attachments = attachments.filter((item) => item.id !== id);
+		try {
+			await removeAttachment(id);
+		} catch {
+			/* already gone */
+		}
+		queueMicrotask(() => textarea?.focus());
+	}
+
+	async function addPastedFiles(files: File[]) {
+		const room = Math.max(0, MAX_ATTACHMENTS - attachments.length);
+		let next = attachments;
+		for (const file of files.slice(0, room)) {
+			try {
+				const data = await fileToBase64(file);
+				const added = await attachPastedImage(file.type, data);
+				if (!next.some((item) => item.id === added.id)) {
+					next = [...next, added];
+					attachments = next;
+				}
+			} catch {
+				/* skip a file the host refused */
+			}
+		}
+		queueMicrotask(() => textarea?.focus());
+	}
+
+	async function onPickMedia() {
+		if (busy || attachments.length >= MAX_ATTACHMENTS) return;
+		oncompositionstart();
+		await tick();
+		try {
+			const added = await pickMedia();
+			if (added.length) {
+				const seen = new Set(attachments.map((item) => item.id));
+				attachments = [...attachments, ...added.filter((item) => !seen.has(item.id))];
+			}
+		} catch {
+			/* cancel or unavailable */
+		} finally {
+			oncompositionend();
+			queueMicrotask(() => textarea?.focus());
+		}
+	}
+
+	function onPromptPaste(event: ClipboardEvent) {
+		const data = event.clipboardData;
+		const files = clipboardFiles(data);
+		const images = pastedImages(files);
+		if (images.length === 0) {
+			if (files.length > 0) event.preventDefault();
+			return;
+		}
+		event.preventDefault();
+		void addPastedFiles(images);
+		const text = data?.getData('text/plain') ?? '';
+		if (!text || isClipboardPathText(text) || !textarea) return;
+		const start = textarea.selectionStart ?? value.length;
+		const end = textarea.selectionEnd ?? start;
+		value = `${value.slice(0, start)}${text}${value.slice(end)}`;
+		queueMicrotask(() => {
+			const pos = start + text.length;
+			textarea?.setSelectionRange(pos, pos);
+			resize();
+		});
+	}
+
 	async function loadApps() {
 		const id = (appsLoadId += 1);
 		appsLoading = true;
@@ -334,6 +416,11 @@
 			removeMention(mentions.length - 1);
 			return;
 		}
+		if (event.key === 'Backspace' && value.length === 0 && attachments.length > 0) {
+			event.preventDefault();
+			void removeMedia(attachments[attachments.length - 1].id);
+			return;
+		}
 		if (event.key === 'Enter' && !event.shiftKey) {
 			event.preventDefault();
 			onsubmit();
@@ -397,6 +484,18 @@
 
 <svelte:window onpointerdown={onWindowPointerDown} />
 
+{#snippet attachButton()}
+	<button
+		type="button"
+		class="prompt-attach"
+		aria-label="Attach image or video"
+		disabled={busy || attachments.length >= MAX_ATTACHMENTS}
+		onclick={() => void onPickMedia()}
+	>
+		<Icon src="/icons/paperclip.svg" size={14} />
+	</button>
+{/snippet}
+
 {#snippet approvalPicker()}
 	<div class="prompt-mode-wrap picker-native">
 		<select
@@ -419,8 +518,19 @@
 
 <div {@attach captureRoot} class={['prompt', variant]} data-tauri-drag-region="false">
 	<div class="prompt-stack">
-		{#if mentions.length > 0}
+		{#if mentions.length > 0 || attachments.length > 0}
 			<div class="prompt-chips">
+				{#each attachments as item (item.id)}
+					{@const name = fileNameOnly(item.name)}
+					<button
+						type="button"
+						class="prompt-chip"
+						aria-label="Remove {name}"
+						onclick={() => void removeMedia(item.id)}
+					>
+						{name}
+					</button>
+				{/each}
 				{#each mentions as mention, index (chipLabel(mention) + index)}
 					<button
 						type="button"
@@ -444,6 +554,7 @@
 				aria-label={placeholder}
 				rows="1"
 				onkeydown={onPromptKey}
+				onpaste={onPromptPaste}
 				oninput={onPromptInput}
 				oncompositionstart={() => {
 					composing = true;
@@ -529,6 +640,7 @@
 			{/if}
 			{#if !docked}
 				<div class="prompt-pickers-end">
+					{@render attachButton()}
 					{@render approvalPicker()}
 				</div>
 			{/if}
@@ -537,6 +649,7 @@
 	{#if docked}
 		<div class="prompt-tools">
 			{@render approvalPicker()}
+			{@render attachButton()}
 			<button
 				type="button"
 				class={['prompt-action', busy && 'stop']}

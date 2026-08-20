@@ -7,6 +7,7 @@ import type {
 	WindowState
 } from './types';
 import type { Mention } from './mentions';
+import type { MediaAttachment } from './media';
 import {
 	Transcript,
 	failedOffersSettings,
@@ -24,6 +25,7 @@ export class LauncherSession {
 	state = $state<WindowState>('idle');
 	input = $state('');
 	mentions = $state<Mention[]>([]);
+	attachments = $state<MediaAttachment[]>([]);
 	placeholder = $state(ASK);
 	overlay = $state<'none' | 'onboarding' | 'history'>('none');
 	onboardingReady = $state(false);
@@ -86,6 +88,7 @@ export class LauncherSession {
 		this.state = 'idle';
 		this.input = '';
 		this.mentions = [];
+		this.attachments = [];
 		this.placeholder = ASK;
 		this.overlay = 'none';
 		this.onboardingHint = null;
@@ -205,6 +208,7 @@ export class LauncherSession {
 		this.state = 'preparing_context';
 		this.input = '';
 		this.mentions = [];
+		this.attachments = [];
 		this.placeholder = FOLLOW_UP;
 		this.failedMessage = null;
 		this.bump();
@@ -226,6 +230,7 @@ export class LauncherSession {
 		this.placeholder = FOLLOW_UP;
 		this.input = '';
 		this.mentions = [];
+		this.attachments = [];
 		this.failedMessage = null;
 		if (view.status === 'failed') {
 			this.state = 'failed';

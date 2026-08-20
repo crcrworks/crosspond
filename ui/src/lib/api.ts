@@ -11,13 +11,34 @@ import type {
 	StartTaskResult
 } from './types';
 import type { Mention } from './mentions';
+import type { MediaAttachment } from './media';
 
 export function bootstrap() {
 	return invoke<Bootstrap>('bootstrap');
 }
 
-export function startTask(prompt: string, mentions: Mention[] = []) {
-	return invoke<StartTaskResult>('start_task', { prompt, mentions });
+export function startTask(
+	prompt: string,
+	mentions: Mention[] = [],
+	attachmentIds: string[] = []
+) {
+	return invoke<StartTaskResult>('start_task', {
+		prompt,
+		mentions,
+		attachmentIds
+	});
+}
+
+export function pickMedia() {
+	return invoke<MediaAttachment[]>('pick_media');
+}
+
+export function attachPastedImage(mediaType: string, data: string) {
+	return invoke<MediaAttachment>('attach_pasted_image', { mediaType, data });
+}
+
+export function removeAttachment(id: string) {
+	return invoke('remove_attachment', { id });
 }
 
 export function listMentionApps() {
