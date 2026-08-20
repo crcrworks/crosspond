@@ -23,7 +23,7 @@ describe('filterCatalog', () => {
 		expect(filterCatalog('sc').map((item) => item.kind)).toEqual(['screen']);
 		expect(filterCatalog('画面').map((item) => item.kind)).toEqual(['screen', 'computer']);
 		expect(filterCatalog('知識').map((item) => item.kind)).toEqual(['vault_query']);
-		expect(filterCatalog('操作').map((item) => item.kind)).toEqual(['computer']);
+		expect(filterCatalog('操作').map((item) => item.kind)).toEqual(['computer', 'browser']);
 		expect(filterCatalog('').length).toBeGreaterThan(3);
 	});
 
@@ -48,6 +48,14 @@ describe('filterCatalog', () => {
 		expect(filterCatalog('borser').map((item) => item.kind)).toEqual(['browser']);
 		expect(filterCatalog('chrome').map((item) => item.kind)).toEqual(['browser']);
 		expect(filterCatalog('ブラ').map((item) => item.kind)).toEqual(['browser']);
+		expect(filterCatalog('browser')[0]?.description).toBe('ブラウザを操作');
+	});
+
+	it('renames web search to @search and keeps @web as an alias', () => {
+		const search = filterCatalog('search')[0];
+		expect(search?.kind).toBe('search');
+		expect(search?.token).toBe('search');
+		expect(filterCatalog('web').map((item) => item.kind)).toEqual(['search']);
 	});
 });
 
@@ -64,6 +72,15 @@ describe('takeInlineMentions', () => {
 		expect(taken.mentions.map((item) => item.kind)).toEqual(['vault_query', 'computer']);
 	});
 
+	it('accepts @search and the @web alias', () => {
+		expect(takeInlineMentions('@search 調べて').mentions.map((item) => item.kind)).toEqual([
+			'search'
+		]);
+		expect(takeInlineMentions('@web 調べて').mentions.map((item) => item.kind)).toEqual([
+			'search'
+		]);
+	});
+
 	it('accepts browser and the borser alias', () => {
 		const taken = takeInlineMentions('@browser @borser Continue を押して');
 		expect(taken.prompt).toBe('Continue を押して');
@@ -77,6 +94,7 @@ describe('displayPrompt', () => {
 			displayPrompt([{ kind: 'screen' }, { kind: 'vault_query' }], '進めて')
 		).toBe('@screen @vault-query 進めて');
 		expect(displayPrompt([{ kind: 'computer' }], '進めて')).toBe('@computer 進めて');
+		expect(displayPrompt([{ kind: 'search' }], '調べて')).toBe('@search 調べて');
 		expect(displayPrompt([{ kind: 'browser' }], 'クリックして')).toBe('@browser クリックして');
 	});
 });
@@ -96,6 +114,7 @@ describe('chipLabel', () => {
 		expect(chipLabel({ kind: 'vault_query' })).toBe('Vault query');
 		expect(chipLabel({ kind: 'screen' })).toBe('Screen');
 		expect(chipLabel({ kind: 'computer' })).toBe('Computer');
+		expect(chipLabel({ kind: 'search' })).toBe('Search');
 		expect(chipLabel({ kind: 'browser' })).toBe('Browser');
 	});
 });
