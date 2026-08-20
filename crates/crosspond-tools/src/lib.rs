@@ -15,6 +15,9 @@ mod path;
 mod registry;
 mod scratch;
 mod shell;
+mod skill_safety;
+mod skill_types;
+mod skills;
 mod ssrf;
 mod tool;
 mod web;
@@ -47,6 +50,12 @@ pub use path::{
 pub use registry::ToolRegistry;
 pub use scratch::{ScratchError, ScratchReason, ScratchSpace};
 pub use shell::{command_embeds_credentials, register_shell_tools};
+pub use skill_safety::{SafetyReport, SafetyVerdict, scan_skill_files, scan_text};
+pub use skill_types::{PreparedSkillInstall, SkillEndpoints, SkillFile};
+pub use skills::{
+    InstalledSkill, SkillManifest, default_skills_root, parse_skill_md, prepare_skill_install,
+    register_skill_tools, render_skill_catalog, scan_skills_root, write_prepared_skill,
+};
 pub use ssrf::{is_blocked_ip, validate_fetch_url, validate_fetch_url_for_hosts};
 pub use tool::{
     MAX_TOOL_OUTPUT_BYTES, Tool, ToolContext, ToolDefinition, ToolError, ToolImage, ToolResult,

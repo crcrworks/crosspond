@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -5,6 +6,7 @@ use thiserror::Error;
 
 use crate::knowledge::KnowledgeBackend;
 use crate::scratch::ScratchSpace;
+use crate::skill_types::{PreparedSkillInstall, SkillEndpoints};
 
 /// Truncate tool output so a directory dump cannot blow the context window.
 pub const MAX_TOOL_OUTPUT_BYTES: usize = 100 * 1024;
@@ -36,6 +38,12 @@ pub struct ToolContext {
     pub credential_destination: Option<String>,
     /// Read-only Knowledge Vault lookup. Absent when no vault is configured.
     pub knowledge: Option<Arc<dyn KnowledgeBackend>>,
+    /// Installed skills directory. Defaults to `~/.crosspond/skills`.
+    pub skills_root: Option<PathBuf>,
+    /// Test override for skills.sh / GitHub URLs.
+    pub skill_endpoints: Option<SkillEndpoints>,
+    /// Fetched skill waiting to be written after Allow.
+    pub pending_skill_install: Option<Arc<PreparedSkillInstall>>,
 }
 
 impl ToolContext {
@@ -67,6 +75,15 @@ impl std::fmt::Debug for ToolContext {
             .field("credential_hosts", &self.credential_hosts)
             .field("credential_destination", &self.credential_destination)
             .field("knowledge", &self.knowledge.as_ref().map(|_| "set"))
+            .field("skills_root", &self.skills_root)
+            .field(
+                "skill_endpoints",
+                &self.skill_endpoints.as_ref().map(|_| "set"),
+            )
+            .field(
+                "pending_skill_install",
+                &self.pending_skill_install.as_ref().map(|_| "set"),
+            )
             .finish()
     }
 }

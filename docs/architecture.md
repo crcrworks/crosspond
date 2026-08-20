@@ -9,13 +9,15 @@
 | `crosspond-core` | runtime commands/events, agent loop, policy, receipts, context types | model, tools, knowledge, tokio, uuid |
 | `crosspond-knowledge` | Obsidian-compatible Knowledge Vault (Markdown + YAML + derived SQLite FTS) | serde, uuid, rusqlite, notify; not Tauri, not core |
 | `crosspond-model` | LLM provider abstraction | reqwest, serde |
-| `crosspond-tools` | filesystem, computer, web, browser, shell/URL, calendar, knowledge-lookup tool defs; backends as traits | serde, reqwest; not macos, not knowledge |
+| `crosspond-tools` | filesystem, computer, web, browser, shell/URL, calendar, knowledge-lookup, Agent Skills tool defs; backends as traits | serde, reqwest, serde_yaml; not macos, not knowledge |
 | `crosspond-chrome-host` | native-messaging framing, unix-socket bridge, Chromium native-host manifests | serde_json; not Tauri, not core |
 | `crosspond-macos` | hotkeys, Keychain, ambient context, cua-driver, EventKit | core, tools, platform crates, not Tauri |
 
 `crosspond-model` must not depend on `crosspond-core`. `crosspond-knowledge` must not depend on Tauri or `crosspond-core`. `crosspond-tools` must not depend on `crosspond-macos` (core → tools and macos → core would cycle). macOS implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` from tools. `crosspond-app` implements `BrowserBackend` by talking to the Chrome extension through `crosspond-chrome-host`. The MV3 extension lives in `extension/chrome/` and must not receive API keys.
 
 The Knowledge Vault path is `config.json` `vault_path`, chosen in Settings (default `~/Documents/Crosspond`). It is not hard-coded under `~/.crosspond`. Markdown files are the source of truth; Crosspond creates `_system/Schema.md`, `Index.md`, and `Log.md` when opening a vault. Search state lives in `~/.crosspond/index/<vault-id>.sqlite` and can be rebuilt from the Markdown. When a vault is configured, `StartTask` runs `KnowledgeRouter` and injects a Knowledge Brief into the system prompt. Command prompts that match a Procedure also get a follow plan (requires before uses). The model reads notes through `knowledge_*` tools (`crosspond-tools` talks to a `KnowledgeBackend` trait; `crosspond-core` adapts `IndexedVault`). `knowledge_read` may expose a `credential_ref` pointer (never the secret) and the http(s) hosts extracted from that note; HTTP file servers use `fetch_url` with that pointer on those hosts only, and native/browser login uses `fill_credential`. Tools must not depend on `crosspond-knowledge`. Computer use stays in the existing tool backends; Procedures are guidance, not a workflow DSL. Completed meaningful tasks write Activity notes under `history/YYYY/MM/` via `ActivityRecorder` (no raw traces). `knowledge_ingest` captures a Source and applies a validated `IngestionPlan` (provenance appends and links to retrieved candidates only; hash conflicts are reported, never overwritten). After a guided success with no existing Procedure, Crosspond asks to save a Procedure; the user must Allow, and the body is generated from the receipt rather than from unrestricted model writes. Read Later saves the current page, selection, PDF, or local document as an unread Source (`knowledge_read_later`); processing uses the same ingestion plan.
+
+Installed Agent Skills live under `~/.crosspond/skills/<name>/SKILL.md` (folder name must match frontmatter `name`). `StartTask` scans that directory and injects a catalog of name + description only. `skill_read` loads a local skill; `skill_search` queries the public skills.sh index and peeks GitHub `SKILL.md` plus `scripts/` so a host `SkillSafety` scanner can attach `safety` without returning bodies. `skill_install` downloads into memory, scans every text file, refuses `fail` with no disk writes, and reuses those bytes after Allow so a second fetch cannot swap the payload. `allowed-tools` is ignored for auto-approval.
 
 ## Agent data flow
 
@@ -37,6 +39,7 @@ Option+Space
         │                      @vault-query tells the model to knowledge_search then knowledge_read
         │                      inject Knowledge Brief when vault_path is set
         │                      (procedure follow plan: requires → uses → computer tools)
+        │                      scan ~/.crosspond/skills; inject name+description catalog
         │                      OpenAI-compatible stream, or ChatGPT Codex Responses
         │                      (text + images; OAuth tokens never leave Rust)
         │                      knowledge_search / knowledge_read /
@@ -45,6 +48,10 @@ Option+Space
         │                      knowledge_ingest / knowledge_propose_update
         │                      knowledge_read_later / knowledge_archive_source
         │                        (validated plan; hash conflicts; no secrets)
+        │                      skill_read (local SKILL.md)
+        │                      skill_search (skills.sh; host safety; no bodies)
+        │                      skill_install (in-memory fetch+scan; fail writes nothing;
+        │                        warn/unknown Allow even in Auto; reuse the same bytes)
         │                      fs tools (scratch auto when needed; external after Allow,
         │                        or Auto)
         │                      list_apps / open_app / focus_app

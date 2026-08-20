@@ -73,6 +73,7 @@ pub fn receipt_action_line(name: &str, text: &str) -> Option<String> {
         "ui_set_value" | "browser_fill" => Some("Set a field value".into()),
         "fill_credential" => Some("Filled a login".into()),
         "fetch_url" => Some("Fetched a URL".into()),
+        "skill_install" => Some("Installed a skill".into()),
         "run_command" => Some("Ran a command".into()),
         "open_url" => Some("Opened a URL".into()),
         "calendar_events" => Some("Read calendar events".into()),
@@ -127,6 +128,15 @@ pub fn tool_ui_summary(name: &str, input: &Value) -> String {
         | "browser_select" | "browser_snapshot" | "browser_text" | "browser_tabs" => String::new(),
         "browser_navigate" | "browser_new_tab" => url_without_query(string_field(input, "url")),
         "fill_credential" => string_field(input, "credential_ref"),
+        "skill_search" => truncate_chars(&string_field(input, "query"), UI_SUMMARY_MAX),
+        "skill_read" | "skill_install" => {
+            let name = string_field(input, "name");
+            if !name.is_empty() {
+                name
+            } else {
+                string_field(input, "source")
+            }
+        }
         _ => String::new(),
     }
 }
@@ -236,6 +246,13 @@ mod tests {
             Some("Fetched a URL".into())
         );
         assert_eq!(
+            receipt_action_line(
+                "skill_install",
+                "Installed pdf-processing from acme/skills into /tmp/secret"
+            ),
+            Some("Installed a skill".into())
+        );
+        assert_eq!(
             receipt_action_line("browser_fill", "Filled a1f3-e1 with hunter2"),
             Some("Set a field value".into())
         );
@@ -331,6 +348,13 @@ mod tests {
         assert_eq!(
             tool_ui_summary("web_search", &serde_json::json!({"query": "rust gpui"})),
             "rust gpui"
+        );
+        assert_eq!(
+            tool_ui_summary(
+                "skill_install",
+                &serde_json::json!({"source": "acme/skills", "name": "pdf-processing"})
+            ),
+            "pdf-processing"
         );
         assert_eq!(
             tool_ui_summary("ui_hotkey", &serde_json::json!({"keys": ["cmd", "c"]})),

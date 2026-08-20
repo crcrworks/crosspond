@@ -52,6 +52,12 @@ export function toolActivityLabel(name: string): string {
 			return 'Saving for later…';
 		case 'knowledge_archive_source':
 			return 'Archiving a source…';
+		case 'skill_read':
+			return 'Reading a skill…';
+		case 'skill_search':
+			return 'Searching skills…';
+		case 'skill_install':
+			return 'Installing a skill…';
 		case 'run_command':
 			return 'Running a command…';
 		case 'open_url':
@@ -141,6 +147,12 @@ export function toolDoneLabel(name: string): string {
 			return 'Saved for later';
 		case 'knowledge_archive_source':
 			return 'Archived a source';
+		case 'skill_read':
+			return 'Read a skill';
+		case 'skill_search':
+			return 'Searched skills';
+		case 'skill_install':
+			return 'Installed a skill';
 		case 'run_command':
 			return 'Ran a command';
 		case 'open_url':
@@ -226,6 +238,12 @@ export function toolVisual(name: string): ToolVisual {
 		case 'knowledge_propose_update':
 		case 'knowledge_read_later':
 		case 'knowledge_archive_source':
+			return { icon: '/icons/pencil.svg', tone: 'green' };
+		case 'skill_read':
+			return { icon: '/icons/file.svg', tone: 'green' };
+		case 'skill_search':
+			return { icon: '/icons/search.svg', tone: 'green' };
+		case 'skill_install':
 			return { icon: '/icons/pencil.svg', tone: 'green' };
 		case 'run_command':
 			return { icon: '/icons/terminal.svg', tone: 'red' };
