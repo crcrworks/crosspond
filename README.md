@@ -23,7 +23,7 @@ Then:
 4. Select text in another app, or files in Finder — or leave Safari / Chrome / Helium in front.
 5. Press **Option + Space** (change this in Settings) to show the bar from any app. A badge should show the app and “Selected text: N chars” or “N selected files”.
 6. Keep Crosspond running so it can register `com.crosspond.chrome`. Then load the unpacked extension from Settings → Browser (chrome://extensions → Developer mode → Load unpacked → `extension/chrome`). If Chrome already had the extension loaded, click Reload. Settings → Browser should show **Connected**. Then ask to click something on the current page; Crosspond uses `browser_snapshot` rather than screenshots.
-7. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in a native app, or ask to click something visible in a browser page. UI actions, shell, external files, and a new browser site show an **Allow** / **Cancel** card first unless the chip is **Auto**. Auto does not add new sites to Allowed Sites. After a task, the summary stays in the conversation and artifacts get **Show in Finder**; **History** opens a past conversation so you can follow up.
+7. Try **Summarize this**, **What shipped in Rust 1.96?** (needs Exa key), **カレンダーから今日の予定を確認して** (`calendar_events`), **Press the Continue button** in a native app, or ask to click something visible in a browser page. UI actions, shell, external files, and a new browser site show an **Allow** / **Cancel** card first unless the chip is **Auto**. Auto still asks before unsandboxed shell and before sending private task data to the network. Auto does not add new sites to Allowed Sites. After a task, the summary stays in the conversation and artifacts get **Show in Finder**; **History** opens a past conversation so you can follow up.
 
 **Escape** or **Stop** cancels the whole task while it is running. Approval **Cancel** rejects only that action. Hiding the window keeps work running and keeps the conversation; press **New** to start fresh.
 
@@ -40,6 +40,8 @@ cargo test --workspace
 npm --prefix ui run check
 npm --prefix ui test
 ```
+
+Pull requests and pushes to `main` run `.github/workflows/ci.yml` (fmt, portable clippy/test, UI check/test/build, `cargo audit`, `npm audit --audit-level=high`). On Linux, clippy/test skip `crosspond-macos` stubs. `gitleaks` is advisory.
 
 ## Release
 
