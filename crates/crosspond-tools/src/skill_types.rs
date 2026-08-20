@@ -52,12 +52,7 @@ pub struct PreparedSkillInstall {
 
 impl PreparedSkillInstall {
     pub fn refuse_message(&self) -> String {
-        let categories = self.safety.category_list();
-        if categories.is_empty() {
-            "refused to install: skill failed the safety scan.".into()
-        } else {
-            format!("refused to install: {categories}. Crosspond blocked this skill.")
-        }
+        self.safety.refuse_message("install")
     }
 
     pub fn approval_copy(&self) -> (String, String) {
@@ -79,6 +74,6 @@ impl PreparedSkillInstall {
     }
 
     pub fn is_fail(&self) -> bool {
-        self.safety.verdict.is_fail()
+        self.safety.is_fail()
     }
 }

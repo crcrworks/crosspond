@@ -85,6 +85,19 @@ impl SafetyReport {
             list.join(", ")
         }
     }
+
+    pub fn refuse_message(&self, action: &str) -> String {
+        let categories = self.category_list();
+        if categories.is_empty() {
+            format!("refused to {action}: skill failed the safety scan.")
+        } else {
+            format!("refused to {action}: {categories}. Crosspond blocked this skill.")
+        }
+    }
+
+    pub fn is_fail(&self) -> bool {
+        self.verdict.is_fail()
+    }
 }
 
 const OPAQUE_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "ico"];
