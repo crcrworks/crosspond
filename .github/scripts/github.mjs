@@ -138,3 +138,27 @@ export function requiredReleaseAssetNames(names) {
 	}
 	return missing;
 }
+
+export function assertDraftReleaseAssets({ isDraft, assets, localDmgName, localDmgSize }) {
+	if (isDraft !== true) {
+		throw new Error("release must still be a draft while verifying artifacts");
+	}
+	const list = assets ?? [];
+	const names = list.map((asset) => asset.name ?? "");
+	const missing = requiredReleaseAssetNames(names);
+	if (missing.length > 0) {
+		throw new Error(`draft release is missing assets: ${missing.join(", ")} (have ${names.join(", ")})`);
+	}
+	const match = list.find((asset) => asset.name === localDmgName);
+	if (!match) {
+		throw new Error(`draft release has no DMG named ${localDmgName} (have ${names.join(", ")})`);
+	}
+	const remoteSize = Number(match.size ?? 0);
+	const expectedSize = Number(localDmgSize);
+	if (remoteSize !== expectedSize) {
+		throw new Error(
+			`draft DMG ${localDmgName} is ${remoteSize} bytes, stapled local file is ${expectedSize} bytes; the pre-staple asset may still be on the Release`,
+		);
+	}
+	return names;
+}

@@ -320,7 +320,7 @@ jobs:
           fi
 
       - name: Build and upload to draft release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -339,6 +339,16 @@ jobs:
           args: --target aarch64-apple-darwin
           releaseId: ${{ needs.draft_release.outputs.release_id }}
           includeUpdaterJson: true
+
+      - name: Notarize, staple, and re-upload the DMG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash .github/scripts/notarize-staple-dmg.sh ${{ needs.draft_release.outputs.tag_name }} aarch64-apple-darwin
 
       - name: Verify signature, notarization, and draft assets
         env:

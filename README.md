@@ -49,7 +49,7 @@ Ship from `main` with the same two-step flow as other crcrworks apps:
 2. `/prepare-release` — starts **Prepare Release PR**, then fill `PUBLIC_CHANGELOG.md` (do not commit from the skill)
 3. After you commit the changelog and the PR is ready: `/release` — squash-merges if needed and starts **Publish Release**
 
-Publish creates a **draft** `vX.Y.Z` GitHub Release first, then signs and notarizes the Apple Silicon `.dmg` / updater files, verifies Gatekeeper, and only then publishes. Users never see `/releases/latest` (or `latest.json`) until that last step. The launcher checks that public Release when the window is shown and offers **Update available**. `tauri dev` does not check for updates.
+Publish creates a **draft** `vX.Y.Z` GitHub Release first. CI signs the `.app`, notarizes and staples the distributable `.dmg`, re-uploads that stapled DMG, verifies Gatekeeper and Release assets, and only then publishes. Users never see `/releases/latest` (or `latest.json`) until that last step. The launcher checks that public Release when the window is shown and offers **Update available**. `tauri dev` does not check for updates.
 
 The repo must be **public** (or Releases must be downloadable without auth) or in-app updates cannot fetch `latest.json`.
 

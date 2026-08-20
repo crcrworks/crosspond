@@ -101,9 +101,10 @@ gh run view <databaseId> --log-failed
 2. fmt / clippy / テスト
 3. Release Please で **draft** の GitHub Release と `v*` タグを作成
 4. `PUBLIC_CHANGELOG.md` を Release 本文にする
-5. Environment `release` の Apple / updater 秘密鍵で macOS を署名・公証し、draft に成果物を載せる
-6. `.dmg` / `.app.tar.gz` / `.sig` / `latest.json` と codesign / Gatekeeper / stapler を検証
-7. 検証成功後にだけ draft を解除して公開する
+5. Environment `release` の Apple / updater 秘密鍵で `.app` を署名・公証し、draft に成果物を載せる
+6. 配布する `.dmg` 自体を notarize / staple し、stapled DMG を draft Release に上書きする
+7. `.dmg` / `.app.tar.gz` / `.sig` / `latest.json` と codesign / Gatekeeper / stapler を最終検証する
+8. 検証成功後にだけ draft を解除して公開する
 
 ## やってはいけないこと
 

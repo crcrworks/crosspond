@@ -1,73 +1,48 @@
 #!/usr/bin/env bash
-# Verify signed/notarized macOS artifacts before a draft GitHub Release is published.
+# Verify signed/notarized macOS artifacts after the stapled DMG is re-uploaded.
 set -euo pipefail
 
 tag="${1:?usage: verify-macos-release.sh <tag> [target-triple]}"
 triple="${2:-aarch64-apple-darwin}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$root"
+eval "$(bash "$root/.github/scripts/macos-bundle-paths.sh" "$triple" "$root")"
 
-target_dir="$(
-	cargo metadata --format-version 1 --no-deps --manifest-path "$root/Cargo.toml" |
-		python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
-)"
-bundle="$target_dir/$triple/release/bundle"
-macos_dir="$bundle/macos"
-dmg_dir="$bundle/dmg"
+echo "Verifying code signature of $APP"
+codesign --verify --deep --strict --verbose=2 "$APP"
 
-shopt -s nullglob
-apps=("$macos_dir"/*.app)
-dmgs=("$dmg_dir"/*.dmg)
-tarballs=("$macos_dir"/*.app.tar.gz)
+echo "Assessing Gatekeeper on $APP"
+spctl --assess --type execute -vv "$APP"
 
-if [[ "${#apps[@]}" -ne 1 ]]; then
-	echo "expected one .app under $macos_dir, found ${#apps[@]}" >&2
-	exit 1
-fi
-if [[ "${#dmgs[@]}" -ne 1 ]]; then
-	echo "expected one .dmg under $dmg_dir, found ${#dmgs[@]}" >&2
-	exit 1
-fi
-if [[ "${#tarballs[@]}" -ne 1 ]]; then
-	echo "expected one .app.tar.gz under $macos_dir, found ${#tarballs[@]}" >&2
-	exit 1
-fi
+echo "Validating notarization ticket on $DMG"
+xcrun stapler validate "$DMG"
 
-app="${apps[0]}"
-dmg="${dmgs[0]}"
-tarball="${tarballs[0]}"
-sig="${tarball}.sig"
-if [[ ! -f "$sig" ]]; then
-	echo "missing updater signature $sig" >&2
-	exit 1
-fi
-
-echo "Verifying code signature of $app"
-codesign --verify --deep --strict --verbose=2 "$app"
-
-echo "Assessing Gatekeeper on $app"
-spctl --assess --type execute -vv "$app"
-
-echo "Validating notarization ticket on $dmg"
-xcrun stapler validate "$dmg"
+local_name="$(basename "$DMG")"
+local_size="$(stat -f%z "$DMG")"
+local_digest="$(shasum -a 256 "$DMG" | awk '{print $1}')"
 
 asset_json="$(gh release view "$tag" --json assets,isDraft)"
-python3 - "$asset_json" <<'PY'
-import json, sys
+ASSET_JSON="$asset_json" LOCAL_NAME="$local_name" LOCAL_SIZE="$local_size" \
+	node --input-type=module <<'NODE'
+import { assertDraftReleaseAssets } from "./.github/scripts/github.mjs";
 
-payload = json.loads(sys.argv[1])
-if payload.get("isDraft") is not True:
-    raise SystemExit("release must still be a draft while verifying artifacts")
-names = [asset.get("name") or "" for asset in payload.get("assets") or []]
-missing = []
-if not any(name.endswith(".dmg") for name in names):
-    missing.append(".dmg")
-if not any(name.endswith(".app.tar.gz") for name in names):
-    missing.append(".app.tar.gz")
-if not any(name.endswith(".app.tar.gz.sig") for name in names):
-    missing.append(".app.tar.gz.sig")
-if "latest.json" not in names:
-    missing.append("latest.json")
-if missing:
-    raise SystemExit(f"draft release is missing assets: {', '.join(missing)} (have {names})")
-print("draft release assets ok:", ", ".join(names))
-PY
+const payload = JSON.parse(process.env.ASSET_JSON);
+const names = assertDraftReleaseAssets({
+	isDraft: payload.isDraft,
+	assets: payload.assets,
+	localDmgName: process.env.LOCAL_NAME,
+	localDmgSize: process.env.LOCAL_SIZE,
+});
+console.log("draft release assets ok:", names.join(", "));
+console.log(`stapled DMG size matches GitHub asset (${process.env.LOCAL_SIZE} bytes)`);
+NODE
+
+download_dir="$(mktemp -d)"
+trap 'rm -rf "$download_dir"' EXIT
+gh release download "$tag" --pattern "$local_name" --dir "$download_dir"
+remote_digest="$(shasum -a 256 "$download_dir/$local_name" | awk '{print $1}')"
+if [[ "$remote_digest" != "$local_digest" ]]; then
+	echo "draft DMG digest $remote_digest does not match stapled local digest $local_digest" >&2
+	exit 1
+fi
+echo "stapled DMG digest matches GitHub asset ($local_digest)"

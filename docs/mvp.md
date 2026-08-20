@@ -69,7 +69,7 @@ Safari, Firefox, Web Store listing, raw CDP, and an in-app browser are later.
 
 ## Phase 14 (distribution)
 
-GitHub Releases ship an Apple Silicon `.dmg`. `/prepare-release` then `/release` drive Release Please: a version PR, user-facing `PUBLIC_CHANGELOG.md`, then a signed and notarized updater bundle (`latest.json` + `.app.tar.gz`). The GitHub Release stays draft until the macOS build, Developer ID signature, notarization, and artifact checks succeed. The launcher shows **Update available** on the header when a newer public Release exists (dismissible for the process). Signing secrets live on the GitHub Environment `release`; only repository admins can run those workflows. The Chrome extension is still loaded unpacked from the app bundle path in Settings.
+GitHub Releases ship an Apple Silicon `.dmg`. `/prepare-release` then `/release` drive Release Please: a version PR, user-facing `PUBLIC_CHANGELOG.md`, then a signed and notarized updater bundle (`latest.json` + `.app.tar.gz`). The GitHub Release stays draft until the macOS build, Developer ID signature, DMG notarization and stapling, and artifact checks succeed. The launcher shows **Update available** on the header when a newer public Release exists (dismissible for the process). Signing secrets live on the GitHub Environment `release`; only repository admins can run those workflows. The Chrome extension is still loaded unpacked from the app bundle path in Settings.
 
 ## Later phases (do not implement yet)
 
