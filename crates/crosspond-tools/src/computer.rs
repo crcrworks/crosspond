@@ -139,6 +139,24 @@ pub fn computer_and_screenshot_registry(
     input: Arc<dyn InputBackend>,
     calendar: Arc<dyn crate::calendar::CalendarBackend>,
 ) -> ToolRegistry {
+    computer_and_screenshot_registry_with_browser(
+        ax,
+        screenshot,
+        apps,
+        input,
+        calendar,
+        Arc::new(crate::browser::DisconnectedBrowser),
+    )
+}
+
+pub fn computer_and_screenshot_registry_with_browser(
+    ax: Arc<dyn AccessibilityBackend>,
+    screenshot: Arc<dyn ScreenshotBackend>,
+    apps: Arc<dyn AppBackend>,
+    input: Arc<dyn InputBackend>,
+    calendar: Arc<dyn crate::calendar::CalendarBackend>,
+    browser: Arc<dyn crate::browser::BrowserBackend>,
+) -> ToolRegistry {
     let mut registry = computer_registry(Arc::clone(&ax), Arc::clone(&apps));
     register_screenshot_tools(&mut registry, screenshot, Arc::clone(&apps));
     register_app_tools(&mut registry, apps);
@@ -146,6 +164,7 @@ pub fn computer_and_screenshot_registry(
     crate::calendar::register_calendar_tools(&mut registry, calendar);
     crate::web::register_web_tools(&mut registry);
     crate::shell::register_shell_tools(&mut registry);
+    crate::browser::register_browser_tools(&mut registry, browser);
     registry
 }
 

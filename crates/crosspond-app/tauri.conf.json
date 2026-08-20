@@ -5,12 +5,12 @@
   "identifier": "com.crosspond.app",
   "build": {
     "beforeDevCommand": {
-      "script": "npm run dev",
+      "script": "cargo build -p crosspond-chrome-host --manifest-path ../Cargo.toml && npm run dev",
       "cwd": "../../ui"
     },
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": {
-      "script": "npm run build",
+      "script": "cargo build -p crosspond-chrome-host --release --manifest-path ../Cargo.toml && npm run build",
       "cwd": "../../ui"
     },
     "frontendDist": "../../ui/build"

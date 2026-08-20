@@ -4,6 +4,9 @@
 #![deny(unsafe_code)]
 
 mod ax_outline;
+mod browser;
+mod browser_cdp;
+mod browser_snapshot;
 mod calendar;
 mod computer;
 mod fs_tools;
@@ -20,11 +23,18 @@ pub use ax_outline::{
     AxOutlineNode, MAX_AX_DEPTH, MAX_AX_NODES, MAX_AX_TEXT_CHARS, render_ax_outline,
     truncate_ax_text,
 };
+pub use browser::{
+    BrowserBackend, BrowserTransport, DisconnectedBrowser, EXTENSION_DISCONNECTED, host_from_url,
+    is_browser_tool, is_browser_write_tool, normalize_host, parse_host_list,
+    register_browser_tools, site_is_allowed, site_is_blocked,
+};
+pub use browser_cdp::ExtensionBrowser;
 pub use calendar::{CalendarBackend, register_calendar_tools};
 pub use computer::{
     AccessibilityBackend, AppBackend, InputBackend, Screenshot, ScreenshotBackend,
-    computer_and_screenshot_registry, computer_registry, register_app_tools,
-    register_computer_tools, register_input_tools, register_screenshot_tools,
+    computer_and_screenshot_registry, computer_and_screenshot_registry_with_browser,
+    computer_registry, register_app_tools, register_computer_tools, register_input_tools,
+    register_screenshot_tools,
 };
 pub use fs_tools::filesystem_registry;
 pub use knowledge::{

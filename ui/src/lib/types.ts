@@ -105,6 +105,11 @@ export type SettingsView = {
 	};
 	computer_approval: ComputerApproval;
 	launcher_hotkey: HotkeyView;
+	browser_connected: boolean;
+	browser_extension_id: string;
+	browser_extension_path: string;
+	browser_allowed_hosts: string[];
+	browser_blocked_hosts: string[];
 };
 
 export type Bootstrap = {

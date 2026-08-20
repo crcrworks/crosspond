@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Crosspond",
+  "version": "0.0.1",
+  "description": "Lets Crosspond read and operate Chromium tabs through the Chrome DevTools Protocol.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArHDd8x/oZKFGgNyZ8j0m1SVTTcJKIyrIlmQnV5K00sXzEni/Om/RWnHq7qVx37wLieSx/y+Cmo4lrq19BdokutfctHy9fBgG8UP62FmnNWBhv9iA/+MkWH1hU4awWf3rOwvm/SZwTMffwXgSdcmbuGZAUTiKtgSgj/9izh8XdJf4QXK9NNzc+OYraIqiTWRzeYgGbsEDnaQC1OhqmZ0LHmYQrE7Ba3cFq6L/cmPtiyS68TZ0QMigQKsT91SyoE5tP7SN95msisqiADFbz6s7SWpQyl5D/R+sWydlv8TqdhZi/H7NdFjh00sLCERc6lUrdle1XbiBVjR/Fc4kDhxB3QIDAQAB",
+  "permissions": ["nativeMessaging", "debugger", "tabs", "tabGroups", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "action": {
+    "default_title": "Crosspond",
+    "default_popup": "popup.html"
+  }
+}
