@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::history::{TaskRecord, tasks_for_conversation};
+use crate::privacy::redact_known_values;
 use crate::receipt::{Receipt, tool_ui_summary};
 
 const TOOL_PLACEHOLDER: &str = "Tool finished.";
@@ -101,10 +102,16 @@ pub struct ConversationView {
     pub artifact_names: Vec<String>,
 }
 
-pub fn write_session(task_dir: &Path, messages: &[Message]) {
-    let persisted = sanitize_messages(messages);
+pub fn write_session_redacted(task_dir: &Path, messages: &[Message], private_values: &[String]) {
+    let mut persisted = sanitize_messages(messages);
     if persisted.is_empty() {
         return;
+    }
+    for message in &mut persisted {
+        message.content = redact_known_values(&message.content, private_values);
+        for call in &mut message.tool_calls {
+            call.summary = redact_known_values(&call.summary, private_values);
+        }
     }
     let Ok(json) = serde_json::to_string_pretty(&persisted) else {
         return;
@@ -532,6 +539,20 @@ mod tests {
         assert!(restored.iter().all(|message| message.images.is_empty()));
         assert_eq!(restored[2].content, TOOL_PLACEHOLDER);
         assert!(!restored[1].tool_calls[0].arguments.contains("hunter2"));
+    }
+
+    #[test]
+    fn write_session_redacts_known_selected_text() {
+        let dir = std::env::temp_dir().join(format!("crosspond-session-{}", uuid::Uuid::new_v4()));
+        let messages = vec![
+            Message::user("summarize this"),
+            Message::assistant("The classified lab protocol 7 says to wait."),
+        ];
+        write_session_redacted(&dir, &messages, &["classified lab protocol 7".into()]);
+        let text = fs::read_to_string(dir.join("session.json")).unwrap();
+        assert!(!text.contains("classified lab protocol 7"));
+        assert!(text.contains("[redacted]"));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -14,7 +14,9 @@ mod hotkey;
 mod ids;
 mod knowledge;
 mod mention;
+mod network_policy;
 mod policy;
+mod privacy;
 mod receipt;
 mod runtime;
 mod scratch;
@@ -56,7 +58,7 @@ pub use policy::{
 pub use receipt::{Receipt, receipt_action_line, tool_ui_summary};
 pub use runtime::{
     CommandSender, EventPump, MISSING_API_KEY_MESSAGE, MISSING_CHATGPT_MESSAGE, RuntimeChannels,
-    spawn_runtime, spawn_runtime_with, spawn_runtime_with_tools,
+    spawn_runtime, spawn_runtime_with, spawn_runtime_with_sandbox, spawn_runtime_with_tools,
 };
 pub use scratch::default_tasks_root;
 pub use secret::{

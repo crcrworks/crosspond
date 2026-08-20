@@ -24,7 +24,8 @@ pub enum PolicyDecision {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComputerApprovalMode {
-    /// Run every tool without asking, including shell, external files, and UI.
+    /// Run computer actions and public web tools without asking. Unsandboxed
+    /// shell commands and network sends after private context still need Allow.
     Auto,
     /// The model sets `ask_user` per computer-action call. Shell and external
     /// paths still require Allow.
@@ -95,12 +96,13 @@ pub fn evaluate_with(
                 AgentAsk::Yes | AgentAsk::Unspecified => PolicyDecision::RequireApproval,
             },
         },
-        RiskLevel::ExternalWrite | RiskLevel::Shell | RiskLevel::Destructive => match computer {
+        RiskLevel::ExternalWrite | RiskLevel::Destructive => match computer {
             ComputerApprovalMode::Auto => PolicyDecision::Allow,
             ComputerApprovalMode::Agent | ComputerApprovalMode::Manual => {
                 PolicyDecision::RequireApproval
             }
         },
+        RiskLevel::Shell => PolicyDecision::RequireApproval,
     }
 }
 
@@ -458,11 +460,10 @@ mod tests {
     }
 
     #[test]
-    fn auto_runs_every_tool_without_asking() {
+    fn auto_runs_computer_and_external_without_asking() {
         for risk in [
             RiskLevel::ComputerAction,
             RiskLevel::ExternalWrite,
-            RiskLevel::Shell,
             RiskLevel::Destructive,
         ] {
             assert_eq!(
@@ -471,6 +472,14 @@ mod tests {
                 "{risk:?}"
             );
         }
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::Shell,
+                ComputerApprovalMode::Auto,
+                AgentAsk::Unspecified
+            ),
+            PolicyDecision::RequireApproval
+        );
         assert_eq!(
             evaluate_with(RiskLevel::Shell, ComputerApprovalMode::Manual, AgentAsk::No),
             PolicyDecision::RequireApproval

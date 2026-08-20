@@ -1,5 +1,7 @@
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -13,9 +15,9 @@ use crosspond_model::{
     ProviderBuilder, Role, ToolCall, ToolDefinition, default_provider_builder, keep_latest_images,
 };
 use crosspond_tools::{
-    KnowledgeBackend, PathScope, ScratchReason, ScratchSpace, ToolContext, ToolRegistry,
-    classify_write_path, filesystem_registry, host_from_url, http_hosts_from_note, is_browser_tool,
-    normalize_host, site_is_allowed,
+    ApprovalBody, KnowledgeBackend, ScratchReason, ScratchSpace, ShellSandbox, ToolContext,
+    ToolRegistry, filesystem_registry, host_from_url, http_hosts_from_note, normalize_host,
+    site_is_allowed,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -23,15 +25,15 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use crate::command::{ApprovalId, RuntimeCommand, StartTaskRequest};
 use crate::config::{AppConfig, ConfigStore};
 use crate::context::{ContextCapsule, StagedInput, stage_selected_files};
-use crate::conversation::{load_session_messages, redact_sensitive_tool_arguments, write_session};
+use crate::conversation::{
+    load_session_messages, redact_sensitive_tool_arguments, write_session_redacted,
+};
 use crate::event::AgentEvent;
 use crate::history::history_title;
 use crate::ids::{ConversationId, TaskId};
 use crate::mention::{self, Mention};
-use crate::policy::{
-    AgentAsk, BrowserHostDecision, ComputerApprovalMode, PolicyDecision, RiskLevel,
-    browser_host_decision, evaluate_with, risk_for_tool,
-};
+use crate::network_policy::{is_private_source_tool, remember_private_value};
+use crate::policy::ComputerApprovalMode;
 use crate::receipt::{
     Receipt, append_event_log, receipt_action_line, tool_ui_summary, write_receipt, write_task_meta,
 };
@@ -48,6 +50,10 @@ pub const MISSING_CHATGPT_MESSAGE: &str =
     "Sign in with ChatGPT in Settings (⌘,) before sending a request.";
 
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
+
+mod approval;
+mod cancellation;
+mod execute;
 
 fn persist_allowed_browser_host(store: &dyn ConfigStore, host: &str) {
     let host = normalize_host(host);
@@ -67,7 +73,7 @@ fn persist_allowed_browser_host(store: &dyn ConfigStore, host: &str) {
 fn computer_approval_prompt(mode: ComputerApprovalMode) -> &'static str {
     match mode {
         ComputerApprovalMode::Auto => {
-            "All tools run without asking the user, including computer actions, shell, external files, non-http URLs, and browser tools on a new website host. Unknown hosts are not added to Allowed Sites; blocked hosts are still refused."
+            "Computer actions and public web search run without asking. Unsandboxed shell commands, non-http URLs, and sending private task data to the network still require Allow. Unknown hosts are not added to Allowed Sites; blocked hosts are still refused. After the host sandboxes the shell, scratch-only commands with no network may run without asking."
         }
         ComputerApprovalMode::Agent => {
             "For computer actions, set ask_user true when the action is irreversible, submits a form, sends a message, logs in, purchases, deletes, or you are unsure. Set ask_user false for routine navigation the user clearly requested. Omit ask_user only if you want the user asked. Shell, external files, and non-http URLs still require Allow."
@@ -103,7 +109,7 @@ Put generated artifacts in output/ unless the user explicitly requests another d
     };
     let shell_route = match computer_approval {
         ComputerApprovalMode::Auto => {
-            "- Shell or non-http URL schemes → run_command / open_url (runs without asking).\n"
+            "- Shell or non-http URL schemes → run_command / open_url (user must Allow unless the host has sandboxed the shell).\n"
         }
         _ => "- Shell or non-http URL schemes → run_command / open_url (user must Allow).\n",
     };
@@ -199,13 +205,23 @@ pub fn spawn_runtime_with_tools(
     secrets: Arc<dyn SecretStore>,
     tools: Arc<ToolRegistry>,
 ) -> (RuntimeChannels, JoinHandle<()>) {
-    spawn_runtime_with(
+    spawn_runtime_with_sandbox(config, secrets, tools, None)
+}
+
+pub fn spawn_runtime_with_sandbox(
+    config: Arc<dyn ConfigStore>,
+    secrets: Arc<dyn SecretStore>,
+    tools: Arc<ToolRegistry>,
+    shell_sandbox: Option<Arc<dyn ShellSandbox>>,
+) -> (RuntimeChannels, JoinHandle<()>) {
+    spawn_runtime_inner(
         config,
         secrets,
         default_provider_builder(),
         Arc::new(FsScratchSpaceManager::in_home()),
         tools,
         default_tasks_root(),
+        shell_sandbox,
     )
 }
 
@@ -216,6 +232,18 @@ pub fn spawn_runtime_with(
     scratches: Arc<dyn ScratchSpaceManager>,
     tools: Arc<ToolRegistry>,
     tasks_root: PathBuf,
+) -> (RuntimeChannels, JoinHandle<()>) {
+    spawn_runtime_inner(config, secrets, build, scratches, tools, tasks_root, None)
+}
+
+fn spawn_runtime_inner(
+    config: Arc<dyn ConfigStore>,
+    secrets: Arc<dyn SecretStore>,
+    build: ProviderBuilder,
+    scratches: Arc<dyn ScratchSpaceManager>,
+    tools: Arc<ToolRegistry>,
+    tasks_root: PathBuf,
+    shell_sandbox: Option<Arc<dyn ShellSandbox>>,
 ) -> (RuntimeChannels, JoinHandle<()>) {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -247,6 +275,10 @@ pub fn spawn_runtime_with(
                 knowledge,
                 procedure_learn: None,
                 _vault_watch: vault_watch,
+                shell_sandbox,
+                private_context: false,
+                private_values: Vec::new(),
+                deferred_commands: VecDeque::new(),
             }));
         })
         .expect("failed to spawn runtime thread");
@@ -277,6 +309,10 @@ struct Runtime {
     knowledge: Option<Arc<IndexedVault>>,
     procedure_learn: Option<ProcedureLearnCandidate>,
     _vault_watch: Option<VaultWatcher>,
+    shell_sandbox: Option<Arc<dyn ShellSandbox>>,
+    private_context: bool,
+    private_values: Vec<String>,
+    deferred_commands: VecDeque<RuntimeCommand>,
 }
 
 fn open_vault_index(config: &dyn ConfigStore) -> (Option<Arc<IndexedVault>>, Option<VaultWatcher>) {
@@ -306,7 +342,15 @@ fn open_vault_from_path(
 }
 
 async fn run_loop(mut runtime: Runtime) {
-    while let Some(command) = runtime.commands.recv().await {
+    loop {
+        let command = if let Some(deferred) = runtime.deferred_commands.pop_front() {
+            deferred
+        } else {
+            match runtime.commands.recv().await {
+                Some(command) => command,
+                None => break,
+            }
+        };
         match command {
             RuntimeCommand::StartTask(request) => {
                 runtime.start_task(request).await;
@@ -318,6 +362,7 @@ async fn run_loop(mut runtime: Runtime) {
                 runtime.session_context = ContextCapsule::default();
                 runtime.staged_inputs.clear();
                 runtime.procedure_learn = None;
+                runtime.clear_private_state();
             }
             RuntimeCommand::ResumeSession(id) => runtime.resume_session(id),
             RuntimeCommand::TestConnection => runtime.spawn_test_connection(),
@@ -450,6 +495,7 @@ impl Runtime {
         } else if self.conversation_id.is_none() {
             self.conversation_id = Some(request.conversation_id);
         }
+        self.ingest_private_context(&request.context);
         self.write_meta(&task_dir, task_id, &stored_prompt, "running", None);
         append_event_log(&task_dir, json!({ "type": "task_started" }));
         append_event_log(&task_dir, self.session_context.log_value());
@@ -488,12 +534,13 @@ impl Runtime {
                     "completed",
                     path.as_deref(),
                 );
-                write_session(
+                write_session_redacted(
                     &task_dir,
                     &[
                         Message::user(stored_prompt.clone()),
                         Message::assistant(summary.clone()),
                     ],
+                    &self.private_values,
                 );
                 append_event_log(&task_dir, json!({ "type": "task_completed" }));
                 let _ = self.events.send(AgentEvent::TaskCompleted {
@@ -560,6 +607,19 @@ impl Runtime {
                 .await
             {
                 Ok(image) => screen_images.push(image),
+                Err(message) if message == "cancelled" || message == "cancelled:reset" => {
+                    self.finish_cancelled(
+                        task_id,
+                        &stored_prompt,
+                        &task_dir,
+                        message == "cancelled:reset",
+                        reused_scratch,
+                        &[],
+                        routed_brief.as_ref(),
+                        &[],
+                    );
+                    return;
+                }
                 Err(message) => {
                     let _ = self
                         .events
@@ -652,7 +712,7 @@ impl Runtime {
                         &task_dir,
                         json!({ "type": "task_failed", "message": message }),
                     );
-                    write_session(&task_dir, &self.session);
+                    write_session_redacted(&task_dir, &self.session, &self.private_values);
                     let _ = self
                         .events
                         .send(AgentEvent::TaskFailed { task_id, message });
@@ -665,7 +725,12 @@ impl Runtime {
                     mut calls,
                     encrypted_reasoning,
                 } => {
-                    persist_step_progress(&task_dir, &reasoning, reasoning_ms, &assistant_text);
+                    self.persist_step_progress(
+                        &task_dir,
+                        &reasoning,
+                        reasoning_ms,
+                        &assistant_text,
+                    );
                     redact_sensitive_tool_arguments(&mut calls);
                     messages.push(
                         Message::assistant_tool_calls(assistant_text, calls.clone())
@@ -738,13 +803,33 @@ impl Runtime {
                             return;
                         }
                         let started = Instant::now();
-                        let (text, created, image, success) = execute_tool(
-                            Arc::clone(&self.tools),
-                            context,
-                            call.name.clone(),
-                            input,
-                        )
-                        .await;
+                        let exec = self
+                            .execute_tool(task_id, call.name.clone(), context, input)
+                            .await;
+                        let (text, created, image, success) = match exec {
+                            ToolExec::Cancelled { reset } => {
+                                self.finish_cancelled(
+                                    task_id,
+                                    &stored_prompt,
+                                    &task_dir,
+                                    reset,
+                                    reused_scratch,
+                                    &artifacts,
+                                    routed_brief.as_ref(),
+                                    &receipt_actions,
+                                );
+                                return;
+                            }
+                            ToolExec::Done {
+                                text,
+                                created,
+                                image,
+                                success,
+                            } => (text, created, image, success),
+                        };
+                        if success {
+                            self.note_private_tool_output(&call.name, &text);
+                        }
                         let duration_ms = started.elapsed().as_millis() as u64;
                         append_event_log(
                             &task_dir,
@@ -792,7 +877,7 @@ impl Runtime {
                     reasoning_ms,
                     encrypted_reasoning,
                 } => {
-                    persist_step_progress(&task_dir, &reasoning, reasoning_ms, &summary);
+                    self.persist_step_progress(&task_dir, &reasoning, reasoning_ms, &summary);
                     messages.push(
                         Message::assistant(summary.clone())
                             .with_encrypted_reasoning(encrypted_reasoning),
@@ -852,7 +937,7 @@ impl Runtime {
                         "completed",
                         path.as_deref(),
                     );
-                    write_session(&task_dir, &self.session);
+                    write_session_redacted(&task_dir, &self.session, &self.private_values);
                     append_event_log(&task_dir, json!({ "type": "task_completed" }));
                     let _ = self.events.send(AgentEvent::TaskCompleted {
                         task_id,
@@ -863,33 +948,6 @@ impl Runtime {
                 }
             }
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn finish_cancelled(
-        &mut self,
-        task_id: TaskId,
-        prompt: &str,
-        task_dir: &Path,
-        reset: bool,
-        reused_scratch: bool,
-        artifacts: &[String],
-        brief: Option<&KnowledgeBrief>,
-        actions: &[String],
-    ) {
-        let path = self.finish_scratch(reused_scratch, artifacts, reset);
-        self.write_meta(task_dir, task_id, prompt, "cancelled", path.as_deref());
-        append_event_log(task_dir, json!({ "type": "task_cancelled" }));
-        write_session(task_dir, &self.session);
-        self.record_activity(
-            brief,
-            prompt,
-            ActivityStatus::Cancelled,
-            "",
-            actions,
-            artifacts,
-        );
-        let _ = self.events.send(AgentEvent::TaskCancelled { task_id });
     }
 
     fn complete_without_model(
@@ -921,7 +979,7 @@ impl Runtime {
         );
         self.session.push(Message::user(stored_prompt.to_string()));
         self.session.push(Message::assistant(summary.clone()));
-        write_session(task_dir, &self.session);
+        write_session_redacted(task_dir, &self.session, &self.private_values);
         append_event_log(task_dir, json!({ "type": "task_completed" }));
         let _ = self.events.send(AgentEvent::TaskCompleted {
             task_id,
@@ -971,6 +1029,7 @@ impl Runtime {
                 approval_id,
                 title: "Save this as a Procedure?".into(),
                 description: proposal.render(),
+                body: ApprovalBody::Prose,
             })
             .is_err()
         {
@@ -1088,27 +1147,9 @@ impl Runtime {
             self.session_scratch = None;
             self.session_context = ContextCapsule::default();
             self.staged_inputs.clear();
+            self.clear_private_state();
         }
         path
-    }
-
-    fn drain_control(&mut self, task_id: TaskId) -> Option<bool> {
-        let mut reset = false;
-        let mut cancelled = false;
-        loop {
-            match self.commands.try_recv() {
-                Ok(RuntimeCommand::Cancel(id)) if id == task_id => cancelled = true,
-                Ok(RuntimeCommand::ResetSession) => {
-                    cancelled = true;
-                    reset = true;
-                }
-                Ok(RuntimeCommand::TestConnection) => self.spawn_test_connection(),
-                Ok(RuntimeCommand::TestCompat { id }) => self.spawn_test_connection_for(Some(id)),
-                Ok(_) => {}
-                Err(_) => break,
-            }
-        }
-        cancelled.then_some(reset)
     }
 
     fn tool_context(&self) -> ToolContext {
@@ -1133,62 +1174,47 @@ impl Runtime {
                     as Arc<dyn KnowledgeBackend>,
             );
         }
+        context.cancel = Arc::new(AtomicBool::new(false));
+        context.shell_sandbox = self.shell_sandbox.clone();
         context
     }
 
-    async fn capture_mention_screenshot(
-        &self,
-        task_id: TaskId,
-        task_dir: &Path,
-        app: Option<&str>,
-    ) -> Result<ImagePart, String> {
-        let mut input = json!({});
-        if let Some(app) = app.filter(|name| !name.is_empty()) {
-            input["app"] = json!(app);
+    fn clear_private_state(&mut self) {
+        self.private_context = false;
+        self.private_values.clear();
+    }
+
+    fn ingest_private_context(&mut self, context: &ContextCapsule) {
+        if let Some(text) = &context.selected_text
+            && !text.trim().is_empty()
+        {
+            self.private_context = true;
+            remember_private_value(&mut self.private_values, text);
         }
-        let summary = tool_ui_summary("take_screenshot", &input);
-        append_event_log(
-            task_dir,
-            json!({
-                "type": "tool_started",
-                "tool": "take_screenshot",
-                "summary": summary,
-            }),
-        );
-        let _ = self.events.send(AgentEvent::ToolStarted {
-            task_id,
-            tool: "take_screenshot".into(),
-            summary,
-        });
-        let (text, _, image, success) = execute_tool(
-            Arc::clone(&self.tools),
-            self.tool_context(),
-            "take_screenshot".into(),
-            input,
-        )
-        .await;
-        append_event_log(
-            task_dir,
-            json!({
-                "type": "tool_finished",
-                "tool": "take_screenshot",
-                "success": success,
-            }),
-        );
-        let _ = self.events.send(AgentEvent::ToolFinished {
-            task_id,
-            tool: "take_screenshot".into(),
-        });
-        if !success {
-            return Err(text);
+        if let Some(url) = &context.page_url
+            && !url.trim().is_empty()
+        {
+            self.private_context = true;
+            remember_private_value(&mut self.private_values, url);
         }
-        let image = image.ok_or_else(|| "screenshot was empty".to_string())?;
-        Ok(ImagePart {
-            media_type: image.media_type,
-            bytes: image.bytes,
-            width: Some(image.width),
-            height: Some(image.height),
-        })
+        if !context.selected_files.is_empty() || !context.attachments.is_empty() {
+            self.private_context = true;
+            for path in context
+                .selected_files
+                .iter()
+                .chain(context.attachments.iter())
+            {
+                remember_private_value(&mut self.private_values, &path.display().to_string());
+            }
+        }
+    }
+
+    fn note_private_tool_output(&mut self, name: &str, text: &str) {
+        if !is_private_source_tool(name) {
+            return;
+        }
+        self.private_context = true;
+        remember_private_value(&mut self.private_values, text);
     }
 
     async fn prepare_tool_call(
@@ -1446,167 +1472,6 @@ impl Runtime {
         }
     }
 
-    async fn await_approval_if_needed(
-        &mut self,
-        task_id: TaskId,
-        task_dir: &Path,
-        call: &ToolCall,
-        input: &serde_json::Value,
-        context: &mut ToolContext,
-    ) -> ApprovalOutcome {
-        let path = input
-            .get("path")
-            .and_then(|value| value.as_str())
-            .unwrap_or(".");
-        let scope = match context.scratch.as_ref() {
-            Some(scratch) => {
-                classify_write_path(&scratch.root, path).unwrap_or(PathScope::External)
-            }
-            None if Path::new(path).is_absolute() => PathScope::External,
-            None => PathScope::Workspace,
-        };
-        let computer_approval = self
-            .config
-            .load()
-            .map(|config| config.computer_approval)
-            .unwrap_or_default();
-        if is_browser_tool(&call.name) {
-            let host = self.tools.target_host(&call.name, context, input);
-            let config = self.config.load().unwrap_or_default();
-            match browser_host_decision(
-                &call.name,
-                host.as_deref(),
-                &config.browser_allowed_hosts,
-                &config.browser_blocked_hosts,
-            ) {
-                BrowserHostDecision::Blocked(host) => {
-                    return ApprovalOutcome::Rejected(format!("blocked site {host}"));
-                }
-                BrowserHostDecision::NeedsAllow(host)
-                    if computer_approval != ComputerApprovalMode::Auto =>
-                {
-                    let title = format!("Allow {host}");
-                    let description = "The Chrome extension can read and operate this site. Page contents stay out of Settings, receipts, and logs.".into();
-                    match self
-                        .prompt_tool_approval(task_id, task_dir, &call.name, title, description)
-                        .await
-                    {
-                        ApprovalOutcome::Allowed => {
-                            persist_allowed_browser_host(self.config.as_ref(), &host);
-                            return ApprovalOutcome::Allowed;
-                        }
-                        other => return other,
-                    }
-                }
-                BrowserHostDecision::NeedsAllow(_)
-                | BrowserHostDecision::Skip
-                | BrowserHostDecision::Allowed => {}
-            }
-        }
-        let risk = risk_for_tool(&call.name, scope, input);
-        if evaluate_with(risk, computer_approval, AgentAsk::from_tool_input(input))
-            != PolicyDecision::RequireApproval
-        {
-            if computer_approval == ComputerApprovalMode::Auto
-                && matches!(
-                    risk,
-                    RiskLevel::ExternalWrite | RiskLevel::Shell | RiskLevel::Destructive
-                )
-            {
-                context.allow_external = true;
-            }
-            return ApprovalOutcome::Allowed;
-        }
-        let (title, description) = self.tools.approval_prompt(&call.name, context, input);
-        match self
-            .prompt_tool_approval(task_id, task_dir, &call.name, title, description)
-            .await
-        {
-            ApprovalOutcome::Allowed => {
-                context.allow_external = true;
-                ApprovalOutcome::Allowed
-            }
-            other => other,
-        }
-    }
-
-    async fn prompt_tool_approval(
-        &mut self,
-        task_id: TaskId,
-        task_dir: &Path,
-        tool: &str,
-        title: String,
-        description: String,
-    ) -> ApprovalOutcome {
-        let approval_id = ApprovalId::new();
-        append_event_log(
-            task_dir,
-            json!({ "type": "approval_required", "tool": tool }),
-        );
-        if self
-            .events
-            .send(AgentEvent::ApprovalRequired {
-                task_id,
-                approval_id,
-                title,
-                description,
-            })
-            .is_err()
-        {
-            return ApprovalOutcome::Cancelled { reset: false };
-        }
-        match self.wait_for_approval(task_id, approval_id).await {
-            ApprovalWait::Approved => {
-                append_event_log(
-                    task_dir,
-                    json!({ "type": "approval_granted", "tool": tool }),
-                );
-                ApprovalOutcome::Allowed
-            }
-            ApprovalWait::Rejected => {
-                append_event_log(
-                    task_dir,
-                    json!({ "type": "approval_rejected", "tool": tool }),
-                );
-                ApprovalOutcome::Rejected(format!("The user rejected tool `{tool}`."))
-            }
-            ApprovalWait::Cancelled { reset } => ApprovalOutcome::Cancelled { reset },
-        }
-    }
-
-    async fn wait_for_approval(
-        &mut self,
-        task_id: TaskId,
-        approval_id: ApprovalId,
-    ) -> ApprovalWait {
-        loop {
-            match self.commands.recv().await {
-                None => return ApprovalWait::Cancelled { reset: false },
-                Some(RuntimeCommand::Approve(id)) if id == approval_id => {
-                    return ApprovalWait::Approved;
-                }
-                Some(RuntimeCommand::Reject(id)) if id == approval_id => {
-                    return ApprovalWait::Rejected;
-                }
-                Some(RuntimeCommand::Cancel(id)) if id == task_id => {
-                    return ApprovalWait::Cancelled { reset: false };
-                }
-                Some(RuntimeCommand::ResetSession) => {
-                    return ApprovalWait::Cancelled { reset: true };
-                }
-                Some(RuntimeCommand::TestConnection) => self.spawn_test_connection(),
-                Some(RuntimeCommand::TestCompat { id }) => self.spawn_test_connection_for(Some(id)),
-                Some(RuntimeCommand::Approve(_))
-                | Some(RuntimeCommand::Reject(_))
-                | Some(RuntimeCommand::SubmitCredential { .. })
-                | Some(RuntimeCommand::Cancel(_))
-                | Some(RuntimeCommand::StartTask(_))
-                | Some(RuntimeCommand::ResumeSession(_))
-                | Some(RuntimeCommand::ReloadKnowledge) => {}
-            }
-        }
-    }
-
     async fn run_model_step(
         &mut self,
         provider: &Arc<dyn ModelProvider>,
@@ -1746,6 +1611,7 @@ impl Runtime {
         self.session_context = ContextCapsule::default();
         self.staged_inputs.clear();
         self.procedure_learn = None;
+        self.clear_private_state();
         self.conversation_id = Some(id);
         self.session = load_session_messages(&self.tasks_root, &id.to_string());
     }
@@ -1769,32 +1635,16 @@ impl Runtime {
     }
 }
 
-fn persist_step_progress(
-    task_dir: &Path,
-    reasoning: &str,
-    reasoning_ms: Option<u64>,
-    assistant_text: &str,
-) {
-    if !reasoning.trim().is_empty() {
-        append_event_log(
-            task_dir,
-            json!({
-                "type": "reasoning",
-                "text": reasoning,
-                "duration_ms": reasoning_ms,
-            }),
-        );
-    }
-    let trimmed = assistant_text.trim_start();
-    if !trimmed.is_empty() {
-        append_event_log(
-            task_dir,
-            json!({
-                "type": "assistant_text",
-                "text": trimmed,
-            }),
-        );
-    }
+enum ToolExec {
+    Done {
+        text: String,
+        created: Option<PathBuf>,
+        image: Option<crosspond_tools::ToolImage>,
+        success: bool,
+    },
+    Cancelled {
+        reset: bool,
+    },
 }
 
 enum StepOutcome {
@@ -1976,26 +1826,6 @@ fn artifact_display_name(scratch: Option<&ScratchSpace>, path: &Path) -> Option<
         .map(|relative| relative.display().to_string())
 }
 
-async fn execute_tool(
-    tools: Arc<ToolRegistry>,
-    context: ToolContext,
-    name: String,
-    input: serde_json::Value,
-) -> (
-    String,
-    Option<PathBuf>,
-    Option<crosspond_tools::ToolImage>,
-    bool,
-) {
-    let handle = tokio::task::spawn_blocking(move || tools.execute(&name, &context, input));
-    match tokio::time::timeout(DEFAULT_TOOL_TIMEOUT, handle).await {
-        Ok(Ok(Ok(result))) => (result.text, result.created_file, result.image, true),
-        Ok(Ok(Err(err))) => (err.to_string(), None, None, false),
-        Ok(Err(_)) => ("tool failed".into(), None, None, false),
-        Err(_) => ("tool timed out".into(), None, None, false),
-    }
-}
-
 fn load_provider(
     config: &dyn ConfigStore,
     secrets: Arc<dyn SecretStore>,
@@ -2074,8 +1904,9 @@ mod tests {
     use crate::secret::{CredentialBundle, SecretKey, SecretString};
     use crosspond_tools::{
         AccessibilityBackend, AppBackend, BrowserBackend, CalendarBackend, HttpAuthChallenge,
-        InputBackend, Screenshot, ScreenshotBackend, ToolError, computer_and_screenshot_registry,
-        computer_and_screenshot_registry_with_browser, computer_registry, register_shell_tools,
+        InputBackend, Screenshot, ScreenshotBackend, ShellSandbox, ToolError,
+        computer_and_screenshot_registry, computer_and_screenshot_registry_with_browser,
+        computer_registry, register_shell_tools, register_web_tools, unsandboxed_shell_command,
     };
 
     fn echo_builder() -> ProviderBuilder {
@@ -2132,6 +1963,10 @@ mod tests {
             knowledge: None,
             procedure_learn: None,
             _vault_watch: None,
+            shell_sandbox: None,
+            private_context: false,
+            private_values: Vec::new(),
+            deferred_commands: VecDeque::new(),
         };
         (runtime, TempHome(root))
     }
@@ -2243,11 +2078,11 @@ mod tests {
             "",
             "",
         );
-        assert!(prompt.contains("runs without asking"));
-        assert!(prompt.contains("All tools run without asking"));
+        assert!(prompt.contains("run without asking"));
+        assert!(prompt.contains("still require Allow"));
+        assert!(prompt.contains("sandboxed the shell"));
         assert!(prompt.contains("not added to Allowed Sites"));
-        assert!(!prompt.contains("still needs Allow"));
-        assert!(!prompt.contains("user must Allow"));
+        assert!(!prompt.contains("All tools run without asking"));
     }
 
     #[test]
@@ -4972,7 +4807,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auto_run_command_skips_approval() {
+    async fn auto_run_command_requires_approval_without_sandbox() {
         let marker =
             std::env::temp_dir().join(format!("crosspond-auto-cmd-{}.txt", uuid::Uuid::new_v4()));
         let arguments = serde_json::json!({
@@ -5007,11 +4842,92 @@ mod tests {
             )))
             .unwrap();
 
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired {
+                approval_id, body, ..
+            } => {
+                assert_eq!(body, ApprovalBody::Command);
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(!marker.exists());
+        let _ = std::fs::remove_file(&marker);
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    struct EnforcingSandbox;
+
+    impl ShellSandbox for EnforcingSandbox {
+        fn is_enforcing(&self) -> bool {
+            true
+        }
+
+        fn prepare_command(
+            &self,
+            shell_command: &str,
+            scratch: &std::path::Path,
+        ) -> std::process::Command {
+            unsandboxed_shell_command(shell_command, scratch)
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_sandboxed_run_command_skips_approval() {
+        let marker = std::env::temp_dir().join(format!(
+            "crosspond-auto-sandboxed-{}.txt",
+            uuid::Uuid::new_v4()
+        ));
+        let arguments = serde_json::json!({
+            "command": format!("printf 'auto-ok\\n' > '{}'", marker.display()),
+        })
+        .to_string();
+        let build: ProviderBuilder = {
+            let arguments = arguments.clone();
+            Arc::new(move |_, _| {
+                Arc::new(NamedToolThenDoneProvider::new(
+                    "run_command",
+                    arguments.clone(),
+                    "Ran the command",
+                ))
+            })
+        };
+        let (mut runtime, _tmp) = test_runtime(build, seeded_secrets(), shell_and_fs_registry());
+        runtime.shell_sandbox = Some(Arc::new(EnforcingSandbox));
+        runtime
+            .config
+            .save(&crate::config::AppConfig {
+                computer_approval: crate::policy::ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "run a command",
+            )))
+            .unwrap();
+
         loop {
             let event = event_rx.recv().await.expect("event");
             assert!(
                 !matches!(event, AgentEvent::ApprovalRequired { .. }),
-                "auto mode must not prompt for run_command"
+                "sandboxed auto shell must not prompt"
             );
             if matches!(event, AgentEvent::TaskCompleted { .. }) {
                 break;
@@ -5021,6 +4937,220 @@ mod tests {
         let _ = std::fs::remove_file(&marker);
         assert_eq!(written.unwrap(), "auto-ok\n");
 
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    fn web_search_registry() -> ToolRegistry {
+        let mut registry = ToolRegistry::new();
+        register_web_tools(&mut registry);
+        registry
+    }
+
+    struct FixedTextProvider(String);
+
+    impl ModelProvider for FixedTextProvider {
+        fn stream(
+            &self,
+            _request: ModelRequest,
+            events: UnboundedSender<ModelEvent>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ModelError>> + Send>>
+        {
+            let text = self.0.clone();
+            Box::pin(async move {
+                let _ = events.send(ModelEvent::TextDelta(text));
+                Ok(())
+            })
+        }
+
+        fn test_connection(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ModelError>> + Send>>
+        {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_text_requires_allow_for_web_search() {
+        let arguments = serde_json::json!({ "query": "weather tomorrow" }).to_string();
+        let build: ProviderBuilder = Arc::new(move |_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "web_search",
+                arguments.clone(),
+                "searched",
+            ))
+        });
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), web_search_registry());
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let mut request = StartTaskRequest::new(TaskId::new(), "search the weather");
+        request.context.selected_text = Some("classified lab protocol 7".into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired {
+                approval_id,
+                description,
+                body,
+                ..
+            } => {
+                assert_eq!(body, ApprovalBody::Command);
+                assert!(description.contains("weather tomorrow"));
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn public_web_search_skips_approval_when_untainted() {
+        let arguments = serde_json::json!({ "query": "rust 1.96" }).to_string();
+        let build: ProviderBuilder = Arc::new(move |_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "web_search",
+                arguments.clone(),
+                "searched",
+            ))
+        });
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), web_search_registry());
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "search rust",
+            )))
+            .unwrap();
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "untainted public search must not prompt"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn persist_redacts_echoed_selected_text() {
+        let secret = "classified lab protocol 7";
+        let reply = format!("I saw: {secret}");
+        let build: ProviderBuilder = {
+            let reply = reply.clone();
+            Arc::new(move |_, _| Arc::new(FixedTextProvider(reply.clone())))
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), ToolRegistry::new());
+        let tasks_root = runtime.tasks_root.clone();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let task_id = TaskId::new();
+        let mut request = StartTaskRequest::new(task_id, "summarize this");
+        request.context.selected_text = Some(secret.into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        let session =
+            std::fs::read_to_string(tasks_root.join(task_id.to_string()).join("session.json"))
+                .unwrap();
+        assert!(!session.contains(secret), "{session}");
+        assert!(session.contains("[redacted]"));
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn cancel_kills_running_shell() {
+        let marker =
+            std::env::temp_dir().join(format!("crosspond-cancel-cmd-{}.txt", uuid::Uuid::new_v4()));
+        let arguments = serde_json::json!({
+            "command": format!("sleep 30; touch '{}'", marker.display()),
+        })
+        .to_string();
+        let build: ProviderBuilder = {
+            let arguments = arguments.clone();
+            Arc::new(move |_, _| {
+                Arc::new(NamedToolThenDoneProvider::new(
+                    "run_command",
+                    arguments.clone(),
+                    "still running",
+                ))
+            })
+        };
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), shell_and_fs_registry());
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Manual,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                task_id,
+                "run a long command",
+            )))
+            .unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Approve(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ToolStarted { .. })
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        command_tx.send(RuntimeCommand::Cancel(task_id)).unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCancelled { .. })
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!marker.exists(), "cancelled shell must not keep running");
+        let _ = std::fs::remove_file(&marker);
         drop(command_tx);
         join.await.unwrap();
     }
