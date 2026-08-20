@@ -1,5 +1,7 @@
 name: Publish Release
 
+# Manual only, from main. Jobs use the `release` environment (required
+# reviewers + Apple / updater secrets) and then refuse non-admin actors.
 on:
   workflow_dispatch:
 
@@ -16,6 +18,7 @@ jobs:
   validate:
     name: Validate release
     runs-on: ubuntu-latest
+    environment: release
     outputs:
       tag_name: ${{ steps.release-metadata.outputs.tag_name }}
       version: ${{ steps.release-metadata.outputs.version }}
@@ -25,6 +28,11 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+
+      - name: Require admin on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/require-repo-admin.sh
 
       - name: Read release metadata
         id: release-metadata
@@ -187,6 +195,7 @@ jobs:
   publish:
     name: Tag and publish GitHub Release
     runs-on: ubuntu-latest
+    environment: release
     needs: validate
     outputs:
       tag_name: ${{ steps.verify-release.outputs.tag_name }}
@@ -209,6 +218,11 @@ jobs:
             echo "main changed after validate. Re-run Publish Release." >&2
             exit 1
           fi
+
+      - name: Require admin on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/require-repo-admin.sh
 
       - name: Run Release Please
         id: release
@@ -266,11 +280,17 @@ jobs:
     needs: publish
     if: ${{ needs.publish.outputs.release_id != '' }}
     runs-on: macos-latest
+    environment: release
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.publish.outputs.tag_name }}
+
+      - name: Require admin on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/require-repo-admin.sh
 
       - name: Set up Node
         uses: actions/setup-node@v4

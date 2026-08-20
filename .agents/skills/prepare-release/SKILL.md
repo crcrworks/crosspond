@@ -16,7 +16,7 @@ description: Crosspond リリース準備。Prepare Release PR ワークフロ�
 ## 手順
 
 1. `.release-please-manifest.json` の `"."`、なければ `crates/crosspond-app/tauri.conf.json` の version を読む。デフォルトは patch アップ。minor/major または明示バージョンがある場合はそれに従う。semver は `X.Y.Z`（v なし）。
-2. `gh workflow run "Prepare Release PR" -f version=<next-version>` を実行し、`gh run watch` で完了を待つ。失敗時は `gh run view --log-failed` を確認して停止する。
+2. `gh workflow run "Prepare Release PR" -f version=<next-version> --ref main` を実行し、`gh run watch` で完了を待つ。失敗時は `gh run view --log-failed` を確認して停止する。repository admin 以外、または `release` environment 未設定では失敗する。
 3. `gh pr list --search "chore(main): release" --state open --json number,title,headRefName` で対象 PR を特定し、`gh pr checkout <pr-number>` する。
 4. `PUBLIC_CHANGELOG.md` の先頭にある `## v<version> (YYYY-MM-DD)` の雛形を確認する。
 5. 直前の `v*` タグから最終差分を確認し、Features / Improvements / Changes / Fixes / Developments をユーザー向けの日本語で埋める。該当しないセクションは削除する。

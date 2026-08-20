@@ -14,6 +14,7 @@ Crosspond の GitHub Release 準備を自動化する。GitHub Actions の **Pre
 - `gh` CLI が認証済みであること
 - VCS はこのリポジトリの慣例に従う（jj なら `jj`、git なら `git`）
 - **`/pre-release-review` が通過済み**（Bugbot・Security Review・ローカル CI）。未実施なら先に [pre-release-review](../pre-release-review/SKILL.md) を実行する
+- 起動する GitHub ユーザーが repository **admin** であること。ワークフローは `--ref main` と Environment **`release`** を使う
 
 ## 手順
 
@@ -34,7 +35,7 @@ semver 形式（`X.Y.Z`、v プレフィックスなし）のみ有効。
 ### 3. Prepare Release PR を起動
 
 ```bash
-gh workflow run "Prepare Release PR" -f version=<next-version>
+gh workflow run "Prepare Release PR" -f version=<next-version> --ref main
 ```
 
 起動後、実行を待つ:

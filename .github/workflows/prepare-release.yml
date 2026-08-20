@@ -1,5 +1,7 @@
 name: Prepare Release PR
 
+# Manual only, from main. Jobs use the `release` environment (required
+# reviewers + environment secrets) and then refuse non-admin actors.
 on:
   workflow_dispatch:
     inputs:
@@ -21,7 +23,19 @@ jobs:
   prepare:
     name: Create or update release PR
     runs-on: ubuntu-latest
+    environment: release
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+
+      - name: Require admin on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/require-repo-admin.sh
+
       - name: Validate version input
         env:
           VERSION: ${{ inputs.version }}
@@ -30,12 +44,6 @@ jobs:
             echo "version must be exact semver without a v prefix." >&2
             exit 1
           fi
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
 
       - name: Validate version is newer than current release
         env:

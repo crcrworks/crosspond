@@ -15,7 +15,8 @@ Crosspond の GitHub Release を実行する。**Publish Release** ワークフ�
 - リポジトリルートで作業する
 - `gh` CLI が認証済みであること
 - `PUBLIC_CHANGELOG.md` が埋まった prepare PR が存在する（または main にマージ済みである）こと
-- GitHub Secrets（Updater 署名鍵、可能なら Apple 署名・公証）が設定済みであること。手順は [README.md](../../../README.md) の Release 節
+- GitHub Environment **`release`** に Updater 署名鍵と（可能なら）Apple 署名・公証が載っていること。手順は [README.md](../../../README.md) の Release 節
+- 起動する GitHub ユーザーが repository **admin** であること（Write では失敗する）
 
 ## 手順
 
@@ -63,7 +64,7 @@ gh api repos/{owner}/{repo}/contents/.release-please-manifest.json?ref=main --jq
 ### 4. Publish Release を起動
 
 ```bash
-gh workflow run "Publish Release"
+gh workflow run "Publish Release" --ref main
 ```
 
 起動直後に実行 URL を取得してユーザに渡す:
@@ -112,5 +113,6 @@ gh run view <databaseId> --log-failed
 - **「バージョンが古い」系のエラー**: 新しい prepare PR を作り直す（`/prepare-release`）
 - **タグが既に存在**: そのバージョンは publish 済み。次バージョンで prepare からやり直す
 - **オープンな prepare PR が複数**: 最新バージョンの PR だけを対象にし、ユーザに確認する
-- **TAURI_SIGNING_PRIVATE_KEY missing**: README の Release 節に従い Secrets を入れる
+- **TAURI_SIGNING_PRIVATE_KEY missing**: README の Release 節に従い、Environment **`release`** に Secrets を入れる
 - **公証失敗**: Apple Developer ID の .p12 と App Store Connect API キー（または Apple ID）を確認する
+- **Only repository admins / waiting for a reviewer**: Write コラボレータでは動かない。admin で `--ref main` から起動する。Environment の Required reviewers で止まっているときは所有者として Approve する

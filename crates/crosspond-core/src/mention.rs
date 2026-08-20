@@ -8,6 +8,7 @@ pub enum Mention {
     VaultQuery,
     VaultSave,
     VaultLater,
+    VaultProcedure,
     Screen,
     Computer,
     Browser,
@@ -49,6 +50,10 @@ impl Mention {
         matches!(self, Self::VaultQuery)
     }
 
+    pub fn is_vault_procedure(&self) -> bool {
+        matches!(self, Self::VaultProcedure)
+    }
+
     pub fn app_name(&self) -> Option<&str> {
         match self {
             Self::App { name } if !name.trim().is_empty() => Some(name.trim()),
@@ -61,6 +66,7 @@ impl Mention {
             Self::VaultQuery => "@vault-query".into(),
             Self::VaultSave => "@vault-save".into(),
             Self::VaultLater => "@vault-later".into(),
+            Self::VaultProcedure => "@vault-procedure".into(),
             Self::Screen => "@screen".into(),
             Self::Computer => "@computer".into(),
             Self::Browser => "@browser".into(),
@@ -106,6 +112,12 @@ pub fn mention_routing(mentions: &[Mention]) -> String {
             Mention::VaultLater => {
                 lines.push(
                     "- Save the current page, selection, PDF, or local document as an unread Source via knowledge_read_later."
+                        .into(),
+                );
+            }
+            Mention::VaultProcedure => {
+                lines.push(
+                    "- After this request succeeds, Crosspond will ask to save a Procedure from the receipt. Do not write a Procedure with knowledge_ingest. Complete the work with tools."
                         .into(),
                 );
             }
@@ -186,6 +198,8 @@ pub fn model_user_text(prompt: &str, mentions: &[Mention]) -> String {
             body.push_str("Save this for later.");
         } else if mentions.iter().any(Mention::is_vault_save) {
             body.push_str("Save the current context to the vault.");
+        } else if mentions.iter().any(Mention::is_vault_procedure) {
+            body.push_str("Save the last run as a Procedure.");
         } else {
             body.push_str("Follow the attached mentions.");
         }
@@ -238,6 +252,10 @@ mod tests {
             display_prompt("クリックして", &[Mention::Browser]),
             "@browser クリックして"
         );
+        assert_eq!(
+            display_prompt("経費精算して", &[Mention::VaultProcedure]),
+            "@vault-procedure 経費精算して"
+        );
         assert_eq!(display_prompt("hello", &[]), "hello");
         assert_eq!(
             display_prompt("調べて", &[Mention::Search]),
@@ -247,11 +265,18 @@ mod tests {
 
     #[test]
     fn mention_routing_omits_bodies_and_paths() {
-        let text = mention_routing(&[Mention::VaultQuery, Mention::Screen, Mention::VaultSave]);
+        let text = mention_routing(&[
+            Mention::VaultQuery,
+            Mention::Screen,
+            Mention::VaultSave,
+            Mention::VaultProcedure,
+        ]);
         assert!(text.contains("knowledge_search"));
         assert!(text.contains("knowledge_read"));
         assert!(text.contains("screenshot"));
         assert!(text.contains("knowledge_ingest"));
+        assert!(text.contains("save a Procedure from the receipt"));
+        assert!(text.contains("Do not write a Procedure with knowledge_ingest"));
         assert!(!text.contains("cp_"));
         assert!(!text.contains(".md"));
         assert!(!text.contains("secret-token"));
@@ -341,5 +366,8 @@ mod tests {
         let screen = model_user_text("  ", &[Mention::Screen]);
         assert!(screen.contains("Look at the attached screen and continue."));
         assert!(!screen.contains("operate the computer"));
+        let procedure = model_user_text("  ", &[Mention::VaultProcedure]);
+        assert!(procedure.contains("Save the last run as a Procedure"));
+        assert!(procedure.contains("save a Procedure from the receipt"));
     }
 }

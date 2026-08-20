@@ -53,11 +53,23 @@ Publish creates `vX.Y.Z`, a GitHub Release (the `.dmg` is the download), and upd
 
 The repo must be **public** (or Releases must be downloadable without auth) or in-app updates cannot fetch `latest.json`.
 
-### GitHub Secrets
+Prepare Release PR and Publish Release run only from **main**, on the GitHub Environment **`release`**. Jobs then refuse anyone who is not a repository **admin**. Put signing secrets on that environment (not as ordinary repository secrets) so a write collaborator cannot read them from some other workflow.
 
-Put these on the GitHub repo before the first `/release`. Do not commit private keys.
+### GitHub Environment `release`
 
-**Updater (required)** — the matching public key is already in `crates/crosspond-app/tauri.conf.json`. The private key generated with this change lives only on the machine that created it (`~/.tauri/crosspond.key`). Copy it into Actions:
+The environment **`release`** is already on the repo. Confirm Settings → Environments → **`release`**:
+
+- Required reviewers: you (so a write collaborator’s run waits instead of signing)
+- Deployment branches: **`main` only**
+- Allow administrators to bypass configured protection rules: on (so you are not stuck approving your own `/release`)
+
+Add the secrets below on **that environment**, not as ordinary repository secrets.
+
+### Environment secrets
+
+Put these on **`release`**. Do not commit private keys. The personal Developer ID is for binaries **you** publish; forks must use their own certificate.
+
+**Updater (required)** — the matching public key is already in `crates/crosspond-app/tauri.conf.json`. The private key generated with this change lives only on the machine that created it (`~/.tauri/crosspond.key`). Copy it into the environment:
 
 - `TAURI_SIGNING_PRIVATE_KEY` — contents of `~/.tauri/crosspond.key`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — empty unless you set a password
@@ -76,7 +88,7 @@ Notarization, pick one:
 - App Store Connect API key: `APPLE_API_KEY` (key id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the `.p8` file body)
 - or `APPLE_ID` plus an app-specific `APPLE_PASSWORD`
 
-Optional: `RELEASE_PLEASE_TOKEN` (a PAT) if `github.token` cannot open the release PR.
+Optional repository secret (not environment): `RELEASE_PLEASE_TOKEN` (a PAT) if `github.token` cannot open the release PR.
 
 ## Bundle notes
 
