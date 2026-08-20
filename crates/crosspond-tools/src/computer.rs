@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::ax_outline::truncate_ax_text;
+use crate::browser::{BrowserBackend, DisconnectedBrowser};
 use crate::registry::ToolRegistry;
 use crate::tool::{
     Tool, ToolContext, ToolDefinition, ToolError, ToolImage, ToolResult, truncate_output,
@@ -88,6 +89,7 @@ pub fn register_computer_tools(
     registry: &mut ToolRegistry,
     backend: Arc<dyn AccessibilityBackend>,
     apps: Arc<dyn AppBackend>,
+    browser: Arc<dyn BrowserBackend>,
 ) {
     registry.register(Arc::new(GetAccessibilitySnapshot {
         backend: Arc::clone(&backend),
@@ -99,7 +101,10 @@ pub fn register_computer_tools(
     registry.register(Arc::new(UiSetValue {
         backend: Arc::clone(&backend),
     }));
-    registry.register(Arc::new(FillCredential { backend }));
+    registry.register(Arc::new(FillCredential {
+        ax: backend,
+        browser,
+    }));
 }
 
 pub fn register_screenshot_tools(
@@ -144,7 +149,7 @@ pub fn computer_registry(
     apps: Arc<dyn AppBackend>,
 ) -> ToolRegistry {
     let mut registry = crate::filesystem_registry();
-    register_computer_tools(&mut registry, backend, apps);
+    register_computer_tools(&mut registry, backend, apps, Arc::new(DisconnectedBrowser));
     registry
 }
 
@@ -171,9 +176,15 @@ pub fn computer_and_screenshot_registry_with_browser(
     apps: Arc<dyn AppBackend>,
     input: Arc<dyn InputBackend>,
     calendar: Arc<dyn crate::calendar::CalendarBackend>,
-    browser: Arc<dyn crate::browser::BrowserBackend>,
+    browser: Arc<dyn BrowserBackend>,
 ) -> ToolRegistry {
-    let mut registry = computer_registry(Arc::clone(&ax), Arc::clone(&apps));
+    let mut registry = crate::filesystem_registry();
+    register_computer_tools(
+        &mut registry,
+        Arc::clone(&ax),
+        Arc::clone(&apps),
+        Arc::clone(&browser),
+    );
     register_screenshot_tools(&mut registry, screenshot, Arc::clone(&apps));
     register_app_tools(&mut registry, apps);
     register_input_tools(&mut registry, input, ax);
@@ -510,14 +521,15 @@ impl Tool for UiSetValue {
 }
 
 struct FillCredential {
-    backend: Arc<dyn AccessibilityBackend>,
+    ax: Arc<dyn AccessibilityBackend>,
+    browser: Arc<dyn BrowserBackend>,
 }
 
 impl Tool for FillCredential {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "fill_credential".into(),
-            description: "Fill a login dialog from a Knowledge Vault credential_ref. Pass node ids from the latest snapshot. Never pass a username or password; Crosspond collects those from the user or Keychain.".into(),
+            description: "Fill a login from a Knowledge Vault credential_ref. Native dialogs: pass username_node_id and/or password_node_id from the latest get_accessibility_snapshot. Chromium HTTP basic/digest auth: omit node ids after browser_navigate reports authentication required. Never pass a username or password; Crosspond collects those from the user or Keychain.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -526,10 +538,10 @@ impl Tool for FillCredential {
                         "description": "credential_ref from a Resource note. Do not invent a new name."
                     },
                     "username_node_id": {
-                        "description": "Username field node id from the latest get_accessibility_snapshot"
+                        "description": "Username field node id from the latest get_accessibility_snapshot. Omit for Chromium HTTP authentication."
                     },
                     "password_node_id": {
-                        "description": "Password field node id from the latest get_accessibility_snapshot"
+                        "description": "Password field node id from the latest get_accessibility_snapshot. Omit for Chromium HTTP authentication."
                     },
                     "ask_user": ask_user_property()
                 },
@@ -560,11 +572,6 @@ impl Tool for FillCredential {
             .ok_or_else(|| ToolError::Failed("credential_ref is required".into()))?;
         let username_node = parse_named_node_id(&input, "username_node_id")?;
         let password_node = parse_named_node_id(&input, "password_node_id")?;
-        if username_node.is_none() && password_node.is_none() {
-            return Err(ToolError::Failed(
-                "username_node_id or password_node_id is required".into(),
-            ));
-        }
         let username = context
             .fill_username
             .as_deref()
@@ -575,6 +582,32 @@ impl Tool for FillCredential {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
+        if username_node.is_none() && password_node.is_none() {
+            let Some(challenge) = self.browser.pending_http_auth() else {
+                return Err(ToolError::Failed(
+                    "no HTTP authentication challenge is pending. For Chromium basic/digest auth, call browser_navigate or browser_new_tab first, then fill_credential with only credential_ref. For native login dialogs, pass username_node_id and/or password_node_id from get_accessibility_snapshot.".into(),
+                ));
+            };
+            let Some(username) = username else {
+                return Err(ToolError::Failed(
+                    "login was not provided; Crosspond must collect it from the user".into(),
+                ));
+            };
+            let Some(password) = password else {
+                return Err(ToolError::Failed(
+                    "login was not provided; Crosspond must collect it from the user".into(),
+                ));
+            };
+            self.browser.continue_http_auth(username, password)?;
+            return Ok(ToolResult {
+                text: format!(
+                    "Filled login for {credential_ref} on {}. Values were not returned.",
+                    challenge.host
+                ),
+                created_file: None,
+                image: None,
+            });
+        }
         if username_node.is_some() && username.is_none() {
             return Err(ToolError::Failed(
                 "login was not provided; Crosspond must collect it from the user".into(),
@@ -586,14 +619,14 @@ impl Tool for FillCredential {
             ));
         }
         if let (Some(node_id), Some(value)) = (username_node.as_deref(), username) {
-            if self.backend.is_secure_node(node_id) {
-                self.backend.set_secure_value(node_id, value)?;
+            if self.ax.is_secure_node(node_id) {
+                self.ax.set_secure_value(node_id, value)?;
             } else {
-                self.backend.set_value(node_id, value)?;
+                self.ax.set_value(node_id, value)?;
             }
         }
         if let (Some(node_id), Some(value)) = (password_node.as_deref(), password) {
-            self.backend.set_secure_value(node_id, value)?;
+            self.ax.set_secure_value(node_id, value)?;
         }
         Ok(ToolResult {
             text: format!("Filled login for {credential_ref}. Values were not returned."),
@@ -1025,6 +1058,7 @@ impl Tool for UiScroll {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::tests::MockBrowser;
     use crate::calendar::MockCalendar;
     use serde_json::json;
     use std::sync::Mutex;
@@ -1361,6 +1395,75 @@ mod tests {
                     "credential_ref": "lab.fileserver",
                     "password_node_id": "9"
                 }),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("collect"));
+    }
+
+    #[test]
+    fn fill_credential_without_nodes_requires_pending_http_auth() {
+        let err = computer_registry(Arc::new(MockAx::checkout()), mock_apps())
+            .execute(
+                "fill_credential",
+                &ctx(),
+                json!({ "credential_ref": "lab.fileserver" }),
+            )
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("browser_navigate"));
+        assert!(message.contains("credential_ref"));
+        assert!(!message.contains("hunter2"));
+        assert!(!message.contains("labuser"));
+    }
+
+    #[test]
+    fn fill_credential_http_auth_uses_host_login_and_omits_values() {
+        let browser = Arc::new(MockBrowser::with_digest_auth());
+        let registry = computer_and_screenshot_registry_with_browser(
+            Arc::new(MockAx::checkout()),
+            Arc::new(MockShot::new()),
+            mock_apps(),
+            Arc::new(MockInput::new()),
+            Arc::new(MockCalendar),
+            Arc::clone(&browser) as _,
+        );
+        let mut context = ctx();
+        context.fill_username = Some("labuser".into());
+        context.fill_password = Some("hunter2".into());
+        let result = registry
+            .execute(
+                "fill_credential",
+                &context,
+                json!({ "credential_ref": "lab.fileserver" }),
+            )
+            .unwrap();
+        assert!(result.text.contains("lab.fileserver"));
+        assert!(result.text.contains("files.example.invalid"));
+        assert!(!result.text.contains("labuser"));
+        assert!(!result.text.contains("hunter2"));
+        assert_eq!(
+            browser.http_auth_fills.lock().expect("lock").clone(),
+            vec![("labuser".into(), "hunter2".into())]
+        );
+        assert!(browser.pending_auth.lock().expect("lock").is_none());
+    }
+
+    #[test]
+    fn fill_credential_http_auth_without_host_login_errors() {
+        let browser = Arc::new(MockBrowser::with_digest_auth());
+        let registry = computer_and_screenshot_registry_with_browser(
+            Arc::new(MockAx::checkout()),
+            Arc::new(MockShot::new()),
+            mock_apps(),
+            Arc::new(MockInput::new()),
+            Arc::new(MockCalendar),
+            browser,
+        );
+        let err = registry
+            .execute(
+                "fill_credential",
+                &ctx(),
+                json!({ "credential_ref": "lab.fileserver" }),
             )
             .unwrap_err();
         assert!(err.to_string().contains("collect"));

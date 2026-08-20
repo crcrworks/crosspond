@@ -8,6 +8,9 @@ let connecting = false;
 let retryTimer = null;
 let retryMs = 400;
 
+const pendingAuthByTab = new Map();
+const authWaiters = new Map();
+
 function scheduleReconnect() {
   if (retryTimer) {
     return;
@@ -54,11 +57,15 @@ function ensureKeepalive() {
 
 async function handleHostMessage(message) {
   const id = message && message.id;
+  const op = message && message.op;
   try {
     const result = await dispatch(message || {});
     postToHost({ id, ok: true, result });
   } catch (error) {
-    const text = error && error.message ? error.message : String(error);
+    let text = error && error.message ? error.message : String(error);
+    if (op === "continue_http_auth") {
+      text = "could not continue HTTP authentication";
+    }
     postToHost({ id, ok: false, error: text });
   }
 }
@@ -98,6 +105,10 @@ async function dispatch(message) {
     case "activate":
       await chrome.tabs.update(requiredTabId(message), { active: true });
       return {};
+    case "pending_http_auth":
+      return pendingHttpAuth(requiredTabId(message));
+    case "continue_http_auth":
+      return continueHttpAuth(requiredTabId(message), message);
     default:
       throw new Error(`unknown op: ${op || "(missing)"}`);
   }
@@ -145,7 +156,45 @@ async function attach(tabId) {
       throw error;
     }
   }
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", { handleAuthRequests: true });
+  } catch {
+    // Already enabled on this target.
+  }
 }
+
+function authInfoFromParams(params) {
+  const challenge = (params && params.authChallenge) || {};
+  return {
+    requestId: params && params.requestId,
+    url: (params && params.request && params.request.url) || "",
+    scheme: challenge.scheme || "",
+    realm: challenge.realm || "",
+    origin: challenge.origin || ""
+  };
+}
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  const tabId = source && source.tabId;
+  if (typeof tabId !== "number") {
+    return;
+  }
+  if (method === "Fetch.requestPaused" && params && params.requestId) {
+    void chrome.debugger
+      .sendCommand(source, "Fetch.continueRequest", { requestId: params.requestId })
+      .catch(() => {});
+    return;
+  }
+  if (method === "Fetch.authRequired" && params && params.requestId) {
+    const info = authInfoFromParams(params);
+    pendingAuthByTab.set(tabId, info);
+    const waiter = authWaiters.get(tabId);
+    if (waiter) {
+      authWaiters.delete(tabId);
+      waiter(info);
+    }
+  }
+});
 
 function compactAxValue(value) {
   if (!value || typeof value !== "object") {
@@ -236,30 +285,100 @@ async function sendCdp(tabId, method, params) {
   }
 }
 
-function waitComplete(tabId, timeoutMs) {
+function waitCompleteOrAuth(tabId, timeoutMs) {
   const timeout = timeoutMs || 15000;
   return new Promise((resolve) => {
     let settled = false;
-    const finish = () => {
+    const finish = (value) => {
       if (settled) {
         return;
       }
       settled = true;
       chrome.tabs.onUpdated.removeListener(listener);
-      resolve();
+      if (authWaiters.get(tabId) === onAuth) {
+        authWaiters.delete(tabId);
+      }
+      resolve(value || {});
     };
-    const timer = setTimeout(finish, timeout);
+    const onAuth = (info) => {
+      clearTimeout(timer);
+      finish({ auth: info });
+    };
+    const pending = pendingAuthByTab.get(tabId);
+    if (pending) {
+      finish({ auth: pending });
+      return;
+    }
+    authWaiters.set(tabId, onAuth);
+    const timer = setTimeout(() => finish({}), timeout);
     function listener(id, info) {
-      if (id === tabId && info.status === "complete") {
+      if (id === tabId && info.status === "complete" && !pendingAuthByTab.has(tabId)) {
         clearTimeout(timer);
-        finish();
+        finish({});
       }
     }
     chrome.tabs.onUpdated.addListener(listener);
   });
 }
 
+function httpAuthPayload(tabId, tab, auth) {
+  return {
+    tabId,
+    http_auth_required: true,
+    url: (tab && tab.url) || auth.url || "",
+    scheme: auth.scheme || "",
+    realm: auth.realm || "",
+    origin: auth.origin || ""
+  };
+}
+
+function pendingHttpAuth(tabId) {
+  const pending = pendingAuthByTab.get(tabId);
+  if (!pending) {
+    return { pending: false };
+  }
+  return {
+    pending: true,
+    url: pending.url || "",
+    scheme: pending.scheme || "",
+    realm: pending.realm || "",
+    origin: pending.origin || ""
+  };
+}
+
+async function continueHttpAuth(tabId, message) {
+  const pending = pendingAuthByTab.get(tabId);
+  if (!pending || !pending.requestId) {
+    throw new Error("no HTTP authentication challenge is pending");
+  }
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Fetch.continueWithAuth", {
+      requestId: pending.requestId,
+      authChallengeResponse: {
+        response: "ProvideCredentials",
+        username: typeof message.username === "string" ? message.username : "",
+        password: typeof message.password === "string" ? message.password : ""
+      }
+    });
+  } catch {
+    throw new Error("could not continue HTTP authentication");
+  }
+  pendingAuthByTab.delete(tabId);
+  const outcome = await waitCompleteOrAuth(tabId);
+  const tab = await chrome.tabs.get(tabId);
+  if (outcome.auth) {
+    return httpAuthPayload(tabId, tab, outcome.auth);
+  }
+  const still = pendingAuthByTab.get(tabId);
+  if (still) {
+    return httpAuthPayload(tabId, tab, still);
+  }
+  return { tabId, url: tab.url || "", title: tab.title || "" };
+}
+
 async function navigate(tabId, action, url) {
+  await attach(tabId);
+  pendingAuthByTab.delete(tabId);
   if (action === "goto") {
     if (!url) {
       throw new Error("url is required for goto");
@@ -274,21 +393,32 @@ async function navigate(tabId, action, url) {
   } else {
     throw new Error("action must be goto, back, forward, or reload");
   }
-  await waitComplete(tabId);
+  const outcome = await waitCompleteOrAuth(tabId);
   const tab = await chrome.tabs.get(tabId);
+  if (outcome.auth) {
+    return httpAuthPayload(tabId, tab, outcome.auth);
+  }
+  const pending = pendingAuthByTab.get(tabId);
+  if (pending) {
+    return httpAuthPayload(tabId, tab, pending);
+  }
   return { tabId, url: tab.url || "", title: tab.title || "" };
 }
 
 async function newTab(url) {
-  const tab = await chrome.tabs.create({ url: url || "about:blank" });
-  if (typeof tab.id === "number") {
-    await groupTab(tab.id);
-    await waitComplete(tab.id);
+  const tab = await chrome.tabs.create({ url: "about:blank" });
+  if (typeof tab.id !== "number") {
+    return { tabId: tab.id, url: "about:blank", title: "" };
   }
-  const fresh = typeof tab.id === "number" ? await chrome.tabs.get(tab.id) : tab;
+  await groupTab(tab.id);
+  await attach(tab.id);
+  if (url) {
+    return navigate(tab.id, "goto", url);
+  }
+  const fresh = await chrome.tabs.get(tab.id);
   return {
     tabId: fresh.id,
-    url: fresh.url || url || "about:blank",
+    url: fresh.url || "about:blank",
     title: fresh.title || ""
   };
 }

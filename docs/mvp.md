@@ -10,7 +10,7 @@ Read Later is Source ingestion, not a separate silo. A current page URL, selecte
 
 ## Login fill
 
-Resource notes may store a `credential_ref` Keychain pointer (never the secret). Login dialogs use `fill_credential`; the launcher collects username/password. **Save in Keychain** is off by default and only overwrites a ref that already exists on a vault note. Values never go to the model, logs, receipts, or the WebView.
+Resource notes may store a `credential_ref` Keychain pointer (never the secret). Native login dialogs and Chromium HTTP basic/digest auth use `fill_credential`; the launcher collects username/password. HTTP auth is not a DOM field — `browser_navigate` first, then `fill_credential` with only the ref. **Save in Keychain** is off by default and only overwrites a ref that already exists on a vault note. Values never go to the model, logs, receipts, or the WebView.
 
 ## Knowledge Vault Phase 7
 
@@ -61,7 +61,7 @@ Phase 11 Whole-Mac tools still apply (any app, keyboard/scroll, shell/URL, Event
 
 ## Phase 13 Browser
 
-Chromium pages go through a Crosspond Chrome extension (CDP via `chrome.debugger`), not Accessibility or screenshots. The model calls `browser_snapshot` for a compact a11y outline with refs, then `browser_click` / `browser_fill` / `browser_type` on those refs. Native apps still use cua-driver AX / screenshot tools.
+Chromium pages go through a Crosspond Chrome extension (CDP via `chrome.debugger`), not Accessibility or screenshots. The model calls `browser_snapshot` for a compact a11y outline with refs, then `browser_click` / `browser_fill` / `browser_type` on those refs. Native apps still use cua-driver AX / screenshot tools. HTTP basic/digest prompts are browser chrome, not DOM: the extension enables `Fetch.handleAuthRequests`, and the model calls `fill_credential` with only `credential_ref` (never curl).
 
 The extension talks to Crosspond over native messaging (`com.crosspond.chrome`) and a user-only unix socket. Crosspond must be running first so it can copy `crosspond-chrome-host` to `~/.crosspond/bin` and write the native-host manifests. Load the extension unpacked from `extension/chrome` (Settings → Browser shows the path and connection badge). The extension reconnects if the native port drops and Crosspond retries in-flight `browser_*` calls; AX trees are compacted before they cross the 1 MiB Chrome host→extension cap. A new site host needs Allow in Manual and AI, then it is stored in `config.json` `browser_allowed_hosts`. Auto runs without asking and does not add the host. `browser_blocked_hosts` always refuses. Page bodies, cookies, and field values stay out of the WebView, receipts, and logs.
 

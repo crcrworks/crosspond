@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use crosspond_tools::command_embeds_credentials;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -89,7 +90,14 @@ pub fn tool_ui_summary(name: &str, input: &Value) -> String {
         "read_file" | "write_file" | "list_directory" | "create_directory" => {
             path_basename(string_field(input, "path"))
         }
-        "run_command" => truncate_chars(&string_field(input, "command"), UI_SUMMARY_MAX),
+        "run_command" => {
+            let command = string_field(input, "command");
+            if command_embeds_credentials(&command) {
+                String::new()
+            } else {
+                truncate_chars(&command, UI_SUMMARY_MAX)
+            }
+        }
         "web_search" | "knowledge_search" | "knowledge_find_procedure" => {
             truncate_chars(&string_field(input, "query"), UI_SUMMARY_MAX)
         }
@@ -300,6 +308,14 @@ mod tests {
             tool_ui_summary("run_command", &serde_json::json!({"command": "ls -la"})),
             "ls -la"
         );
+        let curl_login = tool_ui_summary(
+            "run_command",
+            &serde_json::json!({
+                "command": "curl --digest -u ngc:hunter2 https://files.example.invalid/"
+            }),
+        );
+        assert!(curl_login.is_empty());
+        assert!(!curl_login.contains("hunter2"));
         assert_eq!(
             tool_ui_summary(
                 "read_file",

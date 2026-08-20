@@ -42,6 +42,42 @@ pub trait BrowserBackend: Send + Sync {
     fn describe_ref(&self, _element_ref: &str) -> Option<String> {
         None
     }
+    /// Host/scheme/realm if Chromium is paused on HTTP auth. Never includes credentials.
+    fn pending_http_auth(&self) -> Option<HttpAuthChallenge> {
+        None
+    }
+    /// Continue a paused HTTP auth challenge. Values must never be logged.
+    fn continue_http_auth(&self, username: &str, password: &str) -> Result<String, ToolError> {
+        let _ = (username, password);
+        Err(ToolError::Failed(
+            "no HTTP authentication challenge is pending".into(),
+        ))
+    }
+}
+
+/// Public HTTP auth metadata. Never includes a username or password.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HttpAuthChallenge {
+    pub host: String,
+    pub scheme: String,
+    pub realm: String,
+}
+
+/// Tool/model copy when Chromium pauses on basic/digest auth.
+pub fn http_auth_required_message(host: &str, scheme: &str, realm: &str) -> String {
+    let kind = {
+        let scheme = scheme.trim();
+        if scheme.is_empty() { "HTTP" } else { scheme }
+    };
+    let mut message = format!("{kind} authentication required for {host}.");
+    let realm = realm.trim();
+    if !realm.is_empty() {
+        message.push_str(&format!(" Realm: {realm}."));
+    }
+    message.push_str(
+        " Call fill_credential with credential_ref from the matching Resource note. Pass only credential_ref — no username, password, or Accessibility node ids. Do not use curl, run_command, or browser_fill.",
+    );
+    message
 }
 
 pub fn is_browser_tool(name: &str) -> bool {
@@ -729,6 +765,8 @@ pub(crate) mod tests {
         pub snapshot: String,
         pub clicks: Mutex<Vec<String>>,
         pub fills: Mutex<Vec<(String, String)>>,
+        pub pending_auth: Mutex<Option<HttpAuthChallenge>>,
+        pub http_auth_fills: Mutex<Vec<(String, String)>>,
     }
 
     impl MockBrowser {
@@ -741,7 +779,20 @@ pub(crate) mod tests {
                         .into(),
                 clicks: Mutex::new(Vec::new()),
                 fills: Mutex::new(Vec::new()),
+                pending_auth: Mutex::new(None),
+                http_auth_fills: Mutex::new(Vec::new()),
             }
+        }
+
+        pub(crate) fn with_digest_auth() -> Self {
+            let page = Self::connected_page();
+            *page.host.lock().expect("host") = Some("files.example.invalid".into());
+            *page.pending_auth.lock().expect("auth") = Some(HttpAuthChallenge {
+                host: "files.example.invalid".into(),
+                scheme: "digest".into(),
+                realm: "lab-share".into(),
+            });
+            page
         }
     }
 
@@ -841,6 +892,24 @@ pub(crate) mod tests {
             } else {
                 None
             }
+        }
+
+        fn pending_http_auth(&self) -> Option<HttpAuthChallenge> {
+            self.pending_auth.lock().expect("auth").clone()
+        }
+
+        fn continue_http_auth(&self, username: &str, password: &str) -> Result<String, ToolError> {
+            if self.pending_auth.lock().expect("auth").is_none() {
+                return Err(ToolError::Failed(
+                    "no HTTP authentication challenge is pending".into(),
+                ));
+            }
+            self.http_auth_fills
+                .lock()
+                .expect("fills")
+                .push((username.to_string(), password.to_string()));
+            *self.pending_auth.lock().expect("auth") = None;
+            Ok("Filled HTTP authentication. Values were not returned.".into())
         }
     }
 
@@ -990,6 +1059,18 @@ pub(crate) mod tests {
         );
         assert!(!title.contains("hunter2"));
         assert!(!body.contains("hunter2"));
+    }
+
+    #[test]
+    fn http_auth_required_message_points_at_fill_credential() {
+        let text = http_auth_required_message("files.example.invalid", "digest", "lab-share");
+        assert!(text.contains("digest authentication required"));
+        assert!(text.contains("files.example.invalid"));
+        assert!(text.contains("fill_credential"));
+        assert!(text.contains("only credential_ref"));
+        assert!(text.contains("curl"));
+        assert!(!text.contains("hunter2"));
+        assert!(!text.contains("labuser"));
     }
 
     #[test]

@@ -32,7 +32,7 @@ Do not log Accessibility field values. Password fields (`AXSecureTextField`) are
 
 ## Login fill
 
-When a Resource note has `credential_ref`, the agent calls `fill_credential` with that pointer and Accessibility node ids — never a username or password. On a Keychain miss the launcher shows Username / Password and an optional **Save in Keychain** switch (default off, offered only if that ref already exists on a vault note). Fill sends `submit_credential` into Rust. Values must not appear in `AgentEvent`, the WebView, logs, `events.jsonl`, `session.json`, receipts, or tool results. A Keychain hit in Manual/AI shows Allow (“fill saved login”); Auto fills without asking. Do not interpolate secrets into `run_command` or `smb://user:pass@host`.
+When a Resource note has `credential_ref`, the agent calls `fill_credential` with that pointer — never a username or password. Native login dialogs also pass Accessibility node ids. Chromium HTTP basic/digest auth (the browser chrome, not the page DOM) uses `browser_navigate` then `fill_credential` with **only** `credential_ref`. On a Keychain miss the launcher shows Username / Password and an optional **Save in Keychain** switch (default off, offered only if that ref already exists on a vault note). Fill sends `submit_credential` into Rust. Values must not appear in `AgentEvent`, the WebView, logs, `events.jsonl`, `session.json`, receipts, or tool results. A Keychain hit in Manual/AI shows Allow (“fill saved login”); Auto fills without asking. `run_command` refuses curl `--user` / `--digest` / `--basic` / `--ntlm` and `user:pass@` URLs (including `smb://`) without echoing the command. Do not interpolate secrets into `run_command` or `smb://user:pass@host`.
 
 Calendar event notes/bodies may be returned to the model from `calendar_events`, but must not appear in `events.jsonl`, `session.json`, receipts, or logs — only counts / success metadata.
 
@@ -62,7 +62,7 @@ Approval copy for `ui_click` may include coordinates and the app name; it must n
 
 `fetch_url` and public `open_url` only allow `http`/`https` and reject localhost, private, link-local, and cloud-metadata addresses (including after redirects for fetch). Page bodies and URL query strings must not appear in receipts, `events.jsonl`, `session.json`, or logs.
 
-`run_command` runs with cwd set to the session scratch space (created lazily if needed). `sudo` and empty commands are refused. stdout/stderr are truncated like other tool output and must not be written into receipts beyond success metadata.
+`run_command` runs with cwd set to the session scratch space (created lazily if needed). `sudo`, empty commands, and commands that embed logins (`curl --user` / `--digest`, `user:pass@` URLs) are refused. The refusal must not echo the command. stdout/stderr are truncated like other tool output and must not be written into receipts beyond success metadata.
 
 Do not put personal calendar, mail, or selected text into `web_search` queries. Prefer `calendar_events` for schedule questions.
 

@@ -121,7 +121,8 @@ Routing:\n\
 - Native Mac apps and Safari: labeled UI controls → get_accessibility_snapshot (pass app= if not the ambient frontmost app), then ui_press. Prefer ui_press over ui_click.\n\
 - Native unlabeled UI → take_screenshot then ui_click with exact image pixels (origin top-left). Use stated width×height; do not normalize to 1000×1000 or use screen coordinates.\n\
 - Typing / shortcuts / scrolling in native apps → ui_type, ui_hotkey, ui_scroll after a snapshot of the target app.\n\
-- Native login dialogs → fill_credential with credential_ref from a Resource note. Never ask the user to paste a username or password in chat. Never pass them to ui_set_value, ui_type, or run_command. Do not invent a new credential_ref.\n\
+- Native login dialogs → fill_credential with credential_ref from a Resource note and username_node_id / password_node_id from get_accessibility_snapshot. Never ask the user to paste a username or password in chat. Never pass them to ui_set_value, ui_type, browser_fill, or run_command. Do not invent a new credential_ref.\n\
+- Chromium HTTP authentication (basic/digest, including lab file servers; a browser_* result that says authentication required) → fill_credential with only credential_ref. Do not pass node ids. Do not use curl, wget, run_command, fetch_url, or browser_fill for that challenge.\n\
 {shell_route}\
 ui_click returns a fresh post-click screenshot. Verify before another click; do not retry against an older image.\n\
 Click coordinates and node ids are only valid for the latest snapshot/screenshot.\n\
@@ -1146,13 +1147,6 @@ impl Runtime {
             Ok(value) => value,
             Err(message) => return ApprovalOutcome::Rejected(message),
         };
-        if !node_id_present(input, "username_node_id")
-            && !node_id_present(input, "password_node_id")
-        {
-            return ApprovalOutcome::Rejected(
-                "username_node_id or password_node_id is required".into(),
-            );
-        }
         let save_offered = self
             .knowledge
             .as_ref()
@@ -1712,14 +1706,6 @@ fn scratch_reason_for_tool(name: &str, input: &Value) -> Option<ScratchReason> {
     }
 }
 
-fn node_id_present(input: &Value, key: &str) -> bool {
-    match input.get(key) {
-        Some(Value::Number(_)) => true,
-        Some(Value::String(value)) => !value.trim().is_empty(),
-        _ => false,
-    }
-}
-
 fn relative_tool_path(input: &Value) -> bool {
     let path = input.get("path").and_then(Value::as_str).unwrap_or(".");
     !Path::new(path).is_absolute()
@@ -1830,8 +1816,8 @@ mod tests {
     use crate::secret::memory::MemorySecretStore;
     use crate::secret::{CredentialBundle, SecretKey, SecretString};
     use crosspond_tools::{
-        AccessibilityBackend, AppBackend, BrowserBackend, CalendarBackend, InputBackend,
-        Screenshot, ScreenshotBackend, ToolError, computer_and_screenshot_registry,
+        AccessibilityBackend, AppBackend, BrowserBackend, CalendarBackend, HttpAuthChallenge,
+        InputBackend, Screenshot, ScreenshotBackend, ToolError, computer_and_screenshot_registry,
         computer_and_screenshot_registry_with_browser, computer_registry, register_shell_tools,
     };
 
@@ -2020,6 +2006,9 @@ mod tests {
         assert!(prompt.contains("browser_snapshot"));
         assert!(prompt.contains("do not fall back"));
         assert!(prompt.contains("get_accessibility_snapshot"));
+        assert!(prompt.contains("HTTP authentication"));
+        assert!(prompt.contains("only credential_ref"));
+        assert!(prompt.contains("curl"));
     }
 
     fn lab_indexed_vault() -> (IndexedVault, PathBuf, PathBuf) {
@@ -3975,6 +3964,103 @@ mod tests {
         let _ = std::fs::remove_file(sqlite);
     }
 
+    fn fill_http_arguments(credential_ref: &str) -> String {
+        serde_json::json!({ "credential_ref": credential_ref }).to_string()
+    }
+
+    fn fill_http_provider(credential_ref: &str) -> ProviderBuilder {
+        let arguments = fill_http_arguments(credential_ref);
+        Arc::new(move |_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "fill_credential",
+                arguments.clone(),
+                "Opened the lab share",
+            ))
+        })
+    }
+
+    #[tokio::test]
+    async fn fill_credential_http_auth_uses_keychain_without_node_ids() {
+        let continues = Arc::new(Mutex::new(0u32));
+        let tools =
+            test_browser_registry(Arc::new(TestBrowser::lab_digest(Arc::clone(&continues))));
+        let secrets = seeded_secrets();
+        secrets
+            .set(
+                &SecretKey::credential("lab.fileserver").unwrap(),
+                &CredentialBundle {
+                    username: "labuser".into(),
+                    password: "hunter2".into(),
+                }
+                .encode(),
+            )
+            .unwrap();
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let (mut runtime, tmp) = test_runtime(fill_http_provider("lab.fileserver"), secrets, tools);
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                task_id,
+                "open the lab files",
+            )))
+            .unwrap();
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::CredentialRequired { .. }),
+                "saved HTTP login should not prompt"
+            );
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "auto mode must not prompt for fill_credential"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert_eq!(*continues.lock().expect("lock"), 1);
+        let events = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert_no_secret_leak(&events);
+        let session = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("session.json"),
+        )
+        .unwrap();
+        assert_no_secret_leak(&session);
+        let receipt = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("receipt.json"),
+        )
+        .unwrap();
+        assert_no_secret_leak(&receipt);
+        assert!(receipt.contains("Filled a login"));
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
     #[tokio::test]
     async fn auto_run_command_skips_approval() {
         let marker =
@@ -4777,6 +4863,8 @@ mod tests {
     struct TestBrowser {
         host: String,
         snapshots: Arc<Mutex<u32>>,
+        http_auth: Mutex<Option<HttpAuthChallenge>>,
+        http_auth_continues: Arc<Mutex<u32>>,
     }
 
     impl TestBrowser {
@@ -4784,6 +4872,21 @@ mod tests {
             Self {
                 host: "note.com".into(),
                 snapshots,
+                http_auth: Mutex::new(None),
+                http_auth_continues: Arc::new(Mutex::new(0)),
+            }
+        }
+
+        fn lab_digest(continues: Arc<Mutex<u32>>) -> Self {
+            Self {
+                host: "files.example.invalid".into(),
+                snapshots: Arc::new(Mutex::new(0)),
+                http_auth: Mutex::new(Some(HttpAuthChallenge {
+                    host: "files.example.invalid".into(),
+                    scheme: "digest".into(),
+                    realm: "lab-share".into(),
+                })),
+                http_auth_continues: continues,
             }
         }
     }
@@ -4848,6 +4951,23 @@ mod tests {
 
         fn new_tab(&self, url: Option<&str>) -> Result<String, ToolError> {
             Ok(format!("Opened tab {}", url.unwrap_or("about:blank")))
+        }
+
+        fn pending_http_auth(&self) -> Option<HttpAuthChallenge> {
+            self.http_auth.lock().expect("auth").clone()
+        }
+
+        fn continue_http_auth(&self, username: &str, password: &str) -> Result<String, ToolError> {
+            let _ = (username, password);
+            let mut pending = self.http_auth.lock().expect("auth");
+            if pending.is_none() {
+                return Err(ToolError::Failed(
+                    "no HTTP authentication challenge is pending".into(),
+                ));
+            }
+            *pending = None;
+            *self.http_auth_continues.lock().expect("continues") += 1;
+            Ok("Filled HTTP authentication. Values were not returned.".into())
         }
     }
 

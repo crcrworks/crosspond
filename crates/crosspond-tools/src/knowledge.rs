@@ -198,7 +198,7 @@ impl Tool for KnowledgeRead {
         }
         if let Some(credential_ref) = &note.credential_ref {
             text.push_str(&format!(
-                "credential_ref: {credential_ref}\nUse fill_credential with this pointer. Never ask the user to paste a password in chat.\n"
+                "credential_ref: {credential_ref}\nUse fill_credential with this pointer. Native login dialogs need username_node_id / password_node_id from get_accessibility_snapshot. Chromium HTTP basic/digest auth: browser_navigate first, then fill_credential with only credential_ref. Never ask the user to paste a password in chat.\n"
             ));
         }
         text.push('\n');
@@ -592,6 +592,8 @@ mod tests {
             .unwrap();
         assert!(result.text.contains("credential_ref: lab.fileserver"));
         assert!(result.text.contains("fill_credential"));
+        assert!(result.text.contains("only credential_ref"));
+        assert!(result.text.contains("browser_navigate"));
         assert!(!result.text.contains("hunter2"));
         assert!(!result.text.contains("labuser"));
     }

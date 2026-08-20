@@ -239,6 +239,15 @@ fn exa_status_message(status: u16) -> String {
     }
 }
 
+fn fetch_status_message(status: u16) -> String {
+    match status {
+        401 | 403 => format!(
+            "fetch failed (HTTP {status}). If this page needs a login, open it with browser_navigate, then call fill_credential with only credential_ref from a Resource note. Do not use curl or run_command."
+        ),
+        _ => format!("fetch failed (HTTP {status})"),
+    }
+}
+
 fn public_reqwest_error(err: &reqwest::Error) -> String {
     if err.is_timeout() {
         "request timed out".into()
@@ -287,10 +296,7 @@ impl Tool for FetchUrl {
             .bytes()
             .map_err(|err| ToolError::Failed(public_reqwest_error(&err)))?;
         if !status.is_success() {
-            return Err(ToolError::Failed(format!(
-                "fetch failed (HTTP {})",
-                status.as_u16()
-            )));
+            return Err(ToolError::Failed(fetch_status_message(status.as_u16())));
         }
         let text = decode_body(&bytes, &content_type);
         Ok(ToolResult {
@@ -471,5 +477,18 @@ mod tests {
             err.to_string().contains("private") || err.to_string().contains("blocked"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn fetch_auth_status_points_at_browser_fill_credential() {
+        let unauthorized = fetch_status_message(401);
+        assert!(unauthorized.contains("HTTP 401"));
+        assert!(unauthorized.contains("browser_navigate"));
+        assert!(unauthorized.contains("fill_credential"));
+        assert!(unauthorized.contains("curl"));
+        let forbidden = fetch_status_message(403);
+        assert!(forbidden.contains("HTTP 403"));
+        assert!(forbidden.contains("credential_ref"));
+        assert_eq!(fetch_status_message(404), "fetch failed (HTTP 404)");
     }
 }
