@@ -965,16 +965,18 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
-            use std::io::Write;
-            for mut stream in listener.incoming().take(4).flatten() {
-                let _ = stream
-                    .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\nforbidden");
+            for mut stream in listener.incoming().take(8).flatten() {
+                let _ = read_http_request(&mut stream);
+                let _ = write_raw(
+                    &mut stream,
+                    "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
             }
         });
         let url = reqwest::Url::parse(&format!("http://{addr}/share/")).unwrap();
         let client = http_client().unwrap();
         let err = fetch_page(&client, url, None).unwrap_err().to_string();
-        assert!(err.contains("HTTP 403"));
+        assert!(err.contains("HTTP 403"), "{err}");
         assert!(!err.contains("credential_ref"));
     }
 
