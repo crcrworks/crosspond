@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::attachment::{self, AttachmentKind, UserAttachment};
+use crate::context::StagedInput;
+
 /// User-attached composer mention. Payloads stay in Rust; the WebView only
 /// sends kinds and app names.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -74,7 +77,21 @@ impl Mention {
 }
 
 pub fn display_prompt(prompt: &str, mentions: &[Mention]) -> String {
-    let mut parts: Vec<String> = mentions.iter().map(Mention::display_token).collect();
+    display_prompt_with_attachments(prompt, mentions, &[])
+}
+
+pub fn display_prompt_with_attachments(
+    prompt: &str,
+    mentions: &[Mention],
+    attachment_names: &[String],
+) -> String {
+    let mut parts: Vec<String> = attachment_names
+        .iter()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect();
+    parts.extend(mentions.iter().map(Mention::display_token));
     let trimmed = prompt.trim();
     if !trimmed.is_empty() {
         parts.push(trimmed.to_string());
@@ -163,11 +180,21 @@ pub fn mention_routing(mentions: &[Mention]) -> String {
     lines.join("\n")
 }
 
-pub fn model_user_text(prompt: &str, mentions: &[Mention]) -> String {
+pub fn model_user_text_with_staged(
+    prompt: &str,
+    mentions: &[Mention],
+    attachments: &[UserAttachment],
+    staged: &[StagedInput],
+) -> String {
     let mut body = String::new();
     let routing = mention_routing(mentions);
     if !routing.is_empty() {
         body.push_str(&routing);
+        body.push_str("\n\n");
+    }
+    let attached = attachment::routing(attachments, staged);
+    if !attached.is_empty() {
+        body.push_str(&attached);
         body.push_str("\n\n");
     }
     let trimmed = prompt.trim();
@@ -186,6 +213,13 @@ pub fn model_user_text(prompt: &str, mentions: &[Mention]) -> String {
             body.push_str("Save this for later.");
         } else if mentions.iter().any(Mention::is_vault_save) {
             body.push_str("Save the current context to the vault.");
+        } else if attachments
+            .iter()
+            .any(|item| item.kind == AttachmentKind::Video)
+        {
+            body.push_str("Look at the attached media and continue.");
+        } else if !attachments.is_empty() {
+            body.push_str("Look at the attached image and continue.");
         } else {
             body.push_str("Follow the attached mentions.");
         }
@@ -287,7 +321,7 @@ mod tests {
         assert!(text.contains("browser_fill"));
         assert!(text.contains("Do not use get_accessibility_snapshot or take_screenshot"));
         assert!(!text.contains("ui_press"));
-        let empty = model_user_text("  ", &[Mention::Browser]);
+        let empty = model_user_text_with_staged("  ", &[Mention::Browser], &[], &[]);
         assert!(empty.contains("Operate the current Chromium tab"));
         assert!(empty.contains("browser_snapshot"));
     }
@@ -326,7 +360,7 @@ mod tests {
 
     #[test]
     fn empty_query_mention_asks_to_search_knowledge() {
-        let text = model_user_text("  ", &[Mention::VaultQuery]);
+        let text = model_user_text_with_staged("  ", &[Mention::VaultQuery], &[], &[]);
         assert!(text.contains("knowledge_search"));
         assert!(text.contains("Search accumulated knowledge"));
         assert!(!text.contains("cp_"));
@@ -335,11 +369,36 @@ mod tests {
 
     #[test]
     fn empty_computer_mention_asks_to_operate() {
-        let text = model_user_text("  ", &[Mention::Computer]);
+        let text = model_user_text_with_staged("  ", &[Mention::Computer], &[], &[]);
         assert!(text.contains("operate the computer"));
         assert!(text.contains("ui_press"));
-        let screen = model_user_text("  ", &[Mention::Screen]);
+        let screen = model_user_text_with_staged("  ", &[Mention::Screen], &[], &[]);
         assert!(screen.contains("Look at the attached screen and continue."));
         assert!(!screen.contains("operate the computer"));
+    }
+
+    #[test]
+    fn display_prompt_includes_attachment_names() {
+        assert_eq!(
+            display_prompt_with_attachments(
+                "これは何",
+                &[],
+                &["photo.png".into(), "clip.mov".into()]
+            ),
+            "photo.png clip.mov これは何"
+        );
+        let image = UserAttachment {
+            name: "photo.png".into(),
+            kind: AttachmentKind::Image,
+            media_type: "image/png".into(),
+            bytes: vec![1],
+            source_path: None,
+            width: None,
+            height: None,
+        };
+        let text = model_user_text_with_staged("  ", &[], &[image], &[]);
+        assert!(text.contains("photo.png"));
+        assert!(text.contains("Look at the attached image"));
+        assert!(!text.contains("/Users"));
     }
 }

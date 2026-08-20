@@ -73,6 +73,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::start_task,
+            commands::pick_media,
+            commands::attach_pasted_image,
+            commands::remove_attachment,
             commands::approve,
             commands::reject,
             commands::submit_credential,

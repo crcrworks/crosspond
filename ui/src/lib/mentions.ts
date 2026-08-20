@@ -1,3 +1,5 @@
+import { fileNameOnly } from './media';
+
 export type MentionKind =
 	| 'vault_query'
 	| 'vault_save'
@@ -183,14 +185,23 @@ export function chipLabel(mention: Mention): string {
 	}
 }
 
-export function displayPrompt(mentions: Mention[], text: string): string {
-	const tokens = mentions.map((mention) => {
-		if (mention.kind === 'app' && mention.name.trim()) {
-			return `@app ${mention.name.trim()}`;
-		}
-		const item = MENTION_CATALOG.find((entry) => entry.kind === mention.kind);
-		return `@${item?.token ?? mention.kind}`;
-	});
+export function displayPrompt(
+	mentions: Mention[],
+	text: string,
+	attachments: { name: string }[] = []
+): string {
+	const tokens = attachments
+		.map((item) => fileNameOnly(item.name))
+		.filter((name) => name.length > 0);
+	tokens.push(
+		...mentions.map((mention) => {
+			if (mention.kind === 'app' && mention.name.trim()) {
+				return `@app ${mention.name.trim()}`;
+			}
+			const item = MENTION_CATALOG.find((entry) => entry.kind === mention.kind);
+			return `@${item?.token ?? mention.kind}`;
+		})
+	);
 	const trimmed = text.trim();
 	if (trimmed) tokens.push(trimmed);
 	return tokens.join(' ');

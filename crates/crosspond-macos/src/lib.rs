@@ -15,6 +15,7 @@ mod finder;
 mod hotkey;
 mod input;
 mod keychain;
+mod media;
 mod permissions;
 mod screenshot;
 #[cfg(target_os = "macos")]
@@ -30,6 +31,7 @@ pub use context::{MacOsContextCollector, list_running_app_names, yield_to_other_
 pub use hotkey::{HotkeyError, MacOsGlobalHotkey};
 pub use input::MacOsInput;
 pub use keychain::MacOsKeychainSecretStore;
+pub use media::{pick_media_files, prepare_picked_file};
 pub use permissions::{PermissionKind, PermissionSnapshot};
 pub use screenshot::MacOsScreenshot;
 #[cfg(target_os = "macos")]

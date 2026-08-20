@@ -29,8 +29,8 @@ pub use openai_compat::{
     OpenAiCompatibleProvider, chat_completions_url, models_url, parse_sse_frames,
 };
 pub use provider::{
-    EchoProvider, ImagePart, Message, ModelEvent, ModelProvider, ModelRequest, Role, ToolCall,
-    ToolDefinition, default_provider_builder, keep_latest_images,
+    EchoProvider, ImagePart, ImageSource, Message, ModelEvent, ModelProvider, ModelRequest, Role,
+    ToolCall, ToolDefinition, default_provider_builder, keep_latest_images,
 };
 
 pub enum ProviderAuth {

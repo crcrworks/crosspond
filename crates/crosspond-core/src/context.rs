@@ -56,6 +56,7 @@ impl std::fmt::Debug for ContextCapsule {
 pub struct StagedInput {
     pub original: PathBuf,
     pub relative: String,
+    pub user_attached: bool,
 }
 
 /// Collects eager ambient context. Must be called on the UI/main thread
@@ -130,7 +131,8 @@ impl ContextCapsule {
     }
 
     pub fn render_for_model(&self, staged: &[StagedInput]) -> Option<String> {
-        if self.is_empty() && staged.is_empty() {
+        let finder_empty = staged.iter().all(|file| file.user_attached);
+        if self.is_empty() && finder_empty {
             return None;
         }
         let mut lines = vec![
@@ -167,12 +169,13 @@ impl ContextCapsule {
             lines.push(body);
             lines.push("-----".into());
         }
-        if !staged.is_empty() {
+        let finder: Vec<&StagedInput> = staged.iter().filter(|file| !file.user_attached).collect();
+        if !finder.is_empty() {
             lines.push(String::new());
             lines
                 .push("Selected files were copied into the scratch space input/ directory.".into());
             lines.push("Use read_file on those input/ paths.".into());
-            for file in staged {
+            for file in finder {
                 lines.push(format!(
                     "- {} (from {})",
                     file.relative,
@@ -213,12 +216,13 @@ pub fn stage_selected_files(input_dir: &Path, files: &[PathBuf]) -> Vec<StagedIn
         staged.push(StagedInput {
             original: original.clone(),
             relative: format!("input/{unique}"),
+            user_attached: false,
         });
     }
     staged
 }
 
-fn unique_file_name(dir: &Path, file_name: &str) -> String {
+pub(crate) fn unique_file_name(dir: &Path, file_name: &str) -> String {
     if !dir.join(file_name).exists() {
         return file_name.to_string();
     }
@@ -308,12 +312,24 @@ mod tests {
         let staged = vec![StagedInput {
             original: PathBuf::from("/Users/me/Desktop/a.txt"),
             relative: "input/a.txt".into(),
+            user_attached: false,
         }];
         let rendered = capsule.render_for_model(&staged).unwrap();
         assert!(rendered.contains("Summarize me"));
         assert!(rendered.contains("input/a.txt"));
+        assert!(rendered.contains("/Users/me/Desktop/a.txt"));
         assert!(rendered.contains("untrusted"));
         assert!(rendered.contains("this file"));
+        let attached = vec![StagedInput {
+            original: PathBuf::from("/Users/me/Desktop/shot.png"),
+            relative: "input/shot.png".into(),
+            user_attached: true,
+        }];
+        assert!(
+            ContextCapsule::default()
+                .render_for_model(&attached)
+                .is_none()
+        );
     }
 
     #[test]

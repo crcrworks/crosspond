@@ -4,6 +4,7 @@
 
 #![deny(unsafe_code)]
 
+mod attachment;
 mod command;
 mod config;
 mod context;
@@ -21,6 +22,10 @@ mod scratch;
 mod secret;
 mod status;
 
+pub use attachment::{
+    AttachmentKind, MAX_ATTACHMENTS, MAX_STAGED_VIDEO_BYTES, UserAttachment, kind_from_name,
+    parse_image_media_type, parse_video_media_type, pasted_image, sanitize_file_name,
+};
 pub use command::{ApprovalId, RuntimeCommand, StartTaskRequest};
 pub use config::{
     AppConfig, CHATGPT_SOURCE, ConfigError, ConfigStore, DEFAULT_CHATGPT_MODEL, DEFAULT_COMPAT_ID,
@@ -28,8 +33,8 @@ pub use config::{
     default_vault_path, parse_vault_path_input, sanitize_compat_id,
 };
 pub use context::{
-    AppContext, ContextCapsule, ContextCollector, MAX_AMBIENT_TEXT_CHARS, NullContextCollector,
-    StagedInput, WindowContext,
+    AppContext, ContextCapsule, ContextCollector, MAX_AMBIENT_TEXT_CHARS, MAX_STAGED_FILE_BYTES,
+    NullContextCollector, StagedInput, WindowContext,
 };
 pub use conversation::{
     ConversationView, TranscriptBlock, conversation_artifact_path, open_conversation,

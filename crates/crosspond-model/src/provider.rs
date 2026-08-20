@@ -30,6 +30,15 @@ pub struct ToolDefinition {
     pub parameters: Value,
 }
 
+/// Where an image part came from. Screenshot bytes are trimmed to the latest
+/// one; user attachments stay on the live session.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ImageSource {
+    #[default]
+    Screenshot,
+    Attachment,
+}
+
 /// Image part for vision models. `Debug` redacts bytes.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ImagePart {
@@ -37,6 +46,7 @@ pub struct ImagePart {
     pub bytes: Vec<u8>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub source: ImageSource,
 }
 
 impl std::fmt::Debug for ImagePart {
@@ -46,6 +56,7 @@ impl std::fmt::Debug for ImagePart {
             .field("bytes_len", &self.bytes.len())
             .field("width", &self.width)
             .field("height", &self.height)
+            .field("source", &self.source)
             .finish()
     }
 }
@@ -154,19 +165,32 @@ impl Message {
 }
 
 /// Keep only the newest screenshot image in the conversation.
-/// Older messages keep their text; images are cleared and a short note is appended.
+/// User attachments stay. Older screenshot bytes are cleared and a short note
+/// is appended.
 pub fn keep_latest_images(messages: &mut [Message]) {
-    let latest = messages
-        .iter()
-        .rposition(|message| !message.images.is_empty());
+    let latest = messages.iter().rposition(|message| {
+        message
+            .images
+            .iter()
+            .any(|image| image.source == ImageSource::Screenshot)
+    });
     let Some(latest) = latest else {
         return;
     };
     for (index, message) in messages.iter_mut().enumerate() {
-        if index == latest || message.images.is_empty() {
+        if index == latest {
             continue;
         }
-        message.images.clear();
+        let had_screenshot = message
+            .images
+            .iter()
+            .any(|image| image.source == ImageSource::Screenshot);
+        if !had_screenshot {
+            continue;
+        }
+        message
+            .images
+            .retain(|image| image.source != ImageSource::Screenshot);
         if !message.content.contains("screenshot omitted") {
             if !message.content.is_empty() {
                 message.content.push('\n');
@@ -277,6 +301,7 @@ mod tests {
                     bytes: vec![1],
                     width: Some(100),
                     height: Some(50),
+                    source: ImageSource::Screenshot,
                 }],
             ),
             Message::assistant("ok"),
@@ -288,6 +313,7 @@ mod tests {
                     bytes: vec![2, 2],
                     width: Some(200),
                     height: Some(100),
+                    source: ImageSource::Screenshot,
                 }],
             ),
         ];
@@ -296,6 +322,87 @@ mod tests {
         assert!(messages[0].content.contains("screenshot omitted"));
         assert_eq!(messages[2].images.len(), 1);
         assert_eq!(messages[2].images[0].bytes, vec![2, 2]);
+    }
+
+    #[test]
+    fn keep_latest_images_keeps_user_attachments() {
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: "look".into(),
+                images: vec![ImagePart {
+                    media_type: "image/png".into(),
+                    bytes: vec![9, 9],
+                    width: None,
+                    height: None,
+                    source: ImageSource::Attachment,
+                }],
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                encrypted_reasoning: None,
+            },
+            Message::tool_with_images(
+                "1",
+                "shot",
+                vec![ImagePart {
+                    media_type: "image/jpeg".into(),
+                    bytes: vec![1],
+                    width: Some(10),
+                    height: Some(10),
+                    source: ImageSource::Screenshot,
+                }],
+            ),
+        ];
+        keep_latest_images(&mut messages);
+        assert_eq!(messages[0].images.len(), 1);
+        assert_eq!(messages[0].images[0].source, ImageSource::Attachment);
+        assert!(!messages[0].content.contains("screenshot omitted"));
+        assert_eq!(messages[1].images.len(), 1);
+    }
+
+    #[test]
+    fn keep_latest_images_keeps_attachment_on_the_same_message() {
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: "look".into(),
+                images: vec![
+                    ImagePart {
+                        media_type: "image/png".into(),
+                        bytes: vec![9, 9],
+                        width: None,
+                        height: None,
+                        source: ImageSource::Attachment,
+                    },
+                    ImagePart {
+                        media_type: "image/png".into(),
+                        bytes: vec![1],
+                        width: None,
+                        height: None,
+                        source: ImageSource::Screenshot,
+                    },
+                ],
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                encrypted_reasoning: None,
+            },
+            Message::tool_with_images(
+                "1",
+                "shot",
+                vec![ImagePart {
+                    media_type: "image/jpeg".into(),
+                    bytes: vec![2],
+                    width: Some(10),
+                    height: Some(10),
+                    source: ImageSource::Screenshot,
+                }],
+            ),
+        ];
+        keep_latest_images(&mut messages);
+        assert_eq!(messages[0].images.len(), 1);
+        assert_eq!(messages[0].images[0].source, ImageSource::Attachment);
+        assert!(messages[0].content.contains("screenshot omitted"));
+        assert_eq!(messages[1].images.len(), 1);
     }
 
     #[test]
