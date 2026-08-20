@@ -72,6 +72,7 @@ pub fn receipt_action_line(name: &str, text: &str) -> Option<String> {
         "ui_type" | "browser_type" => Some("Typed text".into()),
         "ui_set_value" | "browser_fill" => Some("Set a field value".into()),
         "fill_credential" => Some("Filled a login".into()),
+        "fetch_url" => Some("Fetched a URL".into()),
         "run_command" => Some("Ran a command".into()),
         "open_url" => Some("Opened a URL".into()),
         "calendar_events" => Some("Read calendar events".into()),
@@ -229,6 +230,10 @@ mod tests {
                 "Filled login for lab.fileserver. hunter2"
             ),
             Some("Filled a login".into())
+        );
+        assert_eq!(
+            receipt_action_line("fetch_url", "Index of /inner/lab-share hunter2"),
+            Some("Fetched a URL".into())
         );
         assert_eq!(
             receipt_action_line("browser_fill", "Filled a1f3-e1 with hunter2"),

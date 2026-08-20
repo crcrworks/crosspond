@@ -239,13 +239,47 @@ fn exa_status_message(status: u16) -> String {
     }
 }
 
-fn fetch_status_message(status: u16) -> String {
-    match status {
-        401 | 403 => format!(
-            "fetch failed (HTTP {status}). If this page needs a login, open it with browser_navigate, then call fill_credential with only credential_ref from a Resource note. Do not use curl or run_command."
-        ),
-        _ => format!("fetch failed (HTTP {status})"),
+fn fetch_failed_status(status: u16) -> String {
+    format!("fetch failed (HTTP {status})")
+}
+
+fn auth_required_message(status: u16, challenge: Option<&str>) -> String {
+    let scheme = challenge
+        .map(summarize_challenge)
+        .unwrap_or_else(|| "HTTP authentication".into());
+    format!(
+        "fetch failed (HTTP {status}). The host asked for {scheme}. Call fetch_url again with the same url and credential_ref from a Resource note. Crosspond will collect the login if it is not in Keychain. Do not use the browser, curl, wget, or run_command."
+    )
+}
+
+fn authentication_failed_message() -> String {
+    "authentication failed. The saved login was rejected.".into()
+}
+
+fn summarize_challenge(www: &str) -> String {
+    if let Some(digest) = first_digest_challenge(www)
+        && let Ok(prompt) = digest_auth::parse(digest)
+    {
+        let realm = prompt.realm.trim();
+        if realm.is_empty() {
+            return "Digest authentication".into();
+        }
+        return format!("Digest authentication (realm={realm})");
     }
+    if www.to_ascii_lowercase().contains("basic") {
+        return "Basic authentication".into();
+    }
+    "HTTP authentication".into()
+}
+
+fn first_digest_challenge(www: &str) -> Option<&str> {
+    let lower = www.to_ascii_lowercase();
+    let start = lower.find("digest")?;
+    Some(www[start..].trim())
+}
+
+fn looks_like_basic(www: &str) -> bool {
+    www.to_ascii_lowercase().contains("basic")
 }
 
 fn public_reqwest_error(err: &reqwest::Error) -> String {
@@ -266,13 +300,17 @@ impl Tool for FetchUrl {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "fetch_url".into(),
-            description: "Fetch a public http(s) page and return its text content (HTML tags stripped when needed).".into(),
+            description: "Fetch an http(s) page as the Crosspond host (no browser cookies). Starts with an unauthenticated HEAD. If the host requires HTTP basic or digest auth, call again with credential_ref from a Resource note; Crosspond collects the login. Do not pass a username or password, and do not use curl or run_command.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "url": {
                         "type": "string",
                         "description": "Absolute http or https URL"
+                    },
+                    "credential_ref": {
+                        "type": "string",
+                        "description": "credential_ref from a Resource note after fetch_url reported authentication required. Never pass a username or password."
                     }
                 },
                 "required": ["url"]
@@ -280,43 +318,279 @@ impl Tool for FetchUrl {
         }
     }
 
-    fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
+    fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
         let raw = required_string(&input, "url")?;
+        let wants_login = optional_string(&input, "credential_ref").is_some();
+        let creds = if wants_login {
+            match (
+                context
+                    .fill_username
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+                context
+                    .fill_password
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+            ) {
+                (Some(user), Some(password)) => Some((user, password)),
+                _ => {
+                    return Err(ToolError::Failed(
+                        "login was not provided; Crosspond must collect it from the user".into(),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         let url = validate_fetch_url(&raw)?;
         let client = http_client()?;
-        let response = send_get(&client, url)?;
-        let status = response.status();
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-        let bytes = response
-            .bytes()
-            .map_err(|err| ToolError::Failed(public_reqwest_error(&err)))?;
-        if !status.is_success() {
-            return Err(ToolError::Failed(fetch_status_message(status.as_u16())));
-        }
-        let text = decode_body(&bytes, &content_type);
-        Ok(ToolResult {
-            text: truncate_output(text),
-            created_file: None,
-            image: None,
-        })
+        fetch_page(&client, url, creds)
     }
 }
 
-fn send_get(client: &Client, url: reqwest::Url) -> Result<reqwest::blocking::Response, ToolError> {
-    let request: RequestBuilder = client.get(url);
+fn optional_string(input: &Value, key: &str) -> Option<String> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn fetch_page(
+    client: &Client,
+    url: reqwest::Url,
+    creds: Option<(&str, &str)>,
+) -> Result<ToolResult, ToolError> {
+    match creds {
+        None => fetch_unauthenticated(client, url),
+        Some((user, password)) => fetch_authenticated(client, url, user, password),
+    }
+}
+
+const FETCH_UA: &str = "Crosspond/0.0.1 (+https://github.com/crcrworks/crosspond)";
+const FETCH_ACCEPT: &str = "text/html, text/plain, */*";
+
+fn send_request(
+    client: &Client,
+    method: reqwest::Method,
+    url: reqwest::Url,
+    authorization: Option<&str>,
+) -> Result<reqwest::blocking::Response, ToolError> {
+    let mut request: RequestBuilder = client
+        .request(method, url)
+        .header(reqwest::header::USER_AGENT, FETCH_UA);
+    request = request.header(reqwest::header::ACCEPT, FETCH_ACCEPT);
+    if let Some(value) = authorization {
+        request = request.header(reqwest::header::AUTHORIZATION, value);
+    }
     request
-        .header(
-            reqwest::header::USER_AGENT,
-            "Crosspond/0.0.1 (+https://github.com/crcrworks/crosspond)",
-        )
-        .header(reqwest::header::ACCEPT, "text/html, text/plain, */*")
         .send()
         .map_err(|err| ToolError::Failed(public_reqwest_error(&err)))
+}
+
+fn www_authenticate(response: &reqwest::blocking::Response) -> Option<String> {
+    let values: Vec<&str> = response
+        .headers()
+        .get_all(reqwest::header::WWW_AUTHENTICATE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect();
+    if values.is_empty() {
+        None
+    } else {
+        Some(values.join(", "))
+    }
+}
+
+fn content_type_of(response: &reqwest::blocking::Response) -> String {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn is_auth_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 401 | 403)
+}
+
+fn is_method_not_allowed(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 405 | 501)
+}
+
+fn request_uri(url: &reqwest::Url) -> String {
+    let path = if url.path().is_empty() {
+        "/"
+    } else {
+        url.path()
+    };
+    match url.query() {
+        Some(query) => format!("{path}?{query}"),
+        None => path.to_string(),
+    }
+}
+
+fn fetch_unauthenticated(client: &Client, url: reqwest::Url) -> Result<ToolResult, ToolError> {
+    let head = send_request(client, reqwest::Method::HEAD, url.clone(), None)?;
+    let head_status = head.status();
+    let head_challenge = www_authenticate(&head);
+    let _ = head.bytes();
+    if is_auth_status(head_status) {
+        return Err(ToolError::Failed(auth_required_message(
+            head_status.as_u16(),
+            head_challenge.as_deref(),
+        )));
+    }
+    complete_get(client, url, None)
+}
+
+fn complete_get(
+    client: &Client,
+    url: reqwest::Url,
+    authorization: Option<&str>,
+) -> Result<ToolResult, ToolError> {
+    let response = send_request(client, reqwest::Method::GET, url, authorization)?;
+    let status = response.status();
+    let challenge = www_authenticate(&response);
+    let content_type = content_type_of(&response);
+    let bytes = response
+        .bytes()
+        .map_err(|err| ToolError::Failed(public_reqwest_error(&err)))?;
+    if is_auth_status(status) && authorization.is_none() {
+        return Err(ToolError::Failed(auth_required_message(
+            status.as_u16(),
+            challenge.as_deref(),
+        )));
+    }
+    if !status.is_success() {
+        return Err(ToolError::Failed(fetch_failed_status(status.as_u16())));
+    }
+    let text = decode_body(&bytes, &content_type);
+    Ok(ToolResult {
+        text: truncate_output(text),
+        created_file: None,
+        image: None,
+    })
+}
+
+fn fetch_authenticated(
+    client: &Client,
+    url: reqwest::Url,
+    user: &str,
+    password: &str,
+) -> Result<ToolResult, ToolError> {
+    let head = send_request(client, reqwest::Method::HEAD, url.clone(), None)?;
+    let mut status = head.status();
+    let mut challenge = www_authenticate(&head);
+    let _ = head.bytes();
+    if is_method_not_allowed(status) || (!status.is_success() && !is_auth_status(status)) {
+        let get = send_request(client, reqwest::Method::GET, url.clone(), None)?;
+        status = get.status();
+        challenge = www_authenticate(&get);
+        let _ = get.bytes();
+    }
+    if status.is_success() {
+        return complete_get(client, url, None);
+    }
+    if !is_auth_status(status) {
+        return Err(ToolError::Failed(fetch_failed_status(status.as_u16())));
+    }
+    let Some(www) = challenge.as_deref() else {
+        return Err(ToolError::Failed(authentication_failed_message()));
+    };
+    let authorization = authorization_header(www, user, password, &request_uri(&url))?;
+    authenticated_get(client, url, user, password, &authorization)
+}
+
+fn authenticated_get(
+    client: &Client,
+    url: reqwest::Url,
+    user: &str,
+    password: &str,
+    authorization: &str,
+) -> Result<ToolResult, ToolError> {
+    let response = send_request(
+        client,
+        reqwest::Method::GET,
+        url.clone(),
+        Some(authorization),
+    )?;
+    let status = response.status();
+    let challenge = www_authenticate(&response);
+    if status.as_u16() == 401
+        && let Some(www) = challenge.as_deref()
+        && www.to_ascii_lowercase().contains("stale=true")
+    {
+        let retry = authorization_header(www, user, password, &request_uri(&url))?;
+        let retry_response = send_request(client, reqwest::Method::GET, url, Some(&retry))?;
+        return finish_success_or_auth(retry_response);
+    }
+    finish_success_or_auth(response)
+}
+
+fn finish_success_or_auth(response: reqwest::blocking::Response) -> Result<ToolResult, ToolError> {
+    let status = response.status();
+    let content_type = content_type_of(&response);
+    let bytes = response
+        .bytes()
+        .map_err(|err| ToolError::Failed(public_reqwest_error(&err)))?;
+    if status.as_u16() == 401 {
+        return Err(ToolError::Failed(authentication_failed_message()));
+    }
+    if !status.is_success() {
+        return Err(ToolError::Failed(fetch_failed_status(status.as_u16())));
+    }
+    let text = decode_body(&bytes, &content_type);
+    Ok(ToolResult {
+        text: truncate_output(text),
+        created_file: None,
+        image: None,
+    })
+}
+
+fn authorization_header(
+    www: &str,
+    user: &str,
+    password: &str,
+    uri: &str,
+) -> Result<String, ToolError> {
+    if first_digest_challenge(www).is_some() {
+        return digest_authorization(www, user, password, uri);
+    }
+    if looks_like_basic(www) {
+        return Ok(basic_authorization(user, password));
+    }
+    Err(ToolError::Failed(
+        "unsupported HTTP authentication. Call fetch_url with credential_ref; do not use curl."
+            .into(),
+    ))
+}
+
+fn digest_authorization(
+    www: &str,
+    user: &str,
+    password: &str,
+    uri: &str,
+) -> Result<String, ToolError> {
+    let digest = first_digest_challenge(www)
+        .ok_or_else(|| ToolError::Failed("couldn't complete HTTP authentication".into()))?;
+    let mut prompt = digest_auth::parse(digest)
+        .map_err(|_| ToolError::Failed("couldn't complete HTTP authentication".into()))?;
+    let context = digest_auth::AuthContext::new(user, password, uri);
+    let answer = prompt
+        .respond(&context)
+        .map_err(|_| ToolError::Failed("couldn't complete HTTP authentication".into()))?;
+    Ok(answer.to_string())
+}
+
+fn basic_authorization(user: &str, password: &str) -> String {
+    use base64::Engine;
+    let token = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"));
+    format!("Basic {token}")
 }
 
 fn decode_body(bytes: &[u8], content_type: &str) -> String {
@@ -480,15 +754,249 @@ mod tests {
     }
 
     #[test]
-    fn fetch_auth_status_points_at_browser_fill_credential() {
-        let unauthorized = fetch_status_message(401);
+    fn fetch_auth_status_points_at_fetch_url_credential_ref() {
+        let nonce = "dcd98b7102dd2f0e8b11d0f600bfb0c093";
+        let www = format!(
+            "Digest realm=\"Hello World!\", nonce=\"{nonce}\", algorithm=MD5, qop=\"auth\""
+        );
+        let unauthorized = auth_required_message(401, Some(&www));
         assert!(unauthorized.contains("HTTP 401"));
-        assert!(unauthorized.contains("browser_navigate"));
-        assert!(unauthorized.contains("fill_credential"));
+        assert!(unauthorized.contains("Digest authentication"));
+        assert!(unauthorized.contains("Hello World!"));
+        assert!(unauthorized.contains("credential_ref"));
+        assert!(unauthorized.contains("fetch_url"));
+        assert!(unauthorized.contains("browser"));
         assert!(unauthorized.contains("curl"));
-        let forbidden = fetch_status_message(403);
+        assert!(!unauthorized.contains(nonce));
+        assert!(!unauthorized.contains("browser_navigate"));
+        let forbidden = auth_required_message(403, Some("Basic realm=\"files\""));
         assert!(forbidden.contains("HTTP 403"));
+        assert!(forbidden.contains("Basic authentication"));
         assert!(forbidden.contains("credential_ref"));
-        assert_eq!(fetch_status_message(404), "fetch failed (HTTP 404)");
+        assert_eq!(fetch_failed_status(404), "fetch failed (HTTP 404)");
+    }
+
+    #[test]
+    fn fetch_url_with_credential_ref_requires_injected_login() {
+        let context = ToolContext::new();
+        let err = FetchUrl
+            .execute(
+                &context,
+                json!({
+                    "url": "https://example.com/",
+                    "credential_ref": "lab.fileserver"
+                }),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("collect"));
+        assert!(!err.to_string().contains("labuser"));
+    }
+
+    #[test]
+    fn fetch_url_digest_head_then_get_with_injected_login() {
+        let server = DigestServer::spawn();
+        let url = reqwest::Url::parse(&format!("http://{}/share/", server.addr)).unwrap();
+        let client = http_client().unwrap();
+
+        let denied = fetch_page(&client, url.clone(), None).unwrap_err();
+        let message = denied.to_string();
+        assert!(message.contains("HTTP 401"));
+        assert!(message.contains("credential_ref"));
+        assert!(message.contains("Digest"));
+        assert!(!message.contains(TEST_PASSWORD));
+        assert!(!message.contains(TEST_USER));
+        assert!(!message.contains(&server.nonce));
+
+        let listing = fetch_page(&client, url.clone(), Some((TEST_USER, TEST_PASSWORD))).unwrap();
+        assert!(listing.text.contains("Index of /share"));
+        assert!(listing.text.contains("Study"));
+        assert!(!listing.text.contains(TEST_PASSWORD));
+
+        let rejected = fetch_page(&client, url, Some((TEST_USER, "wrong-password"))).unwrap_err();
+        let rejected = rejected.to_string();
+        assert!(rejected.contains("authentication failed"));
+        assert!(!rejected.contains(TEST_PASSWORD));
+        assert!(!rejected.contains("wrong-password"));
+        assert!(!rejected.contains(TEST_USER));
+    }
+
+    #[test]
+    fn fetch_url_basic_auth_with_injected_login() {
+        let server = BasicServer::spawn();
+        let url = reqwest::Url::parse(&format!("http://{}/share/", server.addr)).unwrap();
+        let client = http_client().unwrap();
+        let denied = fetch_page(&client, url.clone(), None).unwrap_err();
+        assert!(denied.to_string().contains("Basic authentication"));
+        let listing = fetch_page(&client, url, Some((TEST_USER, TEST_PASSWORD))).unwrap();
+        assert!(listing.text.contains("Index of /share"));
+        assert!(!listing.text.contains(TEST_PASSWORD));
+    }
+
+    const TEST_USER: &str = "alice";
+    const TEST_PASSWORD: &str = "correct-horse";
+    const DIGEST_NONCE: &str = "dcd98b7102dd2f0e8b11d0f600bfb0c093";
+    const LISTING_BODY: &str = "<html><body>Index of /share Etc/ Study/</body></html>";
+
+    struct DigestServer {
+        addr: std::net::SocketAddr,
+        nonce: String,
+    }
+
+    impl DigestServer {
+        fn spawn() -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            std::thread::spawn(move || {
+                for stream in listener.incoming().take(16).flatten() {
+                    handle_digest_conn(stream);
+                }
+            });
+            Self {
+                addr,
+                nonce: DIGEST_NONCE.into(),
+            }
+        }
+    }
+
+    struct BasicServer {
+        addr: std::net::SocketAddr,
+    }
+
+    impl BasicServer {
+        fn spawn() -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            std::thread::spawn(move || {
+                for stream in listener.incoming().take(16).flatten() {
+                    handle_basic_conn(stream);
+                }
+            });
+            Self { addr }
+        }
+    }
+
+    fn handle_digest_conn(mut stream: std::net::TcpStream) {
+        let Ok((method, path, authorization)) = read_http_request(&mut stream) else {
+            return;
+        };
+        let www = format!(
+            "Digest realm=\"Hello World!\", nonce=\"{DIGEST_NONCE}\", algorithm=MD5, qop=\"auth\""
+        );
+        let authorized = authorization
+            .as_deref()
+            .is_some_and(|header| digest_matches(header, TEST_USER, TEST_PASSWORD));
+        if method == "HEAD" {
+            if authorized {
+                write_response(&mut stream, 200, "text/html", b"");
+            } else {
+                write_auth_challenge(&mut stream, &www);
+            }
+            return;
+        }
+        if method == "GET" && path.starts_with("/share") {
+            if authorized {
+                write_response(&mut stream, 200, "text/html", LISTING_BODY.as_bytes());
+            } else {
+                write_auth_challenge(&mut stream, &www);
+            }
+        }
+    }
+
+    fn handle_basic_conn(mut stream: std::net::TcpStream) {
+        let Ok((method, _, authorization)) = read_http_request(&mut stream) else {
+            return;
+        };
+        let expected = basic_authorization(TEST_USER, TEST_PASSWORD);
+        let authorized = authorization.as_deref() == Some(expected.as_str());
+        if method == "HEAD" {
+            if authorized {
+                write_response(&mut stream, 200, "text/html", b"");
+            } else {
+                write_auth_challenge(&mut stream, "Basic realm=\"files\"");
+            }
+            return;
+        }
+        if authorized {
+            write_response(&mut stream, 200, "text/html", LISTING_BODY.as_bytes());
+        } else {
+            write_auth_challenge(&mut stream, "Basic realm=\"files\"");
+        }
+    }
+
+    fn digest_matches(header: &str, user: &str, password: &str) -> bool {
+        let Ok(mut incoming) = digest_auth::AuthorizationHeader::parse(header) else {
+            return false;
+        };
+        if incoming.username != user {
+            return false;
+        }
+        let got = incoming.response.clone();
+        let uri = incoming.uri.clone();
+        let context = digest_auth::AuthContext::new(user, password, uri);
+        incoming.digest(&context);
+        incoming.response.eq_ignore_ascii_case(&got)
+    }
+
+    fn read_http_request(
+        stream: &mut std::net::TcpStream,
+    ) -> std::io::Result<(String, String, Option<String>)> {
+        use std::io::Read;
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        while buf.len() < 16 * 1024 {
+            if stream.read(&mut byte)? == 0 {
+                break;
+            }
+            buf.push(byte[0]);
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let mut lines = text.split("\r\n");
+        let first = lines.next().unwrap_or("");
+        let mut parts = first.split_whitespace();
+        let method = parts.next().unwrap_or("").to_string();
+        let path = parts.next().unwrap_or("/").to_string();
+        let mut authorization = None;
+        for line in lines {
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            if name.eq_ignore_ascii_case("authorization") {
+                authorization = Some(value.trim().to_string());
+            }
+        }
+        Ok((method, path, authorization))
+    }
+
+    fn write_auth_challenge(stream: &mut std::net::TcpStream, www: &str) {
+        let _ = write_raw(
+            stream,
+            &format!(
+                "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: {www}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ),
+        );
+    }
+
+    fn write_response(
+        stream: &mut std::net::TcpStream,
+        status: u16,
+        content_type: &str,
+        body: &[u8],
+    ) {
+        let reason = if status == 200 { "OK" } else { "Error" };
+        let header = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = write_raw(stream, &header);
+        let _ = std::io::Write::write_all(stream, body);
+    }
+
+    fn write_raw(stream: &mut std::net::TcpStream, text: &str) -> std::io::Result<()> {
+        use std::io::Write;
+        stream.write_all(text.as_bytes())
     }
 }

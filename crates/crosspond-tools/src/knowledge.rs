@@ -172,7 +172,7 @@ impl Tool for KnowledgeRead {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "knowledge_read".into(),
-            description: "Read one Knowledge Vault note by id. Use after knowledge_search. If credential_ref is present, call fill_credential instead of asking the user to paste a password.".into(),
+            description: "Read one Knowledge Vault note by id. Use after knowledge_search. If credential_ref is present, use fetch_url (HTTP basic/digest file servers) or fill_credential (native/browser login). Never ask the user to paste a password.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -198,7 +198,7 @@ impl Tool for KnowledgeRead {
         }
         if let Some(credential_ref) = &note.credential_ref {
             text.push_str(&format!(
-                "credential_ref: {credential_ref}\nUse fill_credential with this pointer. Native login dialogs need username_node_id / password_node_id from get_accessibility_snapshot. Chromium HTTP basic/digest auth: browser_navigate first, then fill_credential with only credential_ref. Never ask the user to paste a password in chat.\n"
+                "credential_ref: {credential_ref}\nUse this pointer — never a password in chat. HTTP basic/digest file servers: fetch_url the URL first (unauthenticated HEAD). If it reports authentication required, call fetch_url again with this credential_ref. Do not use the browser. Native login dialogs: fill_credential with username_node_id / password_node_id from get_accessibility_snapshot. Chromium HTTP auth in an open tab: fill_credential with only this ref.\n"
             ));
         }
         text.push('\n');
@@ -591,9 +591,9 @@ mod tests {
             .execute(&ctx(), json!({ "id": "cp_files" }))
             .unwrap();
         assert!(result.text.contains("credential_ref: lab.fileserver"));
+        assert!(result.text.contains("fetch_url"));
         assert!(result.text.contains("fill_credential"));
-        assert!(result.text.contains("only credential_ref"));
-        assert!(result.text.contains("browser_navigate"));
+        assert!(result.text.contains("unauthenticated HEAD"));
         assert!(!result.text.contains("hunter2"));
         assert!(!result.text.contains("labuser"));
     }

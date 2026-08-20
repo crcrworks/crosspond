@@ -12,7 +12,7 @@ use crate::tool::{Tool, ToolContext, ToolDefinition, ToolError, ToolResult, trun
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(25);
 const APPROVAL_COMMAND_MAX: usize = 120;
-const LOGIN_IN_COMMAND_ERROR: &str = "do not put usernames or passwords in run_command. For Chromium HTTP basic/digest auth, browser_navigate then fill_credential with only credential_ref from a Resource note.";
+const LOGIN_IN_COMMAND_ERROR: &str = "do not put usernames or passwords in run_command. For HTTP basic/digest file servers, fetch_url then fetch_url with credential_ref. For Chromium browser chrome, fill_credential with only credential_ref.";
 
 pub fn register_shell_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(RunCommand));
@@ -257,7 +257,7 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "run_command".into(),
-            description: "Run a shell command in the task scratch directory. stdout and stderr are returned. sudo is not allowed. Do not put usernames, passwords, curl --user/--digest, or user:pass URLs in the command; use browser_navigate and fill_credential.".into(),
+            description: "Run a shell command in the task scratch directory. stdout and stderr are returned. sudo is not allowed. Do not put usernames, passwords, curl --user/--digest, or user:pass URLs in the command; use fetch_url with credential_ref or fill_credential.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -409,7 +409,8 @@ mod tests {
             .unwrap_err();
         let message = err.to_string();
         assert!(message.contains("fill_credential"));
-        assert!(message.contains("browser_navigate"));
+        assert!(message.contains("fetch_url"));
+        assert!(message.contains("credential_ref"));
         assert!(!message.contains("hunter2"));
         assert!(!message.contains("ngc:"));
         assert!(!message.contains("files.example.invalid"));

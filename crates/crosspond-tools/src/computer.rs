@@ -529,7 +529,7 @@ impl Tool for FillCredential {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "fill_credential".into(),
-            description: "Fill a login from a Knowledge Vault credential_ref. Native dialogs: pass username_node_id and/or password_node_id from the latest get_accessibility_snapshot. Chromium HTTP basic/digest auth: omit node ids after browser_navigate reports authentication required. Never pass a username or password; Crosspond collects those from the user or Keychain.".into(),
+            description: "Fill a login from a Knowledge Vault credential_ref. Native dialogs: pass username_node_id and/or password_node_id from the latest get_accessibility_snapshot. Chromium HTTP basic/digest auth in an open tab: omit node ids after browser_navigate reports authentication required. HTTP file servers (listings/downloads without the browser): use fetch_url with credential_ref instead. Never pass a username or password; Crosspond collects those from the user or Keychain.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -585,7 +585,7 @@ impl Tool for FillCredential {
         if username_node.is_none() && password_node.is_none() {
             let Some(challenge) = self.browser.pending_http_auth() else {
                 return Err(ToolError::Failed(
-                    "no HTTP authentication challenge is pending. For Chromium basic/digest auth, call browser_navigate or browser_new_tab first, then fill_credential with only credential_ref. For native login dialogs, pass username_node_id and/or password_node_id from get_accessibility_snapshot.".into(),
+                    "no HTTP authentication challenge is pending. For HTTP file servers, use fetch_url with credential_ref (do not use the browser). For Chromium basic/digest auth, call browser_navigate or browser_new_tab first, then fill_credential with only credential_ref. For native login dialogs, pass username_node_id and/or password_node_id from get_accessibility_snapshot.".into(),
                 ));
             };
             let Some(username) = username else {
@@ -1411,6 +1411,7 @@ mod tests {
             .unwrap_err();
         let message = err.to_string();
         assert!(message.contains("browser_navigate"));
+        assert!(message.contains("fetch_url"));
         assert!(message.contains("credential_ref"));
         assert!(!message.contains("hunter2"));
         assert!(!message.contains("labuser"));
