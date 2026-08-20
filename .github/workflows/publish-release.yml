@@ -1,0 +1,331 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: publish-release-main
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.release-metadata.outputs.tag_name }}
+      version: ${{ steps.release-metadata.outputs.version }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Read release metadata
+        id: release-metadata
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { appendFile } from "node:fs/promises";
+          import { assertExactSemver } from "./.github/scripts/github.mjs";
+
+          const manifest = JSON.parse(readFileSync(".release-please-manifest.json", "utf8"));
+          const tauriConf = JSON.parse(readFileSync("crates/crosspond-app/tauri.conf.json", "utf8"));
+          const packageJson = JSON.parse(readFileSync("ui/package.json", "utf8"));
+          const cargo = readFileSync("Cargo.toml", "utf8");
+          const cargoMatch = cargo.match(
+            /\[workspace\.package\][\s\S]*?^version = "([0-9]+\.[0-9]+\.[0-9]+)"/m,
+          );
+          const cargoVersion = cargoMatch?.[1];
+          const version = manifest["."];
+          assertExactSemver(version, ".release-please-manifest.json");
+          if (tauriConf.version !== version) {
+            throw new Error(`tauri.conf.json version ${tauriConf.version} does not match ${version}.`);
+          }
+          if (packageJson.version !== version) {
+            throw new Error(`ui/package.json version ${packageJson.version} does not match ${version}.`);
+          }
+          if (cargoVersion !== version) {
+            throw new Error(`Cargo.toml workspace version ${cargoVersion} does not match ${version}.`);
+          }
+
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is not set.");
+          }
+          await appendFile(outputPath, `version=${version}\ntag_name=v${version}\n`);
+          NODE
+
+      - name: Validate release metadata commit is current main
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          release_metadata_sha="$(
+            git log -1 --format=%H -- \
+              Cargo.toml \
+              ui/package.json \
+              crates/crosspond-app/tauri.conf.json \
+              .release-please-manifest.json
+          )"
+          if [[ "$release_metadata_sha" != "$head_sha" ]]; then
+            {
+              echo "main contains commits after the release metadata commit."
+              echo "Prepare Release PR を次バージョンで作り直し、最新の main を含めてから Publish を再実行してください。"
+            } >&2
+            exit 1
+          fi
+
+      - name: Validate release has not been published
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          TAG_NAME: ${{ steps.release-metadata.outputs.tag_name }}
+          VERSION: ${{ steps.release-metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { assertExactSemver, compareSemver } from "./.github/scripts/github.mjs";
+
+          const version = process.env.VERSION;
+          const tagName = process.env.TAG_NAME;
+          assertExactSemver(version, "VERSION");
+
+          function fail(message) {
+            console.error(
+              `${message}\n\nPrepare Release PR を次バージョンで作成し、PUBLIC_CHANGELOG.md を埋めてマージしてから Publish を再実行してください。`,
+            );
+            process.exit(1);
+          }
+
+          const remoteTags = execFileSync(
+            "git",
+            ["ls-remote", "--tags", "--refs", "origin", "refs/tags/v*"],
+            { encoding: "utf8" },
+          );
+          const publishedVersions = remoteTags
+            .split("\n")
+            .map((line) => /refs\/tags\/v([0-9]+\.[0-9]+\.[0-9]+)$/.exec(line)?.[1])
+            .filter(Boolean);
+
+          if (publishedVersions.includes(version)) {
+            fail(`Tag ${tagName} already exists on origin.`);
+          }
+
+          const sorted = [...publishedVersions].sort(compareSemver);
+          const latest = sorted[sorted.length - 1];
+          if (latest && compareSemver(version, latest) <= 0) {
+            fail(
+              `Release metadata version ${version} is not newer than latest published version ${latest}.`,
+            );
+          }
+          NODE
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            {
+              echo "GitHub Release ${TAG_NAME} already exists."
+              echo
+              echo "Prepare Release PR を次バージョンで作成し、PUBLIC_CHANGELOG.md を埋めてマージしてから Publish を再実行してください。"
+            } >&2
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy portable crates
+        run: cargo clippy -p crosspond-core -p crosspond-model -p crosspond-tools -p crosspond-knowledge -p crosspond-chrome-host --all-targets -- -D warnings
+
+      - name: Test portable crates
+        run: cargo test -p crosspond-core -p crosspond-model -p crosspond-tools -p crosspond-knowledge -p crosspond-chrome-host
+
+      - name: Release script tests
+        run: node --test .github/scripts/public-changelog.test.mjs
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Check UI
+        working-directory: ui
+        run: npm run check
+
+      - name: Test UI
+        working-directory: ui
+        run: npm test
+
+      - name: Confirm tested release commit is still current
+        run: |
+          set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          git fetch origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$tested_sha" ]]; then
+            echo "main changed after this job checked out the release commit. Re-run Publish Release." >&2
+            exit 1
+          fi
+
+  publish:
+    name: Tag and publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: validate
+    outputs:
+      tag_name: ${{ steps.verify-release.outputs.tag_name }}
+      release_id: ${{ steps.verify-release.outputs.release_id }}
+      version: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Confirm tested release commit is still current
+        run: |
+          set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          git fetch origin main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$tested_sha" ]]; then
+            echo "main changed after validate. Re-run Publish Release." >&2
+            exit 1
+          fi
+
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          release-as: ${{ needs.validate.outputs.version }}
+          skip-github-pull-request: true
+          target-branch: main
+
+      - name: Verify published release
+        id: verify-release
+        env:
+          EXPECTED_TAG: ${{ needs.validate.outputs.tag_name }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ "${RELEASE_CREATED}" != "true" ]]; then
+            echo "Release Please did not create a release (release_created=${RELEASE_CREATED})." >&2
+            exit 1
+          fi
+          if [[ "${TAG_NAME}" != "${EXPECTED_TAG}" ]]; then
+            echo "Expected ${EXPECTED_TAG}, but Release Please created ${TAG_NAME}." >&2
+            exit 1
+          fi
+
+          git fetch origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+          tested_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-list -n 1 "${TAG_NAME}")"
+          if [[ "${tag_sha}" != "${tested_sha}" ]]; then
+            echo "Release tag ${TAG_NAME} points to ${tag_sha}, but CI tested ${tested_sha}." >&2
+            exit 1
+          fi
+
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}" --jq .id)"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "release_id=${release_id}" >> "$GITHUB_OUTPUT"
+
+      - name: Use public changelog as release notes
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/extract-public-release-notes.mjs > /tmp/release-notes.md
+          gh release edit "$TAG_NAME" --notes-file /tmp/release-notes.md
+
+  bundle:
+    name: Build and upload macOS app
+    needs: publish
+    if: ${{ needs.publish.outputs.release_id != '' }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.publish.outputs.tag_name }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Require updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY must be set so updater artifacts can be signed." >&2
+            exit 1
+          fi
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          if [[ -n "${APPLE_API_KEY_P8}" ]]; then
+            printf '%s\n' "${APPLE_API_KEY_P8}" > "${RUNNER_TEMP}/AuthKey.p8"
+            echo "APPLE_API_KEY_PATH=${RUNNER_TEMP}/AuthKey.p8" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build and upload
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        with:
+          projectPath: crates/crosspond-app
+          tauriScript: npm --prefix ${{ github.workspace }}/ui exec -- tauri
+          args: --target aarch64-apple-darwin
+          releaseId: ${{ needs.publish.outputs.release_id }}
+          includeUpdaterJson: true

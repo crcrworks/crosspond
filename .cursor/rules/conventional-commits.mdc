@@ -1,0 +1,69 @@
+---
+description: Conventional Commits for commit messages and PR titles
+alwaysApply: true
+---
+
+# Conventional Commits
+
+All **commit messages** and **pull request titles** MUST follow [Conventional Commits](https://www.conventionalcommits.org/).
+
+## Format
+
+```
+<type>[optional scope][optional !]: <short description>
+```
+
+- **type** (required): `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+- **scope** (optional): affected area, lowercase — e.g. `launcher`, `updater`, `browser`, `vault`, `ui`
+- **!** (optional): breaking change
+- **description** (required): imperative mood, lowercase start, no trailing period; keep the first line ≤ 72 characters
+
+## Commit messages
+
+- First line is the Conventional subject (required).
+- Optional body after a blank line: explain **why**, not what the diff already shows.
+- Optional footers: `BREAKING CHANGE:`, `Refs #123`, etc.
+
+## Pull request titles
+
+- Use the **same Conventional subject** as the squash-merge commit (or the primary commit when there is only one).
+- Do not use free-form titles like `Add X` or `Fix Y` without a type prefix.
+- When a PR bundles multiple logical changes, pick the dominant type/scope or split into separate PRs.
+
+## Type guide
+
+| Type | Use for |
+|------|---------|
+| `feat` | New user-facing behavior |
+| `fix` | Bug fix |
+| `docs` | Documentation only |
+| `style` | Formatting, whitespace; no logic change |
+| `refactor` | Code change without feature or fix |
+| `perf` | Performance improvement |
+| `test` | Tests only |
+| `build` | Build system or dependencies |
+| `ci` | CI/CD config and scripts |
+| `chore` | Maintenance not covered above |
+| `revert` | Revert a prior commit |
+
+## Examples
+
+Good:
+
+- `feat(updater): show update available on the launcher`
+- `fix(launcher): keep the compact bar open while installing an update`
+- `ci: add prepare and publish release workflows`
+- `chore(main): release 0.1.0`
+
+Bad:
+
+- `Add updater` — missing type
+- `feat: Added in-app updates.` — past tense, trailing period
+- `Fix bug` — no type prefix, too vague
+- `WIP` / `updates` — not Conventional
+
+## Before committing or opening a PR
+
+1. Draft the Conventional subject first.
+2. Ensure the PR title matches that subject.
+3. If amending commits, rewrite messages to comply before push.

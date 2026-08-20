@@ -5,12 +5,12 @@
   "identifier": "com.crosspond.app",
   "build": {
     "beforeDevCommand": {
-      "script": "cargo build -p crosspond-chrome-host --manifest-path ../Cargo.toml && npm run dev",
+      "script": "bash ../../scripts/stage-chrome-host.sh && npm run dev",
       "cwd": "../../ui"
     },
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": {
-      "script": "cargo build -p crosspond-chrome-host --release --manifest-path ../Cargo.toml && npm run build",
+      "script": "bash ../../scripts/stage-chrome-host.sh --release && npm run build",
       "cwd": "../../ui"
     },
     "frontendDist": "../../ui/build"
@@ -45,7 +45,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": "app",
+    "targets": ["app", "dmg"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -53,9 +54,21 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../../extension/chrome": "chrome-extension"
+    },
+    "externalBin": ["binaries/crosspond-chrome-host"],
     "macOS": {
       "minimumSystemVersion": "14.0",
       "infoPlist": "../../resources/macos/Info.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyNUYxMTdCOTE4NzIwMDQKUldRRUlJZVJleEZmNHI2ZjNJVFMwUHJQMmoxNEtTTG1zamN3VXg0MVFDNS9yYis4WERKM0F6eGwK",
+      "endpoints": [
+        "https://github.com/crcrworks/crosspond/releases/latest/download/latest.json"
+      ]
     }
   }
 }

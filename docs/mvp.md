@@ -67,9 +67,13 @@ The extension talks to Crosspond over native messaging (`com.crosspond.chrome`) 
 
 Safari, Firefox, Web Store listing, raw CDP, and an in-app browser are later.
 
+## Phase 14 (distribution)
+
+GitHub Releases ship an Apple Silicon `.dmg`. `/prepare-release` then `/release` drive Release Please: a version PR, user-facing `PUBLIC_CHANGELOG.md`, then a signed updater bundle (`latest.json` + `.app.tar.gz`). The launcher shows **Update available** on the header when a newer Release exists (dismissible for the process). Signing and notarization use GitHub Secrets (Developer ID + updater minisign). The Chrome extension is still loaded unpacked from the app bundle path in Settings.
+
 ## Later phases (do not implement yet)
 
-14. Release (signing, notarization, license re-audit, Chrome Web Store)
+15. Chrome Web Store, Intel/universal Mac builds, lockfile license re-audit
 
 ## Non-goals for MVP
 

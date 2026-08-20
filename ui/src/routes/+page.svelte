@@ -30,6 +30,7 @@
 	import ReceiptCard from '$lib/components/ReceiptCard.svelte';
 	import TranscriptView from '$lib/components/TranscriptView.svelte';
 	import { LauncherSession } from '$lib/session.svelte';
+	import { appUpdater } from '$lib/updater.svelte';
 	import { firstUserTitle } from '$lib/transcript';
 	import { shouldSyncLauncherSize, ONBOARDING_EXTRA_HEIGHT } from '$lib/launcher-size';
 	import {
@@ -104,7 +105,8 @@
 			modeMenuOpen ||
 			pickerOpen ||
 			session.pendingApproval !== null ||
-			session.pendingCredential !== null;
+			session.pendingCredential !== null ||
+			appUpdater.installing;
 		const inConversation = session.inConversation;
 		const onboarding = session.overlay === 'onboarding';
 		if (onboarding) {
@@ -145,6 +147,7 @@
 			session.computerApproval = boot.computer_approval;
 			hotkeyTokens = boot.launcher_hotkey.tokens;
 			session.applyShown(boot.badges, boot.needs_onboarding, !boot.needs_onboarding, boot.visible);
+			void appUpdater.onLauncherShown(boot.needs_onboarding);
 			if (boot.needs_onboarding) session.enterOnboarding(!boot.needs_onboarding);
 			void refreshHistory();
 			unlistenEvent = await listen<AgentEvent>('agent-event', (event) => {
@@ -163,6 +166,7 @@
 				session.applyShown(shown.badges, shown.onboarding, shown.ready, shown.visible);
 				void refreshHistory();
 				if (shown.visible) {
+					void appUpdater.onLauncherShown(shown.onboarding);
 					void tick().then(() => textarea?.focus());
 				}
 			});
@@ -344,6 +348,9 @@
 				session.bump();
 			}}
 			onselect={(id) => void openPast(id)}
+			updateNotice={appUpdater.notice}
+			onupdate={() => void appUpdater.install()}
+			ondismissupdate={() => appUpdater.dismiss()}
 		/>
 	{/if}
 	{#if session.overlay === 'onboarding'}

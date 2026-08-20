@@ -8,7 +8,7 @@ Implement one phase at a time. Do not start the next phase until the current one
 
 Current phase: **Phase 13 Browser** (Chrome extension DOM path). Knowledge Vault is complete (Phases 0–8). UI host is Tauri 2 + SvelteKit.
 
-Out of scope until later: drag, `kill_app`, exposing cua-driver’s full catalog, signing/notarization, Safari/Firefox DOM, Chrome Web Store.
+Out of scope until later: drag, `kill_app`, exposing cua-driver’s full catalog, Safari/Firefox DOM, Chrome Web Store, Intel/universal Mac builds.
 
 ## Crate boundaries
 

@@ -41,6 +41,43 @@ npm --prefix ui run check
 npm --prefix ui test
 ```
 
+## Release
+
+Ship from `main` with the same two-step flow as other crcrworks apps:
+
+1. `/pre-release-review` — local `cargo` / `npm` plus Bugbot and Security Review
+2. `/prepare-release` — starts **Prepare Release PR**, then fill `PUBLIC_CHANGELOG.md` (do not commit from the skill)
+3. After you commit the changelog and the PR is ready: `/release` — squash-merges if needed and starts **Publish Release**
+
+Publish creates `vX.Y.Z`, a GitHub Release (the `.dmg` is the download), and updater files (`Crosspond.app.tar.gz`, `latest.json`). Apple Silicon only. The launcher checks that Release when the window is shown and offers **Update available** on the right of the header.
+
+The repo must be **public** (or Releases must be downloadable without auth) or in-app updates cannot fetch `latest.json`.
+
+### GitHub Secrets
+
+Put these on the GitHub repo before the first `/release`. Do not commit private keys.
+
+**Updater (required)** — the matching public key is already in `crates/crosspond-app/tauri.conf.json`. The private key generated with this change lives only on the machine that created it (`~/.tauri/crosspond.key`). Copy it into Actions:
+
+- `TAURI_SIGNING_PRIVATE_KEY` — contents of `~/.tauri/crosspond.key`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — empty unless you set a password
+
+If that file is gone, generate a new pair with `npx --prefix ui tauri signer generate -w ~/.tauri/crosspond.key --ci` and replace the `plugins.updater.pubkey` value.
+
+**Apple signing / notarization (needed for Gatekeeper)** — create a **Developer ID Application** certificate, export a `.p12`, and add:
+
+- `APPLE_CERTIFICATE` — base64 of the `.p12` (`base64 -i certificate.p12 | pbcopy`)
+- `APPLE_CERTIFICATE_PASSWORD` — `.p12` password
+- `APPLE_SIGNING_IDENTITY` — e.g. `Developer ID Application: Example Ltd (TEAMID)`
+- `APPLE_TEAM_ID`
+
+Notarization, pick one:
+
+- App Store Connect API key: `APPLE_API_KEY` (key id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the `.p8` file body)
+- or `APPLE_ID` plus an app-specific `APPLE_PASSWORD`
+
+Optional: `RELEASE_PLEASE_TOKEN` (a PAT) if `github.token` cannot open the release PR.
+
 ## Bundle notes
 
-`resources/macos/Info.plist` is the minimum accessory-app manifest (`LSUIElement`). The Tauri host also sets Accessory at runtime so `cargo run` / `tauri dev` do not steal the frontmost app (tao defaults to Regular). Accessibility / Apple Events usage strings are in that plist for a future bundle.
+`resources/macos/Info.plist` is the accessory-app manifest (`LSUIElement`). The Tauri host also sets Accessory at runtime so `cargo run` / `tauri dev` do not steal the frontmost app (tao defaults to Regular). `tauri build` produces a `.dmg` and updater archive, copies `crosspond-chrome-host` next to the app binary, and puts `extension/chrome` in `Contents/Resources/chrome-extension`. Settings → Browser still uses Load unpacked; the path is inside the app bundle.

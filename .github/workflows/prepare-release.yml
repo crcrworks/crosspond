@@ -1,0 +1,88 @@
+name: Prepare Release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact Crosspond release version."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: prepare-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Create or update release PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must be exact semver without a v prefix." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+
+      - name: Validate version is newer than current release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { assertExactSemver, compareSemver } from "./.github/scripts/github.mjs";
+
+          const requestedVersion = process.env.VERSION;
+          assertExactSemver(requestedVersion);
+          const manifest = JSON.parse(readFileSync(".release-please-manifest.json", "utf8"));
+          const currentVersion = manifest["."];
+          assertExactSemver(currentVersion, ".release-please-manifest.json");
+          if (compareSemver(requestedVersion, currentVersion) <= 0) {
+            throw new Error(
+              `Requested version ${requestedVersion} must be greater than current version ${currentVersion}. ` +
+                "Release Please was not run, so no release PR was created or updated.",
+            );
+          }
+          NODE
+
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          release-as: ${{ inputs.version }}
+          skip-github-release: true
+
+      - name: Enforce requested release version
+        if: ${{ steps.release.outputs.prs != '' }}
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          RELEASE_PLEASE_PRS: ${{ steps.release.outputs.prs }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node .github/scripts/enforce-release-please-version.mjs
+
+      - name: Add public changelog template
+        if: ${{ steps.release.outputs.prs != '' }}
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          RELEASE_DATE: ${{ steps.release.outputs.date }}
+          RELEASE_PLEASE_PRS: ${{ steps.release.outputs.prs }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node .github/scripts/upsert-public-changelog-template.mjs
