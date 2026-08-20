@@ -13,6 +13,7 @@
 		resetSession,
 		revealArtifact,
 		listMentionApps,
+		listSlashSkills,
 		setComputerApproval,
 		setUiFlags,
 		startTask,
@@ -385,6 +386,7 @@
 				oncompositionstart={() => (session.composing = true)}
 				oncompositionend={() => (session.composing = false)}
 				onlistapps={() => listMentionApps()}
+				onlistskills={() => listSlashSkills()}
 			/>
 		</div>
 	{/if}

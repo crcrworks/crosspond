@@ -8,7 +8,8 @@ export type MentionKind =
 	| 'app'
 	| 'files'
 	| 'calendar'
-	| 'search';
+	| 'search'
+	| 'skill';
 
 export type Mention =
 	| { kind: 'vault_query' }
@@ -20,7 +21,14 @@ export type Mention =
 	| { kind: 'app'; name: string }
 	| { kind: 'files' }
 	| { kind: 'calendar' }
-	| { kind: 'search' };
+	| { kind: 'search' }
+	| { kind: 'skill'; name: string };
+
+export type SlashSkill = {
+	name: string;
+	description: string;
+	origin: 'local' | 'global';
+};
 
 export type MentionCatalogItem = {
 	kind: MentionKind;
@@ -141,6 +149,16 @@ export function mentionTrigger(
 	return { start: cursor - match[1].length, query: match[1].slice(1) };
 }
 
+export function skillTrigger(
+	text: string,
+	cursor: number
+): { start: number; query: string } | null {
+	const before = text.slice(0, cursor);
+	const match = /(?:^|\s)([/／][^\s/／]*)$/.exec(before);
+	if (!match) return null;
+	return { start: cursor - match[1].length, query: match[1].slice(1) };
+}
+
 export function filterCatalog(query: string): MentionCatalogItem[] {
 	const needle = query.trim().toLowerCase();
 	if (!needle) return MENTION_CATALOG;
@@ -156,6 +174,18 @@ function catalogMatches(item: MentionCatalogItem, needle: string, raw: string): 
 		return true;
 	}
 	return (item.aliases ?? []).some((alias) => alias.startsWith(needle));
+}
+
+export function filterSlashSkills(skills: SlashSkill[], query: string): SlashSkill[] {
+	const needle = query.trim().toLowerCase();
+	if (!needle) return skills;
+	return skills.filter((skill) => {
+		if (skill.name.toLowerCase().startsWith(needle) || skill.name.toLowerCase().includes(needle)) {
+			return true;
+		}
+		const description = skill.description.toLowerCase();
+		return description.includes(needle) || description.includes(query.trim().toLowerCase());
+	});
 }
 
 export function chipLabel(mention: Mention): string {
@@ -180,6 +210,8 @@ export function chipLabel(mention: Mention): string {
 			return 'Calendar';
 		case 'search':
 			return 'Search';
+		case 'skill':
+			return `/${mention.name.trim() || 'skill'}`;
 	}
 }
 
@@ -187,6 +219,9 @@ export function displayPrompt(mentions: Mention[], text: string): string {
 	const tokens = mentions.map((mention) => {
 		if (mention.kind === 'app' && mention.name.trim()) {
 			return `@app ${mention.name.trim()}`;
+		}
+		if (mention.kind === 'skill' && mention.name.trim()) {
+			return `/${mention.name.trim()}`;
 		}
 		const item = MENTION_CATALOG.find((entry) => entry.kind === mention.kind);
 		return `@${item?.token ?? mention.kind}`;
@@ -196,16 +231,20 @@ export function displayPrompt(mentions: Mention[], text: string): string {
 	return tokens.join(' ');
 }
 
+const SKILL_RE = /(^|\s)[/／]([a-z0-9]+(?:-[a-z0-9]+)*)\b/g;
+
 export function takeInlineMentions(text: string): { prompt: string; mentions: Mention[] } {
 	const mentions: Mention[] = [];
-	const prompt = text
-		.replace(TOKEN_RE, (_full, lead: string, token: string) => {
-			const kind = TOKEN_TO_KIND[token.toLowerCase()];
-			if (kind) mentions.push(mentionFromKind(kind));
-			return lead;
-		})
-		.replace(/\s+/g, ' ')
-		.trim();
+	let prompt = text.replace(TOKEN_RE, (_full, lead: string, token: string) => {
+		const kind = TOKEN_TO_KIND[token.toLowerCase()];
+		if (kind) mentions.push(mentionFromKind(kind));
+		return lead;
+	});
+	prompt = prompt.replace(SKILL_RE, (_full, lead: string, name: string) => {
+		mentions.push({ kind: 'skill', name });
+		return lead;
+	});
+	prompt = prompt.replace(/\s+/g, ' ').trim();
 	return { prompt, mentions };
 }
 
@@ -220,6 +259,12 @@ export function mergeMentions(existing: Mention[], extra: Mention[]): Mention[] 
 			if (!duplicate) out.push(mention);
 			continue;
 		}
+		if (mention.kind === 'skill') {
+			const key = mention.name.trim();
+			const duplicate = out.some((item) => item.kind === 'skill' && item.name.trim() === key);
+			if (!duplicate) out.push(mention);
+			continue;
+		}
 		if (!out.some((item) => item.kind === mention.kind)) out.push(mention);
 	}
 	return out;
@@ -228,6 +273,9 @@ export function mergeMentions(existing: Mention[], extra: Mention[]): Mention[] 
 export function mentionFromKind(kind: MentionKind, extra?: { name?: string }): Mention {
 	if (kind === 'app') {
 		return { kind: 'app', name: extra?.name ?? '' };
+	}
+	if (kind === 'skill') {
+		return { kind: 'skill', name: extra?.name ?? '' };
 	}
 	return { kind };
 }

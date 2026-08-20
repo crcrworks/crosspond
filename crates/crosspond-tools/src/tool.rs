@@ -40,6 +40,8 @@ pub struct ToolContext {
     pub knowledge: Option<Arc<dyn KnowledgeBackend>>,
     /// Installed skills directory. Defaults to `~/.crosspond/skills`.
     pub skills_root: Option<PathBuf>,
+    /// Global skills directory. Defaults to `~/.agents/skills`.
+    pub global_skills_root: Option<PathBuf>,
     /// Test override for skills.sh / GitHub URLs.
     pub skill_endpoints: Option<SkillEndpoints>,
     /// Fetched skill waiting to be written after Allow.
@@ -76,6 +78,7 @@ impl std::fmt::Debug for ToolContext {
             .field("credential_destination", &self.credential_destination)
             .field("knowledge", &self.knowledge.as_ref().map(|_| "set"))
             .field("skills_root", &self.skills_root)
+            .field("global_skills_root", &self.global_skills_root)
             .field(
                 "skill_endpoints",
                 &self.skill_endpoints.as_ref().map(|_| "set"),

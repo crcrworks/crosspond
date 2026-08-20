@@ -3,8 +3,10 @@ import {
 	chipLabel,
 	displayPrompt,
 	filterCatalog,
+	filterSlashSkills,
 	mentionTrigger,
 	mergeMentions,
+	skillTrigger,
 	takeInlineMentions
 } from './mentions';
 
@@ -15,6 +17,16 @@ describe('mentionTrigger', () => {
 		expect(mentionTrigger(fullwidth, fullwidth.length)).toEqual({ start: 3, query: 'query' });
 		expect(mentionTrigger('no mention', 10)).toBeNull();
 		expect(mentionTrigger('email@x.com', 11)).toBeNull();
+	});
+});
+
+describe('skillTrigger', () => {
+	it('detects / and fullwidth ／ at the caret', () => {
+		expect(skillTrigger('hello /pdf', 10)).toEqual({ start: 6, query: 'pdf' });
+		const fullwidth = '見て ／lab';
+		expect(skillTrigger(fullwidth, fullwidth.length)).toEqual({ start: 3, query: 'lab' });
+		expect(skillTrigger('no skill', 8)).toBeNull();
+		expect(skillTrigger('https://example.com/x', 21)).toBeNull();
 	});
 });
 
@@ -59,6 +71,25 @@ describe('filterCatalog', () => {
 	});
 });
 
+describe('filterSlashSkills', () => {
+	const skills = [
+		{ name: 'pdf-processing', description: 'Extract text from PDF files', origin: 'local' as const },
+		{ name: 'lab-notes', description: 'Global helper for lab PDFs', origin: 'global' as const }
+	];
+
+	it('filters by name and description', () => {
+		expect(filterSlashSkills(skills, '').map((item) => item.name)).toEqual([
+			'pdf-processing',
+			'lab-notes'
+		]);
+		expect(filterSlashSkills(skills, 'pdf').map((item) => item.name)).toEqual([
+			'pdf-processing',
+			'lab-notes'
+		]);
+		expect(filterSlashSkills(skills, 'lab').map((item) => item.name)).toEqual(['lab-notes']);
+	});
+});
+
 describe('takeInlineMentions', () => {
 	it('strips known tokens and keeps the instruction', () => {
 		const taken = takeInlineMentions('@query @screen VPN 調べて');
@@ -86,6 +117,16 @@ describe('takeInlineMentions', () => {
 		expect(taken.prompt).toBe('Continue を押して');
 		expect(taken.mentions.map((item) => item.kind)).toEqual(['browser', 'browser']);
 	});
+
+	it('strips slash skill tokens', () => {
+		const taken = takeInlineMentions('/pdf-processing この PDF まとめて');
+		expect(taken.prompt).toBe('この PDF まとめて');
+		expect(taken.mentions).toEqual([{ kind: 'skill', name: 'pdf-processing' }]);
+		expect(takeInlineMentions('／pdf-processing 進めて').mentions).toEqual([
+			{ kind: 'skill', name: 'pdf-processing' }
+		]);
+		expect(takeInlineMentions('see https://example.com/pdf-processing').mentions).toEqual([]);
+	});
 });
 
 describe('displayPrompt', () => {
@@ -96,6 +137,9 @@ describe('displayPrompt', () => {
 		expect(displayPrompt([{ kind: 'computer' }], '進めて')).toBe('@computer 進めて');
 		expect(displayPrompt([{ kind: 'search' }], '調べて')).toBe('@search 調べて');
 		expect(displayPrompt([{ kind: 'browser' }], 'クリックして')).toBe('@browser クリックして');
+		expect(displayPrompt([{ kind: 'skill', name: 'pdf-processing' }], 'まとめて')).toBe(
+			'/pdf-processing まとめて'
+		);
 	});
 });
 
@@ -107,6 +151,20 @@ describe('mergeMentions', () => {
 		);
 		expect(merged.map((item) => item.kind)).toEqual(['vault_query', 'vault_save']);
 	});
+
+	it('dedupes slash skills by name', () => {
+		const merged = mergeMentions(
+			[{ kind: 'skill', name: 'pdf-processing' }],
+			[
+				{ kind: 'skill', name: 'pdf-processing' },
+				{ kind: 'skill', name: 'lab-notes' }
+			]
+		);
+		expect(merged).toEqual([
+			{ kind: 'skill', name: 'pdf-processing' },
+			{ kind: 'skill', name: 'lab-notes' }
+		]);
+	});
 });
 
 describe('chipLabel', () => {
@@ -116,5 +174,6 @@ describe('chipLabel', () => {
 		expect(chipLabel({ kind: 'computer' })).toBe('Computer');
 		expect(chipLabel({ kind: 'search' })).toBe('Search');
 		expect(chipLabel({ kind: 'browser' })).toBe('Browser');
+		expect(chipLabel({ kind: 'skill', name: 'pdf-processing' })).toBe('/pdf-processing');
 	});
 });

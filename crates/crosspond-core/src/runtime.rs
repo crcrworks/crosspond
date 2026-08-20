@@ -14,9 +14,9 @@ use crosspond_model::{
 };
 use crosspond_tools::{
     KnowledgeBackend, PathScope, ScratchReason, ScratchSpace, SkillEndpoints, ToolContext,
-    ToolRegistry, classify_write_path, default_skills_root, filesystem_registry, host_from_url,
-    http_hosts_from_note, is_browser_tool, normalize_host, prepare_skill_install,
-    render_skill_catalog, scan_skills_root, site_is_allowed,
+    ToolRegistry, classify_write_path, default_global_skills_root, default_skills_root,
+    filesystem_registry, host_from_url, http_hosts_from_note, is_browser_tool, normalize_host,
+    prepare_skill_install, render_skill_catalog, scan_skill_roots, site_is_allowed,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -254,6 +254,7 @@ pub fn spawn_runtime_with(
                 staged_inputs: Vec::new(),
                 knowledge,
                 skills_root: default_skills_root(),
+                global_skills_root: default_global_skills_root(),
                 skill_endpoints: SkillEndpoints::default(),
                 _vault_watch: vault_watch,
             }));
@@ -285,6 +286,7 @@ struct Runtime {
     staged_inputs: Vec<StagedInput>,
     knowledge: Option<Arc<IndexedVault>>,
     skills_root: PathBuf,
+    global_skills_root: PathBuf,
     skill_endpoints: SkillEndpoints,
     _vault_watch: Option<VaultWatcher>,
 }
@@ -541,7 +543,10 @@ impl Runtime {
                 }
             }
         }
-        let skills_catalog = render_skill_catalog(&scan_skills_root(&self.skills_root));
+        let skills_catalog = render_skill_catalog(&scan_skill_roots(
+            &self.skills_root,
+            &self.global_skills_root,
+        ));
         let mut messages = Vec::with_capacity(self.session.len() + 2);
         messages.push(Message::system(system_prompt(
             self.session_scratch.as_ref(),
@@ -1070,6 +1075,7 @@ impl Runtime {
             );
         }
         context.skills_root = Some(self.skills_root.clone());
+        context.global_skills_root = Some(self.global_skills_root.clone());
         context.skill_endpoints = Some(self.skill_endpoints.clone());
         context
     }
@@ -2076,6 +2082,7 @@ mod tests {
             staged_inputs: Vec::new(),
             knowledge: None,
             skills_root: root.join("skills"),
+            global_skills_root: root.join("global-skills"),
             skill_endpoints: SkillEndpoints::default(),
             _vault_watch: None,
         };
@@ -2996,6 +3003,46 @@ mod tests {
         assert!(system.contains("knowledge_read"));
         assert!(!system.contains("Pinned"));
 
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn skill_mention_instructs_skill_read() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&requests),
+                })
+            })
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                mentions: vec![Mention::Skill {
+                    name: "pdf-processing".into(),
+                }],
+                ..StartTaskRequest::new(TaskId::new(), "summarize this")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        let system = {
+            let captured = requests.lock().expect("lock");
+            captured[0][0].content.clone()
+        };
+        assert!(system.contains("User mentions"));
+        assert!(system.contains("skill_read"));
+        assert!(system.contains("/pdf-processing"));
+        assert!(!system.contains("UNIQUE_PDF_STEPS"));
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;
@@ -6238,6 +6285,52 @@ mod tests {
         assert!(system.contains("Extract text from PDF files"));
         assert!(system.contains("skill_read"));
         assert!(!system.contains("UNIQUE_PDF_STEPS"));
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn start_task_includes_global_agent_skills() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let build: ProviderBuilder = Arc::new(move |_, _| {
+            Arc::new(RecordingProvider {
+                delay: Duration::from_millis(5),
+                requests: Arc::clone(&captured),
+            })
+        });
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        let global = runtime.global_skills_root.join("lab-notes");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(
+            global.join("SKILL.md"),
+            "---\nname: lab-notes\ndescription: Global helper for lab PDFs.\n---\nUNIQUE_GLOBAL_STEPS\n",
+        )
+        .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "summarize a PDF",
+            )))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        let system = {
+            let captured = requests.lock().expect("lock");
+            captured[0]
+                .iter()
+                .find(|message| message.role == Role::System)
+                .map(|message| message.content.clone())
+                .unwrap_or_default()
+        };
+        assert!(system.contains("lab-notes"));
+        assert!(system.contains("Global helper for lab PDFs"));
+        assert!(!system.contains("UNIQUE_GLOBAL_STEPS"));
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;
