@@ -2,6 +2,7 @@ export type MentionKind =
 	| 'vault_query'
 	| 'vault_save'
 	| 'vault_later'
+	| 'vault_procedure'
 	| 'screen'
 	| 'computer'
 	| 'browser'
@@ -14,6 +15,7 @@ export type Mention =
 	| { kind: 'vault_query' }
 	| { kind: 'vault_save' }
 	| { kind: 'vault_later' }
+	| { kind: 'vault_procedure' }
 	| { kind: 'screen' }
 	| { kind: 'computer' }
 	| { kind: 'browser' }
@@ -55,6 +57,14 @@ export const MENTION_CATALOG: MentionCatalogItem[] = [
 		description: 'あとで読む',
 		needsPicker: false,
 		aliases: ['later']
+	},
+	{
+		kind: 'vault_procedure',
+		token: 'vault-procedure',
+		label: 'Vault procedure',
+		description: '手順として残す',
+		needsPicker: false,
+		aliases: ['procedure']
 	},
 	{
 		kind: 'screen',
@@ -116,6 +126,8 @@ const TOKEN_TO_KIND: Record<string, MentionKind> = {
 	save: 'vault_save',
 	'vault-later': 'vault_later',
 	later: 'vault_later',
+	'vault-procedure': 'vault_procedure',
+	procedure: 'vault_procedure',
 	screen: 'screen',
 	computer: 'computer',
 	browser: 'browser',
@@ -129,7 +141,7 @@ const TOKEN_TO_KIND: Record<string, MentionKind> = {
 };
 
 const TOKEN_RE =
-	/(^|\s)[@＠](vault-query|vault-save|vault-later|computer|browser|borser|chrome|screen|save|later|files|calendar|search|web|query|app)\b/gi;
+	/(^|\s)[@＠](vault-query|vault-save|vault-later|vault-procedure|computer|browser|borser|chrome|screen|save|later|procedure|files|calendar|search|web|query|app)\b/gi;
 
 export function mentionTrigger(
 	text: string,
@@ -168,6 +180,8 @@ export function chipLabel(mention: Mention): string {
 			return 'Vault save';
 		case 'vault_later':
 			return 'Vault later';
+		case 'vault_procedure':
+			return 'Vault procedure';
 		case 'screen':
 			return 'Screen';
 		case 'computer':
