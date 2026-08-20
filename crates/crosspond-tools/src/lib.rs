@@ -13,6 +13,7 @@ mod fs_tools;
 mod knowledge;
 mod path;
 mod registry;
+mod sandbox;
 mod scratch;
 mod shell;
 mod ssrf;
@@ -45,11 +46,16 @@ pub use path::{
     PathError, PathScope, ResolvedPath, classify_write_path, resolve_path, resolve_requested,
 };
 pub use registry::ToolRegistry;
+pub use sandbox::{ShellSandbox, UnsandboxedShell, unsandboxed_shell, unsandboxed_shell_command};
 pub use scratch::{ScratchError, ScratchReason, ScratchSpace};
 pub use shell::{command_embeds_credentials, register_shell_tools};
-pub use ssrf::{is_blocked_ip, validate_fetch_url, validate_fetch_url_for_hosts};
+pub use ssrf::{
+    SsrfResolver, filter_resolved_addrs, is_blocked_ip, validate_fetch_url,
+    validate_fetch_url_for_hosts,
+};
 pub use tool::{
-    MAX_TOOL_OUTPUT_BYTES, Tool, ToolContext, ToolDefinition, ToolError, ToolImage, ToolResult,
+    ApprovalBody, MAX_TOOL_OUTPUT_BYTES, Tool, ToolContext, ToolDefinition, ToolError, ToolImage,
+    ToolResult,
 };
 pub use web::{format_exa_results, register_web_tools, strip_html, web_tools_registry};
 

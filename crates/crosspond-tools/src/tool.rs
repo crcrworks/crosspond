@@ -1,13 +1,25 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
 use crate::knowledge::KnowledgeBackend;
+use crate::sandbox::ShellSandbox;
 use crate::scratch::ScratchSpace;
 
 /// Truncate tool output so a directory dump cannot blow the context window.
 pub const MAX_TOOL_OUTPUT_BYTES: usize = 100 * 1024;
+
+/// How the launcher should render an Allow card body.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalBody {
+    #[default]
+    Prose,
+    Command,
+}
 
 #[derive(Clone, Debug)]
 pub struct ToolDefinition {
@@ -36,6 +48,10 @@ pub struct ToolContext {
     pub credential_destination: Option<String>,
     /// Read-only Knowledge Vault lookup. Absent when no vault is configured.
     pub knowledge: Option<Arc<dyn KnowledgeBackend>>,
+    /// Set by the runtime when the user cancels the in-flight tool.
+    pub cancel: Arc<AtomicBool>,
+    /// Host sandbox for `run_command`. Absent means unsandboxed `sh -c`.
+    pub shell_sandbox: Option<Arc<dyn ShellSandbox>>,
 }
 
 impl ToolContext {
@@ -67,6 +83,17 @@ impl std::fmt::Debug for ToolContext {
             .field("credential_hosts", &self.credential_hosts)
             .field("credential_destination", &self.credential_destination)
             .field("knowledge", &self.knowledge.as_ref().map(|_| "set"))
+            .field(
+                "cancel",
+                &self.cancel.load(std::sync::atomic::Ordering::Relaxed),
+            )
+            .field(
+                "shell_sandbox",
+                &self
+                    .shell_sandbox
+                    .as_ref()
+                    .map(|sandbox| sandbox.is_enforcing()),
+            )
             .finish()
     }
 }
@@ -113,6 +140,10 @@ pub trait Tool: Send + Sync {
     /// Copy for the approval card. Must not include secrets or file contents.
     fn approval_prompt(&self, _context: &ToolContext, _input: &Value) -> (String, String) {
         (format!("Run `{}`", self.definition().name), String::new())
+    }
+
+    fn approval_body(&self) -> ApprovalBody {
+        ApprovalBody::Prose
     }
 
     /// Registrable site host for browser tools (no URL path or query).

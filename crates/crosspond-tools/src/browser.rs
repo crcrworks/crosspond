@@ -474,10 +474,16 @@ impl Tool for BrowserNavigate {
 
     fn approval_prompt(&self, _context: &ToolContext, input: &Value) -> (String, String) {
         let action = optional_string(input, "action").unwrap_or_else(|| "navigate".into());
+        let url = optional_string(input, "url").unwrap_or_default();
         let host = self
             .target_host(_context, input)
             .unwrap_or_else(|| "this site".into());
-        (format!("Browser {action} on {host}"), String::new())
+        let description = if url.is_empty() { String::new() } else { url };
+        (format!("Browser {action} on {host}"), description)
+    }
+
+    fn approval_body(&self) -> crate::tool::ApprovalBody {
+        crate::tool::ApprovalBody::Command
     }
 
     fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
@@ -784,10 +790,15 @@ impl Tool for BrowserNewTab {
     }
 
     fn approval_prompt(&self, _context: &ToolContext, input: &Value) -> (String, String) {
+        let url = optional_string(input, "url").unwrap_or_default();
         let host = self
             .target_host(_context, input)
             .unwrap_or_else(|| "a new tab".into());
-        (format!("Open {host} in Chrome"), String::new())
+        (format!("Open {host} in Chrome"), url)
+    }
+
+    fn approval_body(&self) -> crate::tool::ApprovalBody {
+        crate::tool::ApprovalBody::Command
     }
 
     fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
