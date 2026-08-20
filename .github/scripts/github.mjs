@@ -1,0 +1,164 @@
+export const semverPattern = /^[0-9]+\.[0-9]+\.[0-9]+$/;
+
+export function requireEnv(value, name) {
+	if (!value) {
+		throw new Error(`${name} must be set.`);
+	}
+	return value;
+}
+
+export function assertExactSemver(value, name = "version") {
+	if (!semverPattern.test(value ?? "")) {
+		throw new Error(`${name} must be exact semver without a v prefix: ${value}.`);
+	}
+}
+
+export function compareSemver(left, right) {
+	const leftParts = left.split(".").map(Number);
+	const rightParts = right.split(".").map(Number);
+	for (let index = 0; index < 3; index += 1) {
+		if (leftParts[index] !== rightParts[index]) {
+			return leftParts[index] - rightParts[index];
+		}
+	}
+	return 0;
+}
+
+export function decodeBase64(value) {
+	return Buffer.from(value, "base64").toString("utf8");
+}
+
+export function encodeBase64(value) {
+	return Buffer.from(value, "utf8").toString("base64");
+}
+
+export function parseReleasePleasePrs(raw) {
+	if (!raw) {
+		return [];
+	}
+
+	try {
+		const parsed = JSON.parse(raw);
+		if (Array.isArray(parsed)) {
+			return parsed;
+		}
+		if (parsed && typeof parsed === "object") {
+			return Object.values(parsed).filter((value) => value && typeof value === "object");
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.log(`Could not parse release-please PR output: ${message}`);
+	}
+
+	return [];
+}
+
+export function releasePrNumber(prs) {
+	if (prs.length === 0) {
+		throw new Error("No release PR was returned by Release Please.");
+	}
+	const number = prs[0]?.number ?? prs[0]?.pullRequestNumber;
+	if (!number) {
+		throw new Error("No release PR number was returned by Release Please.");
+	}
+	return Number(number);
+}
+
+export async function github(path, token, options = {}) {
+	const response = await fetch(`https://api.github.com${path}`, {
+		...options,
+		headers: {
+			Accept: "application/vnd.github+json",
+			Authorization: `Bearer ${token}`,
+			"Content-Type": "application/json",
+			"X-GitHub-Api-Version": "2022-11-28",
+			...(options.headers ?? {}),
+		},
+	});
+
+	if (!response.ok) {
+		throw new Error(`GitHub API ${path} failed: ${response.status} ${await response.text()}`);
+	}
+
+	return response.status === 204 ? null : response.json();
+}
+
+export async function readRepoFile(owner, repo, path, ref, token) {
+	const file = await github(
+		`/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`,
+		token,
+	);
+	return {
+		content: decodeBase64(file.content),
+		sha: file.sha,
+	};
+}
+
+export async function writeRepoFile(owner, repo, path, branch, content, sha, message, token) {
+	await github(`/repos/${owner}/${repo}/contents/${path}`, token, {
+		method: "PUT",
+		body: JSON.stringify({
+			branch,
+			content: encodeBase64(content),
+			message,
+			sha,
+		}),
+	});
+}
+
+export function canStartPublish({ requestedVersion, existingRelease, publishedVersions }) {
+	assertExactSemver(requestedVersion, "requestedVersion");
+	if (existingRelease && existingRelease.draft !== true) {
+		throw new Error(`GitHub Release v${requestedVersion} is already published.`);
+	}
+	for (const published of publishedVersions) {
+		assertExactSemver(published, "published version");
+		if (compareSemver(requestedVersion, published) <= 0) {
+			throw new Error(
+				`Release metadata version ${requestedVersion} is not newer than published version ${published}.`,
+			);
+		}
+	}
+}
+
+export function requiredReleaseAssetNames(names) {
+	const list = names ?? [];
+	const missing = [];
+	if (!list.some((name) => name.endsWith(".dmg"))) {
+		missing.push(".dmg");
+	}
+	if (!list.some((name) => name.endsWith(".app.tar.gz"))) {
+		missing.push(".app.tar.gz");
+	}
+	if (!list.some((name) => name.endsWith(".app.tar.gz.sig"))) {
+		missing.push(".app.tar.gz.sig");
+	}
+	if (!list.includes("latest.json")) {
+		missing.push("latest.json");
+	}
+	return missing;
+}
+
+export function assertDraftReleaseAssets({ isDraft, assets, localDmgName, localDmgSize }) {
+	if (isDraft !== true) {
+		throw new Error("release must still be a draft while verifying artifacts");
+	}
+	const list = assets ?? [];
+	const names = list.map((asset) => asset.name ?? "");
+	const missing = requiredReleaseAssetNames(names);
+	if (missing.length > 0) {
+		throw new Error(`draft release is missing assets: ${missing.join(", ")} (have ${names.join(", ")})`);
+	}
+	const match = list.find((asset) => asset.name === localDmgName);
+	if (!match) {
+		throw new Error(`draft release has no DMG named ${localDmgName} (have ${names.join(", ")})`);
+	}
+	const remoteSize = Number(match.size ?? 0);
+	const expectedSize = Number(localDmgSize);
+	if (remoteSize !== expectedSize) {
+		throw new Error(
+			`draft DMG ${localDmgName} is ${remoteSize} bytes, stapled local file is ${expectedSize} bytes; the pre-staple asset may still be on the Release`,
+		);
+	}
+	return names;
+}
