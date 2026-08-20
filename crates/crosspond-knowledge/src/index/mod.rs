@@ -111,6 +111,35 @@ impl IndexedVault {
         self.repo.read_note(&knowledge_id)
     }
 
+    pub fn has_credential_ref(&self, credential_ref: &str) -> bool {
+        let Ok(notes) = self.repo.list_notes() else {
+            return false;
+        };
+        notes.iter().any(|note| {
+            note.credential_ref
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| value == credential_ref)
+        })
+    }
+
+    /// `url` frontmatter and body for notes that already hold this Keychain pointer.
+    pub fn credential_note_sources(&self, credential_ref: &str) -> Vec<(Option<String>, String)> {
+        let Ok(notes) = self.repo.list_notes() else {
+            return Vec::new();
+        };
+        notes
+            .into_iter()
+            .filter(|note| {
+                note.credential_ref
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|value| value == credential_ref)
+            })
+            .map(|note| (note.url, note.body))
+            .collect()
+    }
+
     pub fn find_procedure(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, VaultError> {
         let hits = self.search(query, limit.max(20))?;
         Ok(hits
@@ -154,6 +183,7 @@ mod tests {
             trust: TrustLevel::User,
             relations: Relations::default(),
             resource_kind: Some("vpn".into()),
+            credential_ref: None,
             body: body.into(),
             relative_path: None,
             url: None,
@@ -194,6 +224,51 @@ mod tests {
         assert!(by_alias.iter().any(|hit| hit.title == "Lab VPN"));
         let by_body = indexed.search("lab profile", 10).unwrap();
         assert!(by_body.iter().any(|hit| hit.title == "Lab VPN"));
+        let _ = fs::remove_dir_all(vault);
+        let _ = fs::remove_file(sqlite);
+    }
+
+    #[test]
+    fn has_credential_ref_matches_existing_notes_only() {
+        let (vault, sqlite) = temp_paths();
+        let indexed = IndexedVault::open(&vault, &sqlite).unwrap();
+        let mut note = resource(
+            "Lab File Server",
+            &[],
+            "# Lab File Server\n\nsmb://lab-files\n",
+        );
+        note.credential_ref = Some("lab.fileserver".into());
+        note.url = Some("https://files.example.invalid/share/".into());
+        indexed.create_note(note).unwrap();
+        indexed
+            .create_note(resource("Lab VPN", &[], "# Lab VPN\n"))
+            .unwrap();
+        assert!(indexed.has_credential_ref("lab.fileserver"));
+        assert!(!indexed.has_credential_ref("other.login"));
+        let sources = indexed.credential_note_sources("lab.fileserver");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(
+            sources[0].0.as_deref(),
+            Some("https://files.example.invalid/share/")
+        );
+        assert!(sources[0].1.contains("smb://lab-files"));
+        assert!(indexed.credential_note_sources("other.login").is_empty());
+        let markdown = fs::read_to_string(
+            std::fs::read_dir(vault.join("resources"))
+                .unwrap()
+                .flatten()
+                .find(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .contains("Lab File Server")
+                })
+                .unwrap()
+                .path(),
+        )
+        .unwrap();
+        assert!(markdown.contains("credential_ref: lab.fileserver"));
+        assert!(!markdown.contains("hunter2"));
         let _ = fs::remove_dir_all(vault);
         let _ = fs::remove_file(sqlite);
     }
@@ -279,6 +354,7 @@ mod tests {
                 trust: TrustLevel::User,
                 relations: Relations::default(),
                 resource_kind: None,
+                credential_ref: None,
                 body: "# Check Lab Assignment\n\nHow to retrieve assignments.\n".into(),
                 relative_path: None,
                 url: None,

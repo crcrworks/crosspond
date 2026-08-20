@@ -90,6 +90,7 @@ pub struct NewKnowledgeNote {
     pub trust: TrustLevel,
     pub relations: Relations,
     pub resource_kind: Option<String>,
+    pub credential_ref: Option<String>,
     pub body: String,
     pub relative_path: Option<PathBuf>,
     pub url: Option<String>,

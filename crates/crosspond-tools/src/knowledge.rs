@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use crate::browser::http_hosts_from_note;
 use crate::registry::ToolRegistry;
 use crate::tool::{Tool, ToolContext, ToolDefinition, ToolError, ToolResult, truncate_output};
 
@@ -46,6 +47,8 @@ pub struct KnowledgeRecord {
     pub tags: Vec<String>,
     pub body: String,
     pub path: String,
+    pub credential_ref: Option<String>,
+    pub url: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -171,7 +174,7 @@ impl Tool for KnowledgeRead {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "knowledge_read".into(),
-            description: "Read one Knowledge Vault note by id. Use after knowledge_search.".into(),
+            description: "Read one Knowledge Vault note by id. Use after knowledge_search. If credential_ref is present, use fetch_url (HTTP basic/digest file servers) or fill_credential (native/browser login). Never ask the user to paste a password.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -194,6 +197,20 @@ impl Tool for KnowledgeRead {
         }
         if !note.tags.is_empty() {
             text.push_str(&format!("tags: {}\n", note.tags.join(", ")));
+        }
+        if let Some(credential_ref) = &note.credential_ref {
+            text.push_str(&format!(
+                "credential_ref: {credential_ref}\nUse this pointer — never a password in chat. HTTP basic/digest file servers: fetch_url a URL on this note first (unauthenticated HEAD). If it reports authentication required, call fetch_url again with this credential_ref. Do not use the browser. Native login dialogs: fill_credential with username_node_id / password_node_id from get_accessibility_snapshot. Chromium HTTP auth in an open tab: fill_credential with only this ref.\n"
+            ));
+            let hosts = http_hosts_from_note(note.url.as_deref(), &note.body);
+            if hosts.is_empty() {
+                text.push_str("This login has no http(s) URL on the note. fetch_url and Chromium HTTP fill cannot use it until you add the file server URL.\n");
+            } else {
+                text.push_str(&format!(
+                    "http(s) hosts for this login: {}\nOnly fetch_url or Chromium HTTP fill those hosts with this credential_ref.\n",
+                    hosts.join(", ")
+                ));
+            }
         }
         text.push('\n');
         text.push_str(&note.body);
@@ -486,14 +503,30 @@ mod tests {
         }
 
         fn read(&self, id: &str) -> Result<KnowledgeRecord, String> {
+            let credential_ref = (id == "cp_files").then(|| "lab.fileserver".to_string());
             Ok(KnowledgeRecord {
                 id: id.into(),
-                title: "Check Lab Assignment".into(),
-                kind: "procedure".into(),
+                title: if id == "cp_files" {
+                    "Lab File Server".into()
+                } else {
+                    "Check Lab Assignment".into()
+                },
+                kind: if id == "cp_files" {
+                    "resource".into()
+                } else {
+                    "procedure".into()
+                },
                 aliases: vec!["研究室の課題確認".into()],
                 tags: vec!["lab".into()],
-                body: "Enable VPN first.\n".into(),
+                body: if id == "cp_files" {
+                    "Enable VPN first.\nhttps://files.example.invalid/inner/lab-share/\n".into()
+                } else {
+                    "Enable VPN first.\n".into()
+                },
                 path: "procedures/Check Lab Assignment.md".into(),
+                credential_ref,
+                url: (id == "cp_files")
+                    .then(|| "https://files.example.invalid/inner/lab-share/".into()),
             })
         }
 
@@ -567,6 +600,20 @@ mod tests {
             .unwrap();
         assert!(result.text.contains("Enable VPN first"));
         assert!(result.text.contains("研究室の課題確認"));
+    }
+
+    #[test]
+    fn read_exposes_credential_ref_pointer_only() {
+        let result = KnowledgeRead
+            .execute(&ctx(), json!({ "id": "cp_files" }))
+            .unwrap();
+        assert!(result.text.contains("credential_ref: lab.fileserver"));
+        assert!(result.text.contains("fetch_url"));
+        assert!(result.text.contains("fill_credential"));
+        assert!(result.text.contains("unauthenticated HEAD"));
+        assert!(result.text.contains("files.example.invalid"));
+        assert!(!result.text.contains("hunter2"));
+        assert!(!result.text.contains("labuser"));
     }
 
     #[test]

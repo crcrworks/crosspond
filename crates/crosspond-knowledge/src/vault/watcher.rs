@@ -261,6 +261,7 @@ mod tests {
                 trust: TrustLevel::User,
                 relations: Relations::default(),
                 resource_kind: Some("vpn".into()),
+                credential_ref: None,
                 body: "# Lab VPN\n".into(),
                 relative_path: None,
                 url: None,

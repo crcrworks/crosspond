@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use crosspond_tools::command_embeds_credentials;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -70,6 +71,8 @@ pub fn receipt_action_line(name: &str, text: &str) -> Option<String> {
         | "browser_navigate" | "browser_new_tab" => first_line(text),
         "ui_type" | "browser_type" => Some("Typed text".into()),
         "ui_set_value" | "browser_fill" => Some("Set a field value".into()),
+        "fill_credential" => Some("Filled a login".into()),
+        "fetch_url" => Some("Fetched a URL".into()),
         "run_command" => Some("Ran a command".into()),
         "open_url" => Some("Opened a URL".into()),
         "calendar_events" => Some("Read calendar events".into()),
@@ -88,7 +91,14 @@ pub fn tool_ui_summary(name: &str, input: &Value) -> String {
         "read_file" | "write_file" | "list_directory" | "create_directory" => {
             path_basename(string_field(input, "path"))
         }
-        "run_command" => truncate_chars(&string_field(input, "command"), UI_SUMMARY_MAX),
+        "run_command" => {
+            let command = string_field(input, "command");
+            if command_embeds_credentials(&command) {
+                String::new()
+            } else {
+                truncate_chars(&command, UI_SUMMARY_MAX)
+            }
+        }
         "web_search" | "knowledge_search" | "knowledge_find_procedure" => {
             truncate_chars(&string_field(input, "query"), UI_SUMMARY_MAX)
         }
@@ -116,6 +126,7 @@ pub fn tool_ui_summary(name: &str, input: &Value) -> String {
         | "browser_fill" | "browser_click" | "browser_press_key" | "browser_scroll"
         | "browser_select" | "browser_snapshot" | "browser_text" | "browser_tabs" => String::new(),
         "browser_navigate" | "browser_new_tab" => url_without_query(string_field(input, "url")),
+        "fill_credential" => string_field(input, "credential_ref"),
         _ => String::new(),
     }
 }
@@ -214,6 +225,17 @@ mod tests {
             Some("Typed text".into())
         );
         assert_eq!(
+            receipt_action_line(
+                "fill_credential",
+                "Filled login for lab.fileserver. hunter2"
+            ),
+            Some("Filled a login".into())
+        );
+        assert_eq!(
+            receipt_action_line("fetch_url", "Index of /inner/lab-share hunter2"),
+            Some("Fetched a URL".into())
+        );
+        assert_eq!(
             receipt_action_line("browser_fill", "Filled a1f3-e1 with hunter2"),
             Some("Set a field value".into())
         );
@@ -254,6 +276,16 @@ mod tests {
         );
         assert_eq!(
             tool_ui_summary(
+                "fill_credential",
+                &serde_json::json!({
+                    "credential_ref": "lab.fileserver",
+                    "password": "hunter2"
+                })
+            ),
+            "lab.fileserver"
+        );
+        assert_eq!(
+            tool_ui_summary(
                 "open_url",
                 &serde_json::json!({"url": "https://example.com/path?token=abc"})
             ),
@@ -281,6 +313,14 @@ mod tests {
             tool_ui_summary("run_command", &serde_json::json!({"command": "ls -la"})),
             "ls -la"
         );
+        let curl_login = tool_ui_summary(
+            "run_command",
+            &serde_json::json!({
+                "command": "curl --digest -u ngc:hunter2 https://files.example.invalid/"
+            }),
+        );
+        assert!(curl_login.is_empty());
+        assert!(!curl_login.contains("hunter2"));
         assert_eq!(
             tool_ui_summary(
                 "read_file",

@@ -24,10 +24,10 @@
 	import type { AgentEvent, CompatEndpoint, HotkeyView, SettingsView } from '$lib/types';
 	import { onMount } from 'svelte';
 
-	type TabId = 'general' | 'ai' | 'knowledge' | 'search' | 'browser' | 'permissions';
+	type TabId = 'general' | 'models' | 'knowledge' | 'search' | 'browser' | 'permissions';
 
 	let settings = $state<SettingsView | null>(null);
-	let tab = $state<TabId>('ai');
+	let tab = $state<TabId>('models');
 	let vaultPath = $state('');
 	let allowedHosts = $state('');
 	let blockedHosts = $state('');
@@ -348,10 +348,10 @@
 			>
 			<button
 				type="button"
-				class={['settings-tab', tab === 'ai' && 'active']}
+				class={['settings-tab', tab === 'models' && 'active']}
 				role="tab"
-				aria-selected={tab === 'ai'}
-				onclick={() => selectTab('ai')}>AI</button
+				aria-selected={tab === 'models'}
+				onclick={() => selectTab('models')}>Models</button
 			>
 			<button
 				type="button"
@@ -431,7 +431,7 @@
 			</div>
 			<Button label="Save" onclick={() => void onSaveVault()} variant="primary" />
 			{@render feedbackLine('knowledge')}
-		{:else if tab === 'ai'}
+		{:else if tab === 'models'}
 			<div class="text-sm text-[var(--muted)]">
 				Sign in or add API keys here. Pick the model in the launcher.
 			</div>

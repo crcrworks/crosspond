@@ -28,6 +28,7 @@ crosspond-tools = { path = "crates/crosspond-tools" }
 
 # Remaining direct crates are pinned after the first successful lockfile.
 base64 = "=0.22.1"
+digest_auth = "=0.3.1"
 global-hotkey = "=0.8.0"
 tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 thiserror = "=2.0.20"

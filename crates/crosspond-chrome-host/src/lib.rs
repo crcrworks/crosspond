@@ -652,6 +652,14 @@ mod tests {
         assert!(text.contains("function compactAxTree"));
         assert!(text.contains("chrome.alarms"));
         assert!(text.contains("scheduleReconnect"));
+        assert!(text.contains("Fetch.enable"));
+        assert!(text.contains("handleAuthRequests"));
+        assert!(text.contains("Fetch.authRequired"));
+        assert!(text.contains("continue_http_auth"));
+        assert!(text.contains("cancel_http_auth"));
+        assert!(text.contains("ProvideCredentials"));
+        assert!(text.contains("CancelAuth"));
+        assert!(text.contains("patterns: []"));
     }
 
     #[test]

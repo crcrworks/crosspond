@@ -65,8 +65,9 @@ pub use runtime::{
 };
 pub use scratch::default_tasks_root;
 pub use secret::{
-    SecretChatGptTokenStore, SecretError, SecretKey, SecretStore, SecretString,
+    CredentialBundle, SecretChatGptTokenStore, SecretError, SecretKey, SecretStore, SecretString,
     any_compat_key_is_set, chatgpt_oauth_is_set, compat_key_is_set, load_chatgpt_tokens,
-    provider_is_ready, provider_key_is_set, save_chatgpt_tokens, selected_provider_is_ready,
+    parse_credential_ref, provider_is_ready, provider_key_is_set, save_chatgpt_tokens,
+    selected_provider_is_ready,
 };
 pub use status::{CommandWindowState, TaskStatus};

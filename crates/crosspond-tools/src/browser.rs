@@ -42,6 +42,46 @@ pub trait BrowserBackend: Send + Sync {
     fn describe_ref(&self, _element_ref: &str) -> Option<String> {
         None
     }
+    /// Host/scheme/realm if Chromium is paused on HTTP auth. Never includes credentials.
+    fn pending_http_auth(&self) -> Option<HttpAuthChallenge> {
+        None
+    }
+    /// Continue a paused HTTP auth challenge. Values must never be logged.
+    fn continue_http_auth(&self, username: &str, password: &str) -> Result<String, ToolError> {
+        let _ = (username, password);
+        Err(ToolError::Failed(
+            "no HTTP authentication challenge is pending".into(),
+        ))
+    }
+    /// Drop a paused HTTP auth challenge without sending credentials.
+    fn cancel_http_auth(&self) -> Result<String, ToolError> {
+        Ok(String::new())
+    }
+}
+
+/// Public HTTP auth metadata. Never includes a username or password.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HttpAuthChallenge {
+    pub host: String,
+    pub scheme: String,
+    pub realm: String,
+}
+
+/// Tool/model copy when Chromium pauses on basic/digest auth.
+pub fn http_auth_required_message(host: &str, scheme: &str, realm: &str) -> String {
+    let kind = {
+        let scheme = scheme.trim();
+        if scheme.is_empty() { "HTTP" } else { scheme }
+    };
+    let mut message = format!("{kind} authentication required for {host}.");
+    let realm = realm.trim();
+    if !realm.is_empty() {
+        message.push_str(&format!(" Realm: {realm}."));
+    }
+    message.push_str(
+        " Call fill_credential with credential_ref from the matching Resource note. Pass only credential_ref — no username, password, or Accessibility node ids. Do not use curl, run_command, or browser_fill.",
+    );
+    message
 }
 
 pub fn is_browser_tool(name: &str) -> bool {
@@ -104,6 +144,50 @@ pub fn host_from_url(url: &str) -> Option<String> {
     };
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
     if host.is_empty() { None } else { Some(host) }
+}
+
+/// http(s) hosts listed on a Resource note (`url` frontmatter and body links).
+pub fn http_hosts_from_note(url: Option<&str>, body: &str) -> Vec<String> {
+    let mut hosts = Vec::new();
+    let mut push = |raw: &str| {
+        if let Some(host) = host_from_url(raw)
+            && !hosts.iter().any(|existing| existing == &host)
+        {
+            hosts.push(host);
+        }
+    };
+    if let Some(url) = url {
+        push(url);
+    }
+    let mut rest = body;
+    while let Some((start, end)) = next_http_url(rest) {
+        let mut token = rest[start..end].trim();
+        token = token.trim_end_matches(['.', ',', ';', ':', ')', ']']);
+        push(token);
+        if end >= rest.len() {
+            break;
+        }
+        rest = &rest[end..];
+    }
+    hosts
+}
+
+fn next_http_url(text: &str) -> Option<(usize, usize)> {
+    let http = text.find("http://");
+    let https = text.find("https://");
+    let start = match (http, https) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => return None,
+    };
+    let after = &text[start..];
+    let end_rel = after
+        .find(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ')' | ']' | '"' | '\'' | '<' | '>' | '`')
+        })
+        .unwrap_or(after.len());
+    Some((start, start + end_rel))
 }
 
 pub fn normalize_host(host: &str) -> String {
@@ -729,6 +813,8 @@ pub(crate) mod tests {
         pub snapshot: String,
         pub clicks: Mutex<Vec<String>>,
         pub fills: Mutex<Vec<(String, String)>>,
+        pub pending_auth: Mutex<Option<HttpAuthChallenge>>,
+        pub http_auth_fills: Mutex<Vec<(String, String)>>,
     }
 
     impl MockBrowser {
@@ -741,7 +827,20 @@ pub(crate) mod tests {
                         .into(),
                 clicks: Mutex::new(Vec::new()),
                 fills: Mutex::new(Vec::new()),
+                pending_auth: Mutex::new(None),
+                http_auth_fills: Mutex::new(Vec::new()),
             }
+        }
+
+        pub(crate) fn with_digest_auth() -> Self {
+            let page = Self::connected_page();
+            *page.host.lock().expect("host") = Some("files.example.invalid".into());
+            *page.pending_auth.lock().expect("auth") = Some(HttpAuthChallenge {
+                host: "files.example.invalid".into(),
+                scheme: "digest".into(),
+                realm: "lab-share".into(),
+            });
+            page
         }
     }
 
@@ -841,6 +940,29 @@ pub(crate) mod tests {
             } else {
                 None
             }
+        }
+
+        fn pending_http_auth(&self) -> Option<HttpAuthChallenge> {
+            self.pending_auth.lock().expect("auth").clone()
+        }
+
+        fn continue_http_auth(&self, username: &str, password: &str) -> Result<String, ToolError> {
+            if self.pending_auth.lock().expect("auth").is_none() {
+                return Err(ToolError::Failed(
+                    "no HTTP authentication challenge is pending".into(),
+                ));
+            }
+            self.http_auth_fills
+                .lock()
+                .expect("fills")
+                .push((username.to_string(), password.to_string()));
+            *self.pending_auth.lock().expect("auth") = None;
+            Ok("Filled HTTP authentication. Values were not returned.".into())
+        }
+
+        fn cancel_http_auth(&self) -> Result<String, ToolError> {
+            *self.pending_auth.lock().expect("auth") = None;
+            Ok(String::new())
         }
     }
 
@@ -993,6 +1115,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn http_auth_required_message_points_at_fill_credential() {
+        let text = http_auth_required_message("files.example.invalid", "digest", "lab-share");
+        assert!(text.contains("digest authentication required"));
+        assert!(text.contains("files.example.invalid"));
+        assert!(text.contains("fill_credential"));
+        assert!(text.contains("only credential_ref"));
+        assert!(text.contains("curl"));
+        assert!(!text.contains("hunter2"));
+        assert!(!text.contains("labuser"));
+    }
+
+    #[test]
     fn host_from_url_strips_port_and_path() {
         assert_eq!(
             host_from_url("https://Mail.Example.com:443/inbox?q=1"),
@@ -1022,5 +1156,21 @@ pub(crate) mod tests {
             hosts,
             vec!["example.com".to_string(), "mail.example.com".to_string()]
         );
+    }
+
+    #[test]
+    fn http_hosts_from_note_reads_frontmatter_and_body() {
+        let hosts = http_hosts_from_note(
+            Some("https://files.example.invalid/inner/lab-share/"),
+            "# Lab File Server\n\nSee https://wiki.example.invalid/files and smb://lab-files\n",
+        );
+        assert_eq!(
+            hosts,
+            vec![
+                "files.example.invalid".to_string(),
+                "wiki.example.invalid".to_string()
+            ]
+        );
+        assert!(http_hosts_from_note(None, "smb://lab-files\n").is_empty());
     }
 }

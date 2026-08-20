@@ -239,6 +239,22 @@ pub fn reject(id: ApprovalId, state: State<AppState>) {
 }
 
 #[tauri::command]
+pub fn submit_credential(
+    id: ApprovalId,
+    username: String,
+    password: String,
+    save: bool,
+    state: State<AppState>,
+) {
+    state.commands.send(RuntimeCommand::SubmitCredential {
+        id,
+        username: SecretString::new(username),
+        password: SecretString::new(password),
+        save,
+    });
+}
+
+#[tauri::command]
 pub fn cancel(state: State<AppState>) {
     if let Some(task_id) = state.lock_inner().current_task {
         state.commands.send(RuntimeCommand::Cancel(task_id));

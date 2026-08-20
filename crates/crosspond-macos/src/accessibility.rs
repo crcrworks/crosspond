@@ -66,6 +66,21 @@ impl AccessibilityBackend for MacOsAccessibility {
         }
     }
 
+    fn set_secure_value(&self, node_id: &str, value: &str) -> Result<String, ToolError> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (node_id, value);
+            return Err(ToolError::Failed(
+                "Accessibility is only available on macOS".into(),
+            ));
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            self.host.set_secure_value(node_id, value)
+        }
+    }
+
     fn describe_node(&self, node_id: &str) -> Option<String> {
         #[cfg(not(target_os = "macos"))]
         {
@@ -87,6 +102,17 @@ impl AccessibilityBackend for MacOsAccessibility {
         #[cfg(target_os = "macos")]
         {
             self.host.is_secure_node(node_id)
+        }
+    }
+
+    fn focused_is_secure(&self) -> bool {
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.host.focused_is_secure()
         }
     }
 }

@@ -16,6 +16,15 @@ export type AgentEvent =
 			title: string;
 			description: string;
 	  }
+	| {
+			type: 'credential_required';
+			task_id: string;
+			approval_id: string;
+			title: string;
+			credential_ref: string;
+			destination: string;
+			save_offered: boolean;
+	  }
 	| { type: 'artifact_created'; task_id: string; display_name: string }
 	| { type: 'task_completed'; task_id: string; summary: string; receipt: Receipt }
 	| { type: 'task_failed'; task_id: string; message: string }
