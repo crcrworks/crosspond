@@ -35,6 +35,7 @@ export class LauncherSession {
 		id: string;
 		title: string;
 		description: string;
+		body: 'prose' | 'command';
 	} | null>(null);
 	pendingCredential = $state<{
 		id: string;
@@ -175,7 +176,8 @@ export class LauncherSession {
 				this.pendingApproval = {
 					id: event.approval_id,
 					title: event.title,
-					description: event.description
+					description: event.description,
+					body: event.body === 'command' ? 'command' : 'prose'
 				};
 				this.state = 'waiting_approval';
 				break;

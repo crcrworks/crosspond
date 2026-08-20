@@ -454,6 +454,7 @@
 					<ApprovalCard
 						title={session.pendingApproval.title}
 						description={session.pendingApproval.description}
+						body={session.pendingApproval.body}
 						onallow={() => {
 							const id = session.pendingApproval?.id;
 							session.pendingApproval = null;
