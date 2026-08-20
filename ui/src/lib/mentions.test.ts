@@ -23,7 +23,7 @@ describe('filterCatalog', () => {
 		expect(filterCatalog('sc').map((item) => item.kind)).toEqual(['screen']);
 		expect(filterCatalog('画面').map((item) => item.kind)).toEqual(['screen', 'computer']);
 		expect(filterCatalog('知識').map((item) => item.kind)).toEqual(['vault_query']);
-		expect(filterCatalog('操作').map((item) => item.kind)).toEqual(['computer']);
+		expect(filterCatalog('操作').map((item) => item.kind)).toEqual(['computer', 'browser']);
 		expect(filterCatalog('').length).toBeGreaterThan(3);
 	});
 
@@ -48,6 +48,7 @@ describe('filterCatalog', () => {
 		expect(filterCatalog('borser').map((item) => item.kind)).toEqual(['browser']);
 		expect(filterCatalog('chrome').map((item) => item.kind)).toEqual(['browser']);
 		expect(filterCatalog('ブラ').map((item) => item.kind)).toEqual(['browser']);
+		expect(filterCatalog('browser')[0]?.description).toBe('ブラウザを操作');
 	});
 
 	it('renames web search to @search and keeps @web as an alias', () => {

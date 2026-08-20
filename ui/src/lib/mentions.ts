@@ -74,7 +74,7 @@ export const MENTION_CATALOG: MentionCatalogItem[] = [
 		kind: 'browser',
 		token: 'browser',
 		label: 'Browser',
-		description: 'ブラウザのタブ',
+		description: 'ブラウザを操作',
 		needsPicker: false,
 		aliases: ['chrome', 'borser']
 	},
