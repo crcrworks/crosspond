@@ -14,7 +14,7 @@ use crosspond_model::{
 };
 use crosspond_tools::{
     KnowledgeBackend, PathScope, ScratchReason, ScratchSpace, ToolContext, ToolRegistry,
-    classify_write_path, filesystem_registry,
+    classify_write_path, filesystem_registry, is_browser_tool, normalize_host, site_is_allowed,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -28,7 +28,8 @@ use crate::history::history_title;
 use crate::ids::{ConversationId, TaskId};
 use crate::mention::{self, Mention};
 use crate::policy::{
-    AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate_with, risk_for_tool,
+    AgentAsk, BrowserHostDecision, ComputerApprovalMode, PolicyDecision, RiskLevel,
+    browser_host_decision, evaluate_with, risk_for_tool,
 };
 use crate::receipt::{
     Receipt, append_event_log, receipt_action_line, tool_ui_summary, write_receipt, write_task_meta,
@@ -47,10 +48,25 @@ pub const MISSING_CHATGPT_MESSAGE: &str =
 
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn persist_allowed_browser_host(store: &dyn ConfigStore, host: &str) {
+    let host = normalize_host(host);
+    if host.is_empty() {
+        return;
+    }
+    let Ok(mut config) = store.load() else {
+        return;
+    };
+    if site_is_allowed(&config.browser_allowed_hosts, &host) {
+        return;
+    }
+    config.browser_allowed_hosts.push(host);
+    let _ = store.save(&config);
+}
+
 fn computer_approval_prompt(mode: ComputerApprovalMode) -> &'static str {
     match mode {
         ComputerApprovalMode::Auto => {
-            "All tools run without asking the user, including computer actions, shell, external files, and non-http URLs."
+            "All tools run without asking the user, including computer actions, shell, external files, non-http URLs, and browser tools on a new website host. Unknown hosts are not added to Allowed Sites; blocked hosts are still refused."
         }
         ComputerApprovalMode::Agent => {
             "For computer actions, set ask_user true when the action is irreversible, submits a form, sends a message, logs in, purchases, deletes, or you are unsure. Set ask_user false for routine navigation the user clearly requested. Omit ask_user only if you want the user asked. Shell, external files, and non-http URLs still require Allow."
@@ -101,10 +117,11 @@ Routing:\n\
 - Public facts from the web → web_search / fetch_url. Never put selected text, calendar details, passwords, or private file contents into a web_search query.\n\
 - Another Mac app → list_apps / open_app (and optional app= on snapshot/screenshot/UI tools). Do not list_directory unless the task is about local files.\n\
 {knowledge_route}\
-- Labeled UI controls → get_accessibility_snapshot (pass app= if not the ambient frontmost app), then ui_press. Prefer ui_press over ui_click.\n\
-- Unlabeled UI → take_screenshot then ui_click with exact image pixels (origin top-left). Use stated width×height; do not normalize to 1000×1000 or use screen coordinates.\n\
-- Typing / shortcuts / scrolling → ui_type, ui_hotkey, ui_scroll after a snapshot of the target app.\n\
-- Login dialogs → fill_credential with credential_ref from a Resource note. Never ask the user to paste a username or password in chat. Never pass them to ui_set_value, ui_type, or run_command. Do not invent a new credential_ref.\n\
+- Chromium pages (Chrome, Arc, Brave, Edge) when the Crosspond extension is connected → browser_snapshot for a compact outline with refs such as a1f3-e2, then browser_click / browser_fill / browser_type / browser_press_key / browser_scroll / browser_select. Do not use get_accessibility_snapshot or take_screenshot for those tabs. If browser_* tools say the extension is not connected, tell the user to load it from Settings; do not fall back to Accessibility or screenshots for Chromium.\n\
+- Native Mac apps and Safari: labeled UI controls → get_accessibility_snapshot (pass app= if not the ambient frontmost app), then ui_press. Prefer ui_press over ui_click.\n\
+- Native unlabeled UI → take_screenshot then ui_click with exact image pixels (origin top-left). Use stated width×height; do not normalize to 1000×1000 or use screen coordinates.\n\
+- Typing / shortcuts / scrolling in native apps → ui_type, ui_hotkey, ui_scroll after a snapshot of the target app.\n\
+- Native login dialogs → fill_credential with credential_ref from a Resource note. Never ask the user to paste a username or password in chat. Never pass them to ui_set_value, ui_type, or run_command. Do not invent a new credential_ref.\n\
 {shell_route}\
 ui_click returns a fresh post-click screenshot. Verify before another click; do not retry against an older image.\n\
 Click coordinates and node ids are only valid for the latest snapshot/screenshot.\n\
@@ -1295,6 +1312,39 @@ impl Runtime {
             .load()
             .map(|config| config.computer_approval)
             .unwrap_or_default();
+        if is_browser_tool(&call.name) {
+            let host = self.tools.target_host(&call.name, context, input);
+            let config = self.config.load().unwrap_or_default();
+            match browser_host_decision(
+                &call.name,
+                host.as_deref(),
+                &config.browser_allowed_hosts,
+                &config.browser_blocked_hosts,
+            ) {
+                BrowserHostDecision::Blocked(host) => {
+                    return ApprovalOutcome::Rejected(format!("blocked site {host}"));
+                }
+                BrowserHostDecision::NeedsAllow(host)
+                    if computer_approval != ComputerApprovalMode::Auto =>
+                {
+                    let title = format!("Allow {host}");
+                    let description = "The Chrome extension can read and operate this site. Page contents stay out of Settings, receipts, and logs.".into();
+                    match self
+                        .prompt_tool_approval(task_id, task_dir, &call.name, title, description)
+                        .await
+                    {
+                        ApprovalOutcome::Allowed => {
+                            persist_allowed_browser_host(self.config.as_ref(), &host);
+                            return ApprovalOutcome::Allowed;
+                        }
+                        other => return other,
+                    }
+                }
+                BrowserHostDecision::NeedsAllow(_)
+                | BrowserHostDecision::Skip
+                | BrowserHostDecision::Allowed => {}
+            }
+        }
         let risk = risk_for_tool(&call.name, scope, input);
         if evaluate_with(risk, computer_approval, AgentAsk::from_tool_input(input))
             != PolicyDecision::RequireApproval
@@ -1309,11 +1359,31 @@ impl Runtime {
             }
             return ApprovalOutcome::Allowed;
         }
-        let approval_id = ApprovalId::new();
         let (title, description) = self.tools.approval_prompt(&call.name, context, input);
+        match self
+            .prompt_tool_approval(task_id, task_dir, &call.name, title, description)
+            .await
+        {
+            ApprovalOutcome::Allowed => {
+                context.allow_external = true;
+                ApprovalOutcome::Allowed
+            }
+            other => other,
+        }
+    }
+
+    async fn prompt_tool_approval(
+        &mut self,
+        task_id: TaskId,
+        task_dir: &Path,
+        tool: &str,
+        title: String,
+        description: String,
+    ) -> ApprovalOutcome {
+        let approval_id = ApprovalId::new();
         append_event_log(
             task_dir,
-            json!({ "type": "approval_required", "tool": call.name }),
+            json!({ "type": "approval_required", "tool": tool }),
         );
         if self
             .events
@@ -1331,17 +1401,16 @@ impl Runtime {
             ApprovalWait::Approved => {
                 append_event_log(
                     task_dir,
-                    json!({ "type": "approval_granted", "tool": call.name }),
+                    json!({ "type": "approval_granted", "tool": tool }),
                 );
-                context.allow_external = true;
                 ApprovalOutcome::Allowed
             }
             ApprovalWait::Rejected => {
                 append_event_log(
                     task_dir,
-                    json!({ "type": "approval_rejected", "tool": call.name }),
+                    json!({ "type": "approval_rejected", "tool": tool }),
                 );
-                ApprovalOutcome::Rejected(format!("The user rejected tool `{}`.", call.name))
+                ApprovalOutcome::Rejected(format!("The user rejected tool `{tool}`."))
             }
             ApprovalWait::Cancelled { reset } => ApprovalOutcome::Cancelled { reset },
         }
@@ -1761,9 +1830,9 @@ mod tests {
     use crate::secret::memory::MemorySecretStore;
     use crate::secret::{CredentialBundle, SecretKey, SecretString};
     use crosspond_tools::{
-        AccessibilityBackend, AppBackend, CalendarBackend, InputBackend, Screenshot,
-        ScreenshotBackend, ToolError, computer_and_screenshot_registry, computer_registry,
-        register_shell_tools,
+        AccessibilityBackend, AppBackend, BrowserBackend, CalendarBackend, InputBackend,
+        Screenshot, ScreenshotBackend, ToolError, computer_and_screenshot_registry,
+        computer_and_screenshot_registry_with_browser, computer_registry, register_shell_tools,
     };
 
     fn echo_builder() -> ProviderBuilder {
@@ -1932,7 +2001,25 @@ mod tests {
         );
         assert!(prompt.contains("runs without asking"));
         assert!(prompt.contains("All tools run without asking"));
+        assert!(prompt.contains("not added to Allowed Sites"));
+        assert!(!prompt.contains("still needs Allow"));
         assert!(!prompt.contains("user must Allow"));
+    }
+
+    #[test]
+    fn system_prompt_routes_chromium_to_browser_tools() {
+        let prompt = system_prompt(
+            None,
+            &ContextCapsule::default(),
+            &[],
+            ComputerApprovalMode::Manual,
+            false,
+            "",
+            "",
+        );
+        assert!(prompt.contains("browser_snapshot"));
+        assert!(prompt.contains("do not fall back"));
+        assert!(prompt.contains("get_accessibility_snapshot"));
     }
 
     fn lab_indexed_vault() -> (IndexedVault, PathBuf, PathBuf) {
@@ -2688,6 +2775,67 @@ mod tests {
         assert!(system.contains("knowledge_search"));
         assert!(system.contains("knowledge_read"));
         assert!(!system.contains("Pinned"));
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn browser_mention_routes_without_screenshot() {
+        let pids = Arc::new(Mutex::new(Vec::new()));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let tools = computer_and_screenshot_registry(
+            Arc::new(RecordingAx {
+                pressed: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(TestShot {
+                pids: Arc::clone(&pids),
+            }),
+            Arc::new(TestApps),
+            Arc::new(TestInput),
+            Arc::new(TestCalendar),
+        );
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&requests),
+                })
+            })
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), tools);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                mentions: vec![Mention::Browser],
+                ..StartTaskRequest::new(task_id, "Continue を押して")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        assert!(pids.lock().expect("lock").is_empty());
+        {
+            let captured = requests.lock().expect("lock");
+            let user = captured[0]
+                .iter()
+                .find(|message| message.role == Role::User)
+                .expect("user");
+            assert!(user.images.is_empty());
+            assert!(user.content.contains("Continue"));
+            let system = &captured[0][0].content;
+            assert!(system.contains("User mentions"));
+            assert!(system.contains("browser_snapshot"));
+            assert!(system.contains("browser_click"));
+            assert!(!system.contains("Look at that image before acting"));
+        }
 
         drop(command_tx);
         join.await.unwrap();
@@ -3881,6 +4029,146 @@ mod tests {
         join.await.unwrap();
     }
 
+    fn browser_snapshot_provider() -> ProviderBuilder {
+        Arc::new(|_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "browser_snapshot",
+                "{}".into(),
+                "I can see the page.",
+            ))
+        })
+    }
+
+    #[tokio::test]
+    async fn auto_browser_snapshot_skips_host_allow_and_does_not_persist() {
+        let snapshots = Arc::new(Mutex::new(0));
+        let tools = test_browser_registry(Arc::new(TestBrowser::note_com(Arc::clone(&snapshots))));
+        let (runtime, _tmp) = test_runtime(browser_snapshot_provider(), seeded_secrets(), tools);
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let config = Arc::clone(&runtime.config);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "read this page",
+            )))
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "auto mode must not prompt for a new website host"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert_eq!(*snapshots.lock().expect("snapshots"), 1);
+        assert!(
+            config.load().unwrap().browser_allowed_hosts.is_empty(),
+            "Auto must not add the host to Allowed Sites"
+        );
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auto_browser_snapshot_still_rejects_blocked_host() {
+        let snapshots = Arc::new(Mutex::new(0));
+        let tools = test_browser_registry(Arc::new(TestBrowser::note_com(Arc::clone(&snapshots))));
+        let (runtime, _tmp) = test_runtime(browser_snapshot_provider(), seeded_secrets(), tools);
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                browser_blocked_hosts: vec!["note.com".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        let config = Arc::clone(&runtime.config);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "read this page",
+            )))
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "blocked hosts must not prompt"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert_eq!(*snapshots.lock().expect("snapshots"), 0);
+        assert!(config.load().unwrap().browser_allowed_hosts.is_empty());
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_browser_snapshot_prompts_and_persists_host() {
+        let snapshots = Arc::new(Mutex::new(0));
+        let tools = test_browser_registry(Arc::new(TestBrowser::note_com(Arc::clone(&snapshots))));
+        let (runtime, _tmp) = test_runtime(browser_snapshot_provider(), seeded_secrets(), tools);
+        let config = Arc::clone(&runtime.config);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "read this page",
+            )))
+            .unwrap();
+
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired {
+                approval_id, title, ..
+            } => {
+                assert!(title.contains("note.com"));
+                command_tx
+                    .send(RuntimeCommand::Approve(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert_eq!(*snapshots.lock().expect("snapshots"), 1);
+        assert_eq!(
+            config.load().unwrap().browser_allowed_hosts,
+            vec!["note.com".to_string()]
+        );
+
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
     #[tokio::test]
     async fn manual_run_command_requires_approval() {
         let marker =
@@ -4469,6 +4757,98 @@ mod tests {
 
     fn test_computer_registry(ax: Arc<dyn AccessibilityBackend>) -> ToolRegistry {
         computer_registry(ax, Arc::new(TestApps))
+    }
+
+    fn test_browser_registry(browser: Arc<dyn BrowserBackend>) -> ToolRegistry {
+        computer_and_screenshot_registry_with_browser(
+            Arc::new(RecordingAx {
+                pressed: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(TestShot {
+                pids: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(TestApps),
+            Arc::new(TestInput),
+            Arc::new(TestCalendar),
+            browser,
+        )
+    }
+
+    struct TestBrowser {
+        host: String,
+        snapshots: Arc<Mutex<u32>>,
+    }
+
+    impl TestBrowser {
+        fn note_com(snapshots: Arc<Mutex<u32>>) -> Self {
+            Self {
+                host: "note.com".into(),
+                snapshots,
+            }
+        }
+    }
+
+    impl BrowserBackend for TestBrowser {
+        fn connected(&self) -> bool {
+            true
+        }
+
+        fn current_host(&self) -> Option<String> {
+            Some(self.host.clone())
+        }
+
+        fn tabs(&self) -> Result<String, ToolError> {
+            Ok(format!("1. Note — https://{}/ (active)", self.host))
+        }
+
+        fn snapshot(&self) -> Result<String, ToolError> {
+            *self.snapshots.lock().expect("snapshots") += 1;
+            Ok(format!(
+                "Page: Note\nURL: https://{}/\n\nheading \"Hello\" [a1f3-e1]\n",
+                self.host
+            ))
+        }
+
+        fn text(&self) -> Result<String, ToolError> {
+            Ok("Hello from note.com".into())
+        }
+
+        fn navigate(&self, action: &str, _url: Option<&str>) -> Result<String, ToolError> {
+            Ok(format!("Navigated {action}"))
+        }
+
+        fn click(&self, element_ref: &str) -> Result<String, ToolError> {
+            Ok(format!("Clicked {element_ref}"))
+        }
+
+        fn type_text(&self, element_ref: &str, _text: &str) -> Result<String, ToolError> {
+            Ok(format!("Typed into {element_ref}"))
+        }
+
+        fn fill(&self, element_ref: &str, _text: &str) -> Result<String, ToolError> {
+            Ok(format!("Filled {element_ref}"))
+        }
+
+        fn press_key(&self, key: &str) -> Result<String, ToolError> {
+            Ok(format!("Pressed {key}"))
+        }
+
+        fn scroll(
+            &self,
+            direction: &str,
+            amount: u32,
+            _element_ref: Option<&str>,
+        ) -> Result<String, ToolError> {
+            Ok(format!("Scrolled {direction} {amount}"))
+        }
+
+        fn select_option(&self, element_ref: &str, value: &str) -> Result<String, ToolError> {
+            Ok(format!("Selected {value} in {element_ref}"))
+        }
+
+        fn new_tab(&self, url: Option<&str>) -> Result<String, ToolError> {
+            Ok(format!("Opened tab {}", url.unwrap_or("about:blank")))
+        }
     }
 
     struct RecordingAx {

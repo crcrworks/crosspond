@@ -6,9 +6,9 @@ Treat `docs/mvp.md` and `docs/architecture.md` as the product and design source 
 
 Implement one phase at a time. Do not start the next phase until the current one builds, formats, lints, and tests.
 
-Current phase: **Knowledge Vault complete (Phases 0–8)**. UI host is Tauri 2 + SvelteKit.
+Current phase: **Phase 13 Browser** (Chrome extension DOM path). Knowledge Vault is complete (Phases 0–8). UI host is Tauri 2 + SvelteKit.
 
-Out of scope until later: drag, `kill_app`, exposing cua-driver’s full catalog, signing/notarization.
+Out of scope until later: drag, `kill_app`, exposing cua-driver’s full catalog, signing/notarization, Safari/Firefox DOM, Chrome Web Store.
 
 ## Crate boundaries
 
@@ -20,6 +20,8 @@ crosspond-core
 model    knowledge
   │
   └── tools ← macos
+       ↑
+chrome-host (native messaging) ← Chrome MV3 extension
 ```
 
 - Only `crosspond-app` may depend on Tauri. Svelte lives in `ui/` and talks to Rust only through invoke/events.
@@ -28,6 +30,7 @@ model    knowledge
 - `crosspond-knowledge` must not depend on Tauri, `crosspond-core`, or `crosspond-macos`.
 - `crosspond-tools` must not depend on `crosspond-macos` (that would cycle through core).
 - `crosspond-macos` may depend on `crosspond-tools` and implements `AccessibilityBackend`, `ScreenshotBackend`, `AppBackend`, `InputBackend`, and `CalendarBackend` (cua-driver + EventKit).
+- `crosspond-chrome-host` must not depend on Tauri, core, or macos. `crosspond-app` owns the unix-socket server and writes native-host manifests. Only Chromium is in scope for `browser_*` tools.
 - UI and core must not import `global-hotkey` or Security framework crates directly.
 - `unsafe` stays in `crosspond-macos` (or platform bindings it wraps) and needs a comment.
 
@@ -45,7 +48,7 @@ WKWebView owns Japanese IME. Compact-bar click-away still skips hide while the a
 
 ## Secrets
 
-Never persist API keys or ChatGPT OAuth tokens in `config.json`, `.env`, SQLite, logs, task history, or the Knowledge Vault. Store them in Keychain via `SecretStore` (`provider.api_key` for the default Compatible endpoint, `provider.api_key.{id}` for additional endpoints, `exa.api_key`, `provider.chatgpt_oauth`). `SecretString` must not derive `Debug`. Do not log selected text, Finder paths, Accessibility field values (especially passwords), screenshot bytes, calendar event notes/bodies, or ChatGPT tokens/JWTs. Vault notes may only store `credential_ref` pointers, never secret values. Model lists are fetched in Rust (`GET {base}/models` or Codex `/codex/models`); the WebView receives ids and labels only. `reasoning.effort` is sent on Codex Responses only.
+Never persist API keys or ChatGPT OAuth tokens in `config.json`, `.env`, SQLite, logs, task history, or the Knowledge Vault. Store them in Keychain via `SecretStore` (`provider.api_key` for the default Compatible endpoint, `provider.api_key.{id}` for additional endpoints, `exa.api_key`, `provider.chatgpt_oauth`, `credential.{ref}` for vault login bundles). `SecretString` must not derive `Debug`. Do not log selected text, Finder paths, Accessibility field values (especially passwords), screenshot bytes, calendar event notes/bodies, ChatGPT tokens/JWTs, or login values. Vault notes may only store `credential_ref` pointers, never secret values. Model lists are fetched in Rust (`GET {base}/models` or Codex `/codex/models`); the WebView receives ids and labels only. `reasoning.effort` is sent on Codex Responses only.
 
 ## Cursor Cloud specific instructions
 
@@ -53,7 +56,7 @@ Crosspond targets **macOS**, but the Cloud Agent VM is **headless Linux**. Stand
 
 The portable crates — `crosspond-core`, `crosspond-model`, `crosspond-tools`, and `crosspond-knowledge` — build, lint, and test on Linux. `cargo fmt --all --check` is clean.
 
-- **Clippy caveat:** the documented `cargo clippy --workspace --all-targets -- -D warnings` is clean on macOS but fails on Linux **only inside `crosspond-macos`** stub code (`needless_return` / unused imports that don't exist on the macOS implementations). On Linux, lint the portable crates instead: `cargo clippy -p crosspond-core -p crosspond-model -p crosspond-tools -p crosspond-knowledge --all-targets -- -D warnings`.
+- **Clippy caveat:** the documented `cargo clippy --workspace --all-targets -- -D warnings` is clean on macOS but fails on Linux **only inside `crosspond-macos`** stub code (`needless_return` / unused imports that don't exist on the macOS implementations). On Linux, lint the portable crates instead: `cargo clippy -p crosspond-core -p crosspond-model -p crosspond-tools -p crosspond-knowledge -p crosspond-chrome-host --all-targets -- -D warnings`.
 - **macOS-gated tests:** `crosspond-macos` runs only 2 unit tests on Linux; the rest are `#[cfg(target_os = "macos")]` (cua-driver, EventKit, Keychain, hotkeys).
 - **Running the core headlessly:** the agent engine `crosspond-app` drives (`spawn_runtime_with_tools`) is platform-independent and runnable without macOS; `crosspond-core`'s runtime tests exercise `StartTask` → model stream → tool call → receipt end-to-end and are the best way to validate core behavior on Linux.
 - **GUI (Tauri):** `crosspond-app` is a **Tauri 2 + SvelteKit** app (frontend in `ui/`). The desktop GUI does not run on this headless VM, and building it on Linux needs WebKitGTK/GTK/libsoup3 system packages plus a `ui/` npm build that are **not** part of the current VM setup — validate GUI changes on macOS. NOTE: the Linux system-dependency setup and update script for this environment predate the GPUI→Tauri migration and should be re-validated for Tauri before relying on a Linux `crosspond-app` build.

@@ -28,7 +28,7 @@ Selected text is sent to the model when present, but it must not appear in `even
 
 Screenshot bytes are sent to the model for vision, but must not appear in `events.jsonl`, `session.json`, receipts, logs, or `Debug` output. Only tool name / success metadata is recorded.
 
-Do not log Accessibility field values. Password fields (`AXSecureTextField`) are shown as `••••` in snapshots and omitted from approval copy. `ui_set_value` and `ui_type` refuse secure fields; login uses `fill_credential`.
+Do not log Accessibility field values. Password fields (`AXSecureTextField`) are shown as `••••` in snapshots and omitted from approval copy. `ui_set_value` and `ui_type` refuse secure fields; native login uses `fill_credential`. Browser snapshots redact password, OTP, email, and phone-shaped values the same way. Page bodies, cookies, and `browser_fill` / `browser_type` text must not appear in `events.jsonl`, `session.json`, receipts, or logs.
 
 ## Login fill
 
@@ -40,10 +40,11 @@ Calendar event notes/bodies may be returned to the model from `calendar_events`,
 
 | Risk | Default |
 | --- | --- |
-| Read-only (`list_apps`, `get_accessibility_snapshot`, `take_screenshot`, `web_search`, `fetch_url`, `calendar_events`, scratch `read_file` / `list_directory`) | auto |
+| Read-only (`list_apps`, `get_accessibility_snapshot`, `take_screenshot`, `browser_tabs`, `web_search`, `fetch_url`, `calendar_events`, scratch `read_file` / `list_directory`) | auto |
+| Browser snapshot/text on a host not in `browser_allowed_hosts` | Manual/AI: Allow once, then persist the host. Auto: run without asking and do not persist |
+| Computer action (`open_app`, `focus_app`, `ui_press`, `ui_set_value`, `ui_click`, `ui_type`, `ui_hotkey`, `ui_scroll`, `fill_credential`, `browser_click`, `browser_fill`, `browser_type`, `browser_press_key`, `browser_scroll`, `browser_select`, `browser_navigate`, `browser_new_tab`) | `computer_approval`: Manual always asks; Auto never asks (unknown browser hosts are session-only and not added to Allowed Sites); Agent asks unless the model sets `ask_user: false`. A Keychain miss for `fill_credential` prompts for login first (that prompt is consent). |
 | Scratch-space write | auto |
 | External read or write (`read_file` / `list_directory` / `write_file` / `create_directory` outside scratch) | approval, except Auto |
-| Computer action (`open_app`, `focus_app`, `ui_press`, `ui_set_value`, `ui_click`, `ui_type`, `ui_hotkey`, `ui_scroll`, `fill_credential`) | `computer_approval`: Manual always asks; Auto never asks; Agent asks unless the model sets `ask_user: false`. A Keychain miss for `fill_credential` prompts for login first (that prompt is consent). |
 | Shell (`run_command`) | approval, except Auto |
 | `open_url` with non-http(s) schemes | approval, except Auto |
 | `open_url` with public http(s) (SSRF-checked) | auto |
@@ -55,7 +56,7 @@ Scratch membership is not `path.starts_with(scratch)`. Classify through `resolve
 
 Filesystem tools refuse paths outside the scratch space unless that one call was approved. Finder files are copied into `input/` so routine `read_file` stays scratch-scoped; the model may still request an absolute Mac path after Allow.
 
-AX node ids are valid only for the latest snapshot. Stale ids error instead of acting on the wrong control. Click coordinates are valid only for the latest screenshot.
+AX node ids are valid only for the latest snapshot. Stale ids error instead of acting on the wrong control. Click coordinates are valid only for the latest screenshot. Browser refs are valid only for the latest `browser_snapshot`.
 
 Approval copy for `ui_click` may include coordinates and the app name; it must not include the screenshot image.
 

@@ -60,6 +60,28 @@ export function toolActivityLabel(name: string): string {
 			return 'Searching the web…';
 		case 'fetch_url':
 			return 'Fetching a page…';
+		case 'browser_tabs':
+			return 'Listing browser tabs…';
+		case 'browser_snapshot':
+			return 'Reading the page…';
+		case 'browser_text':
+			return 'Reading page text…';
+		case 'browser_navigate':
+			return 'Navigating…';
+		case 'browser_click':
+			return 'Clicking the page…';
+		case 'browser_type':
+			return 'Typing in the page…';
+		case 'browser_fill':
+			return 'Filling a field…';
+		case 'browser_press_key':
+			return 'Pressing a key…';
+		case 'browser_scroll':
+			return 'Scrolling the page…';
+		case 'browser_select':
+			return 'Choosing an option…';
+		case 'browser_new_tab':
+			return 'Opening a tab…';
 		default:
 			return `Running ${name}…`;
 	}
@@ -127,6 +149,28 @@ export function toolDoneLabel(name: string): string {
 			return 'Searched the web';
 		case 'fetch_url':
 			return 'Fetched a page';
+		case 'browser_tabs':
+			return 'Listed browser tabs';
+		case 'browser_snapshot':
+			return 'Read the page';
+		case 'browser_text':
+			return 'Read page text';
+		case 'browser_navigate':
+			return 'Navigated';
+		case 'browser_click':
+			return 'Clicked the page';
+		case 'browser_type':
+			return 'Typed in the page';
+		case 'browser_fill':
+			return 'Filled a field';
+		case 'browser_press_key':
+			return 'Pressed a key';
+		case 'browser_scroll':
+			return 'Scrolled the page';
+		case 'browser_select':
+			return 'Chose an option';
+		case 'browser_new_tab':
+			return 'Opened a tab';
 		default:
 			return `Ran ${name}`;
 	}
@@ -188,7 +232,20 @@ export function toolVisual(name: string): ToolVisual {
 		case 'open_url':
 		case 'web_search':
 		case 'fetch_url':
+		case 'browser_tabs':
+		case 'browser_snapshot':
+		case 'browser_text':
+		case 'browser_navigate':
+		case 'browser_new_tab':
 			return { icon: '/icons/globe.svg', tone: 'blue' };
+		case 'browser_click':
+		case 'browser_press_key':
+		case 'browser_scroll':
+		case 'browser_select':
+			return { icon: '/icons/pointer.svg', tone: 'blue' };
+		case 'browser_type':
+		case 'browser_fill':
+			return { icon: '/icons/text.svg', tone: 'blue' };
 		default:
 			return { icon: '/icons/wrench.svg', tone: 'muted' };
 	}

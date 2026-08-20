@@ -56,8 +56,16 @@ export function loadSettings() {
 	return invoke<SettingsView>('load_settings');
 }
 
-export function saveConfig(vaultPath: string) {
-	return invoke('save_config', { vaultPath });
+export function saveConfig(
+	vaultPath: string,
+	browserAllowedHosts?: string[],
+	browserBlockedHosts?: string[]
+) {
+	return invoke('save_config', {
+		vaultPath,
+		browserAllowedHosts,
+		browserBlockedHosts
+	});
 }
 
 export function saveCompat(id: string, name: string, baseUrl: string) {

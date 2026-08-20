@@ -156,6 +156,12 @@ pub struct AppConfig {
     /// Global shortcut that toggles the launcher. Default is Option+Space.
     #[serde(default)]
     pub launcher_hotkey: LauncherHotkey,
+    /// eTLD+1 hosts the user has Allowed for Chromium browser tools.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_allowed_hosts: Vec<String>,
+    /// Hosts Chromium browser tools must refuse.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_blocked_hosts: Vec<String>,
 }
 
 impl AppConfig {
@@ -247,6 +253,8 @@ impl Default for AppConfig {
             computer_approval: ComputerApprovalMode::Manual,
             vault_path: None,
             launcher_hotkey: LauncherHotkey::default(),
+            browser_allowed_hosts: Vec::new(),
+            browser_blocked_hosts: Vec::new(),
         }
     }
 }
@@ -281,6 +289,10 @@ struct RawAppConfig {
     vault_path: Option<PathBuf>,
     #[serde(default)]
     launcher_hotkey: LauncherHotkey,
+    #[serde(default)]
+    browser_allowed_hosts: Vec<String>,
+    #[serde(default)]
+    browser_blocked_hosts: Vec<String>,
 }
 
 impl AppConfig {
@@ -293,6 +305,8 @@ impl AppConfig {
                 computer_approval: raw.computer_approval,
                 vault_path: raw.vault_path,
                 launcher_hotkey: raw.launcher_hotkey,
+                browser_allowed_hosts: raw.browser_allowed_hosts,
+                browser_blocked_hosts: raw.browser_blocked_hosts,
             }
         } else {
             migrate_legacy(raw)
@@ -331,6 +345,8 @@ fn migrate_legacy(raw: RawAppConfig) -> AppConfig {
         computer_approval: raw.computer_approval,
         vault_path: raw.vault_path,
         launcher_hotkey: raw.launcher_hotkey,
+        browser_allowed_hosts: raw.browser_allowed_hosts,
+        browser_blocked_hosts: raw.browser_blocked_hosts,
     }
 }
 
@@ -464,6 +480,9 @@ mod tests {
         assert_eq!(loaded.launcher_hotkey, LauncherHotkey::default());
         assert!(loaded.vault_path.is_none());
         assert!(!text.contains("vault_path"));
+        assert!(loaded.browser_allowed_hosts.is_empty());
+        assert!(loaded.browser_blocked_hosts.is_empty());
+        assert!(!text.contains("browser_allowed_hosts"));
         assert!(!text.contains("chatgpt_oauth"));
         assert!(!text.contains("access_token"));
         assert!(!text.contains("\"provider\""));
@@ -628,5 +647,27 @@ mod tests {
         let extra = config.openai_compat[1].id.clone();
         assert!(config.remove_compat(&extra));
         assert_eq!(config.openai_compat.len(), 1);
+    }
+
+    #[test]
+    fn browser_hosts_roundtrip_without_secrets() {
+        let dir = std::env::temp_dir().join(format!("crosspond-hosts-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("config.json");
+        let store = FileConfigStore::new(path.clone());
+        let config = AppConfig {
+            browser_allowed_hosts: vec!["example.com".into()],
+            browser_blocked_hosts: vec!["ads.example".into()],
+            ..AppConfig::default()
+        };
+        store.save(&config).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("example.com"));
+        assert!(text.contains("ads.example"));
+        assert!(!text.contains("api_key"));
+        assert!(!text.contains("sk-"));
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.browser_allowed_hosts, vec!["example.com"]);
+        assert_eq!(loaded.browser_blocked_hosts, vec!["ads.example"]);
+        let _ = fs::remove_dir_all(dir);
     }
 }

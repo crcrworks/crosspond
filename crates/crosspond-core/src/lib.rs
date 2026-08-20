@@ -50,8 +50,8 @@ pub use hotkey::{GlobalHotkeyService, HotkeyEvent, HotkeySpecError, HotkeyView, 
 pub use ids::{ConversationId, TaskId};
 pub use mention::{Mention, display_prompt, parse_running_app_names};
 pub use policy::{
-    AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate, evaluate_with,
-    risk_for_tool,
+    AgentAsk, BrowserHostDecision, ComputerApprovalMode, PolicyDecision, RiskLevel,
+    browser_host_decision, evaluate, evaluate_with, risk_for_tool,
 };
 pub use receipt::{Receipt, receipt_action_line, tool_ui_summary};
 pub use runtime::{
