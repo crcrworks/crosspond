@@ -8,6 +8,21 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$root"
 eval "$(bash "$root/.github/scripts/macos-bundle-paths.sh" "$triple" "$root")"
 
+echo "Checking bundled license files in $APP"
+for license in LICENSE-MIT LICENSE-APACHE; do
+	bundled="$APP/Contents/Resources/licenses/$license"
+	repo_license="$root/$license"
+	if [[ ! -f "$bundled" ]]; then
+		echo "missing $bundled" >&2
+		exit 1
+	fi
+	if ! cmp -s "$bundled" "$repo_license"; then
+		echo "bundled $bundled does not match $repo_license" >&2
+		exit 1
+	fi
+done
+echo "bundled LICENSE-MIT and LICENSE-APACHE match the repository"
+
 echo "Verifying code signature of $APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 

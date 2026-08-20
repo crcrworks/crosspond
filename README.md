@@ -69,23 +69,23 @@ Add the secrets below on **that environment**, not as ordinary repository secret
 
 ### Environment secrets
 
-All of the following are **required** for a public Release (unsigned builds must not be published):
+Unsigned builds must not be published. Not every secret is required in every setup:
 
 **Updater** — the matching public key is already in `crates/crosspond-app/tauri.conf.json`. The private key lives only on the machine that created it (`~/.tauri/crosspond.key`):
 
-- `TAURI_SIGNING_PRIVATE_KEY` — contents of `~/.tauri/crosspond.key`
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — empty unless you set a password
+- `TAURI_SIGNING_PRIVATE_KEY` — required; contents of `~/.tauri/crosspond.key`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — only if that private key has a password
 
 If that file is gone, generate a new pair with `npx --prefix ui tauri signer generate -w ~/.tauri/crosspond.key --ci` and replace the `plugins.updater.pubkey` value.
 
-**Apple Developer ID** — export a **Developer ID Application** `.p12`:
+**Apple Developer ID** — required; export a **Developer ID Application** `.p12`:
 
 - `APPLE_CERTIFICATE` — base64 of the `.p12` (`base64 -i certificate.p12 | pbcopy`)
 - `APPLE_CERTIFICATE_PASSWORD` — `.p12` password
 - `APPLE_SIGNING_IDENTITY` — optional; Tauri can infer it from the certificate
 - `APPLE_TEAM_ID` — required when notarizing with Apple ID
 
-**Notarization**, pick one complete set:
+**Notarization** — pick one complete set (App Store Connect API key **or** Apple ID):
 
 - App Store Connect API key: `APPLE_API_KEY` (key id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the `.p8` file body)
 - or `APPLE_ID` plus an app-specific `APPLE_PASSWORD` and `APPLE_TEAM_ID`
@@ -94,4 +94,4 @@ Optional repository secret (not environment): `RELEASE_PLEASE_TOKEN` (a PAT) if 
 
 ## Bundle notes
 
-`resources/macos/Info.plist` is the accessory-app manifest (`LSUIElement`). The Tauri host also sets Accessory at runtime so `cargo run` / `tauri dev` do not steal the frontmost app (tao defaults to Regular). `tauri build` produces a `.dmg` and updater archive, copies `crosspond-chrome-host` next to the app binary, and puts `extension/chrome` in `Contents/Resources/chrome-extension`. Settings → Browser still uses Load unpacked; the path is inside the app bundle.
+`resources/macos/Info.plist` is the accessory-app manifest (`LSUIElement`). The Tauri host also sets Accessory at runtime so `cargo run` / `tauri dev` do not steal the frontmost app (tao defaults to Regular). `tauri build` produces a `.dmg` and updater archive, copies `crosspond-chrome-host` next to the app binary, puts `extension/chrome` in `Contents/Resources/chrome-extension`, and copies `LICENSE-MIT` / `LICENSE-APACHE` to `Contents/Resources/licenses`. Settings → Browser still uses Load unpacked; the path is inside the app bundle.

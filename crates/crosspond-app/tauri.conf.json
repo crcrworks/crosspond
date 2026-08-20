@@ -55,7 +55,9 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../extension/chrome": "chrome-extension"
+      "../../extension/chrome": "chrome-extension",
+      "../../LICENSE-MIT": "licenses/LICENSE-MIT",
+      "../../LICENSE-APACHE": "licenses/LICENSE-APACHE"
     },
     "externalBin": ["binaries/crosspond-chrome-host"],
     "macOS": {

@@ -23,6 +23,19 @@ test("tauri beforeBuildCommand cwd resolves to the repo scripts path", () => {
 	assert.ok(existsSync(resolve(devCwd, devScript)));
 });
 
+test("tauri bundle resources include MIT and Apache license files", () => {
+	const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+	const tauriConf = JSON.parse(
+		readFileSync(resolve(repoRoot, "crates/crosspond-app/tauri.conf.json"), "utf8"),
+	);
+	const resources = tauriConf.bundle.resources;
+	assert.equal(resources["../../extension/chrome"], "chrome-extension");
+	assert.equal(resources["../../LICENSE-MIT"], "licenses/LICENSE-MIT");
+	assert.equal(resources["../../LICENSE-APACHE"], "licenses/LICENSE-APACHE");
+	assert.ok(existsSync(resolve(repoRoot, "LICENSE-MIT")));
+	assert.ok(existsSync(resolve(repoRoot, "LICENSE-APACHE")));
+});
+
 test("publish-release notarizes and staples the DMG after tauri-action, then verifies", () => {
 	const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 	const yml = readFileSync(resolve(repoRoot, ".github/workflows/publish-release.yml"), "utf8");
@@ -56,4 +69,6 @@ test("publish-release notarizes and staples the DMG after tauri-action, then ver
 	assert.match(verify, /spctl --assess --type execute -vv/);
 	assert.match(verify, /stapler validate/);
 	assert.match(verify, /assertDraftReleaseAssets/);
+	assert.match(verify, /for license in LICENSE-MIT LICENSE-APACHE/);
+	assert.match(verify, /Contents\/Resources\/licenses\/\$license/);
 });
