@@ -17,7 +17,7 @@ That runs the Tauri 2 host (`crates/crosspond-app`) and the SvelteKit Vite serve
 
 Then:
 
-1. On first launch, Crosspond opens a welcome. Press **⌘,** (or **Open Settings**) and open the **AI** tab: sign in with ChatGPT Plus/Pro and/or add one or more OpenAI Compatible endpoints (name, Base URL, API key). You can use both at once. Optionally add an Exa API key on the **Search** tab. The Knowledge Vault path defaults to `~/Documents/Crosspond` (**Knowledge** tab).
+1. On first launch, Crosspond opens a welcome. Press **⌘,** (or **Open Settings**) and open the **Models** tab: sign in with ChatGPT Plus/Pro and/or add one or more OpenAI Compatible endpoints (name, Base URL, API key). You can use both at once. Optionally add an Exa API key on the **Search** tab. The Knowledge Vault path defaults to `~/Documents/Crosspond` (**Knowledge** tab).
 2. Click **Save** / **Test** on each provider, then **Continue**. On **Crosspond is ready**, click **Open** (or press the launcher shortcut) to show the command bar. Pick the model (and ChatGPT effort) under the launcher prompt. If port 1455 is already in use (often Codex CLI), paste the ChatGPT redirect URL to finish sign-in.
 3. Grant Accessibility, Screen Recording, or Calendars later from Settings → Permissions, or when a tool needs them. Finder selection may also prompt for Automation.
 4. Select text in another app, or files in Finder — or leave Safari / Helium in front.

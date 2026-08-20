@@ -10,10 +10,13 @@ pub enum Mention {
     VaultLater,
     Screen,
     Computer,
-    App { name: String },
+    App {
+        name: String,
+    },
     Files,
     Calendar,
-    Web,
+    #[serde(alias = "web")]
+    Search,
 }
 
 impl Mention {
@@ -59,7 +62,7 @@ impl Mention {
             Self::App { .. } => "@app".into(),
             Self::Files => "@files".into(),
             Self::Calendar => "@calendar".into(),
-            Self::Web => "@web".into(),
+            Self::Search => "@search".into(),
         }
     }
 }
@@ -137,7 +140,7 @@ pub fn mention_routing(mentions: &[Mention]) -> String {
                         .into(),
                 );
             }
-            Mention::Web => {
+            Mention::Search => {
                 lines.push(
                     "- Use web_search / fetch_url. Do not answer from memory or the vault alone. Never put selected text, calendar details, passwords, or private file contents into a web_search query."
                         .into(),
@@ -216,6 +219,10 @@ mod tests {
             "@computer 進めて"
         );
         assert_eq!(display_prompt("hello", &[]), "hello");
+        assert_eq!(
+            display_prompt("調べて", &[Mention::Search]),
+            "@search 調べて"
+        );
     }
 
     #[test]
@@ -244,6 +251,14 @@ mod tests {
     }
 
     #[test]
+    fn search_routing_requires_web_tools() {
+        let text = mention_routing(&[Mention::Search]);
+        assert!(text.contains("web_search"));
+        assert!(text.contains("fetch_url"));
+        assert_eq!(Mention::Search.display_token(), "@search");
+    }
+
+    #[test]
     fn parse_running_app_names_keeps_running_only() {
         let listed = "Safari (com.apple.Safari) — running pid 12, frontmost\nNotes (com.apple.Notes) — not running\nMail (com.apple.mail) — running pid 44\n";
         assert_eq!(
@@ -257,7 +272,7 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_matches_ui_payload() {
-        let raw = r#"[{"kind":"screen"},{"kind":"vault_query"},{"kind":"computer"},{"kind":"app","name":"Safari"}]"#;
+        let raw = r#"[{"kind":"screen"},{"kind":"vault_query"},{"kind":"computer"},{"kind":"app","name":"Safari"},{"kind":"search"},{"kind":"web"}]"#;
         let mentions: Vec<Mention> = serde_json::from_str(raw).unwrap();
         assert_eq!(
             mentions,
@@ -268,6 +283,8 @@ mod tests {
                 Mention::App {
                     name: "Safari".into()
                 },
+                Mention::Search,
+                Mention::Search,
             ]
         );
     }

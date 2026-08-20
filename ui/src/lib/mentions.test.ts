@@ -45,6 +45,13 @@ describe('filterCatalog', () => {
 		expect(filterCatalog('later').map((item) => item.kind)).toEqual(['vault_later']);
 		expect(filterCatalog('computer').map((item) => item.kind)).toEqual(['computer']);
 	});
+
+	it('renames web search to @search and keeps @web as an alias', () => {
+		const search = filterCatalog('search')[0];
+		expect(search?.kind).toBe('search');
+		expect(search?.token).toBe('search');
+		expect(filterCatalog('web').map((item) => item.kind)).toEqual(['search']);
+	});
 });
 
 describe('takeInlineMentions', () => {
@@ -59,6 +66,15 @@ describe('takeInlineMentions', () => {
 		expect(taken.prompt).toBe('進めて');
 		expect(taken.mentions.map((item) => item.kind)).toEqual(['vault_query', 'computer']);
 	});
+
+	it('accepts @search and the @web alias', () => {
+		expect(takeInlineMentions('@search 調べて').mentions.map((item) => item.kind)).toEqual([
+			'search'
+		]);
+		expect(takeInlineMentions('@web 調べて').mentions.map((item) => item.kind)).toEqual([
+			'search'
+		]);
+	});
 });
 
 describe('displayPrompt', () => {
@@ -67,6 +83,7 @@ describe('displayPrompt', () => {
 			displayPrompt([{ kind: 'screen' }, { kind: 'vault_query' }], '進めて')
 		).toBe('@screen @vault-query 進めて');
 		expect(displayPrompt([{ kind: 'computer' }], '進めて')).toBe('@computer 進めて');
+		expect(displayPrompt([{ kind: 'search' }], '調べて')).toBe('@search 調べて');
 	});
 });
 
@@ -85,5 +102,6 @@ describe('chipLabel', () => {
 		expect(chipLabel({ kind: 'vault_query' })).toBe('Vault query');
 		expect(chipLabel({ kind: 'screen' })).toBe('Screen');
 		expect(chipLabel({ kind: 'computer' })).toBe('Computer');
+		expect(chipLabel({ kind: 'search' })).toBe('Search');
 	});
 });

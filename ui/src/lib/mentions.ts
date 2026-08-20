@@ -7,7 +7,7 @@ export type MentionKind =
 	| 'app'
 	| 'files'
 	| 'calendar'
-	| 'web';
+	| 'search';
 
 export type Mention =
 	| { kind: 'vault_query' }
@@ -18,7 +18,7 @@ export type Mention =
 	| { kind: 'app'; name: string }
 	| { kind: 'files' }
 	| { kind: 'calendar' }
-	| { kind: 'web' };
+	| { kind: 'search' };
 
 export type MentionCatalogItem = {
 	kind: MentionKind;
@@ -90,11 +90,12 @@ export const MENTION_CATALOG: MentionCatalogItem[] = [
 		needsPicker: false
 	},
 	{
-		kind: 'web',
-		token: 'web',
-		label: 'Web',
+		kind: 'search',
+		token: 'search',
+		label: 'Search',
 		description: 'ウェブで調べる',
-		needsPicker: false
+		needsPicker: false,
+		aliases: ['web']
 	}
 ];
 
@@ -110,11 +111,12 @@ const TOKEN_TO_KIND: Record<string, MentionKind> = {
 	app: 'app',
 	files: 'files',
 	calendar: 'calendar',
-	web: 'web'
+	search: 'search',
+	web: 'search'
 };
 
 const TOKEN_RE =
-	/(^|\s)[@＠](vault-query|vault-save|vault-later|computer|screen|save|later|files|calendar|web|query|app)\b/gi;
+	/(^|\s)[@＠](vault-query|vault-save|vault-later|computer|screen|save|later|files|calendar|search|web|query|app)\b/gi;
 
 export function mentionTrigger(
 	text: string,
@@ -161,8 +163,8 @@ export function chipLabel(mention: Mention): string {
 			return 'Files';
 		case 'calendar':
 			return 'Calendar';
-		case 'web':
-			return 'Web';
+		case 'search':
+			return 'Search';
 	}
 }
 
