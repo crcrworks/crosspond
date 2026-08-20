@@ -5,15 +5,19 @@ use crosspond_chrome_host::{EXTENSION_ID, resolve_extension_dir};
 use crosspond_core::{
     AppConfig, ApprovalId, CHATGPT_SOURCE, ComputerApprovalMode, ConversationId, ConversationView,
     DEFAULT_CHATGPT_MODEL, DEFAULT_COMPAT_ID, DEFAULT_COMPAT_MODEL, HotkeyView, LauncherHotkey,
-    ListedModel, MISSING_API_KEY_MESSAGE, MISSING_CHATGPT_MESSAGE, Mention, ReasoningEffort,
-    Receipt, RuntimeCommand, SecretChatGptTokenStore, SecretKey, SecretString, SelectedModel,
-    StartTaskRequest, TOKEN_URL, TaskId, conversation_artifact_path, default_tasks_root,
-    default_vault_path, ensure_model, fallback_chatgpt_models, fallback_compat_models,
-    fetch_chatgpt_models, fetch_compat_models, history_group_label, history_title,
-    list_recent_tasks, load_chatgpt_tokens, open_conversation as load_conversation,
-    parse_vault_path_input, provider_is_ready, refresh_chatgpt_session, selected_provider_is_ready,
+    ListedModel, MAX_ATTACHMENTS, MISSING_API_KEY_MESSAGE, MISSING_CHATGPT_MESSAGE, Mention,
+    ReasoningEffort, Receipt, RuntimeCommand, SecretChatGptTokenStore, SecretKey, SecretString,
+    SelectedModel, StartTaskRequest, TOKEN_URL, TaskId, conversation_artifact_path,
+    default_tasks_root, default_vault_path, ensure_model, fallback_chatgpt_models,
+    fallback_compat_models, fetch_chatgpt_models, fetch_compat_models, history_group_label,
+    history_title, list_recent_tasks, load_chatgpt_tokens, open_conversation as load_conversation,
+    parse_vault_path_input, pasted_image, provider_is_ready, refresh_chatgpt_session,
+    selected_provider_is_ready,
 };
-use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
+use crosspond_macos::{
+    PermissionKind, PermissionSnapshot, list_running_app_names, pick_media_files,
+    prepare_picked_file,
+};
 use crosspond_tools::parse_host_list;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
@@ -120,16 +124,33 @@ pub struct StartTaskResult {
     pub conversation_id: String,
 }
 
+#[derive(Serialize, Clone)]
+pub struct MediaView {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+}
+
+fn media_view(id: String, name: String, kind: &str) -> MediaView {
+    MediaView {
+        id,
+        name,
+        kind: kind.into(),
+    }
+}
+
 #[tauri::command]
 pub fn start_task(
     prompt: String,
     mentions: Option<Vec<Mention>>,
+    attachment_ids: Option<Vec<String>>,
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<StartTaskResult, String> {
     let prompt = prompt.trim().to_string();
     let mentions = mentions.unwrap_or_default();
-    if prompt.is_empty() && mentions.is_empty() {
+    let attachment_ids = attachment_ids.unwrap_or_default();
+    if prompt.is_empty() && mentions.is_empty() && attachment_ids.is_empty() {
         return Err("prompt is empty".into());
     }
     let config = state.config.load().unwrap_or_default();
@@ -139,6 +160,10 @@ pub fn start_task(
         } else {
             MISSING_API_KEY_MESSAGE.into()
         });
+    }
+    let attachments = state.take_pending(&attachment_ids);
+    if prompt.is_empty() && mentions.is_empty() && attachments.is_empty() {
+        return Err("prompt is empty".into());
     }
     let task_id = TaskId::new();
     let mut inner = state.lock_inner();
@@ -161,11 +186,46 @@ pub fn start_task(
             context,
             conversation_id,
             mentions,
+            attachments,
         }));
     Ok(StartTaskResult {
         task_id: task_id.to_string(),
         conversation_id: conversation_id.to_string(),
     })
+}
+
+#[tauri::command]
+pub fn pick_media(app: AppHandle, state: State<AppState>) -> Result<Vec<MediaView>, String> {
+    let remaining = MAX_ATTACHMENTS.saturating_sub(state.lock_pending_media().len());
+    if remaining == 0 {
+        return Err("too many attachments".into());
+    }
+    let paths = on_main(&app, |_| pick_media_files())?;
+    let mut added = Vec::new();
+    for path in paths.into_iter().take(remaining) {
+        let attachment = prepare_picked_file(&path)?;
+        let (id, name, kind) = state.add_pending(attachment)?;
+        added.push(media_view(id, name, kind));
+    }
+    Ok(added)
+}
+
+#[tauri::command]
+pub fn attach_pasted_image(
+    media_type: String,
+    data: String,
+    state: State<AppState>,
+) -> Result<MediaView, String> {
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data.trim())
+        .map_err(|_| "couldn’t read pasted image".to_string())?;
+    let attachment = pasted_image(&media_type, bytes)?;
+    let (id, name, kind) = state.add_pending(attachment)?;
+    Ok(media_view(id, name, kind))
+}
+
+#[tauri::command]
+pub fn remove_attachment(id: String, state: State<AppState>) {
+    state.remove_pending(&id);
 }
 
 #[tauri::command]
@@ -191,6 +251,7 @@ pub fn reset_session(app: AppHandle, state: State<AppState>) {
         state.commands.send(RuntimeCommand::Cancel(task_id));
     }
     state.commands.send(RuntimeCommand::ResetSession);
+    state.clear_pending();
     {
         let mut inner = state.lock_inner();
         inner.current_task = None;

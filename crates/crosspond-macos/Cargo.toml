@@ -25,6 +25,7 @@ objc2-foundation = { workspace = true, features = [
     "NSISO8601DateFormatter",
     "NSPredicate",
     "NSString",
+    "NSURL",
 ] }
 objc2-app-kit = { workspace = true, features = [
     "NSApplication",
@@ -34,6 +35,9 @@ objc2-app-kit = { workspace = true, features = [
     "NSWindow",
     "NSWorkspace",
     "NSRunningApplication",
+    "NSOpenPanel",
+    "NSSavePanel",
+    "NSPanel",
     "libc",
     "objc2-quartz-core",
 ] }

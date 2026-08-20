@@ -6,9 +6,14 @@ use std::time::Instant;
 
 use crosspond_chrome_host::BrowserBridge;
 use crosspond_core::{
-    CommandSender, ConfigStore, ContextCapsule, ContextCollector, ConversationId,
-    GlobalHotkeyService, SecretStore, TaskId, provider_is_ready,
+    AttachmentKind, CommandSender, ConfigStore, ContextCapsule, ContextCollector, ConversationId,
+    GlobalHotkeyService, MAX_ATTACHMENTS, SecretStore, TaskId, UserAttachment, provider_is_ready,
 };
+
+pub struct PendingMedia {
+    pub id: String,
+    pub attachment: UserAttachment,
+}
 
 pub struct PendingChatGptLogin {
     pub verifier: String,
@@ -27,6 +32,7 @@ pub struct AppState {
     pub pending_chatgpt: Mutex<Option<PendingChatGptLogin>>,
     pub models_cache: Mutex<Option<ModelsCacheEntry>>,
     pub models_generation: AtomicU64,
+    pub pending_media: Mutex<Vec<PendingMedia>>,
     _runtime: JoinHandle<()>,
 }
 
@@ -87,6 +93,7 @@ impl AppState {
             pending_chatgpt: Mutex::new(None),
             models_cache: Mutex::new(None),
             models_generation: AtomicU64::new(0),
+            pending_media: Mutex::new(Vec::new()),
             _runtime: runtime,
         }
     }
@@ -115,6 +122,52 @@ impl AppState {
 
     pub fn models_generation(&self) -> u64 {
         self.models_generation.load(Ordering::SeqCst)
+    }
+
+    pub fn lock_pending_media(&self) -> std::sync::MutexGuard<'_, Vec<PendingMedia>> {
+        self.pending_media
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+    }
+
+    pub fn add_pending(
+        &self,
+        attachment: UserAttachment,
+    ) -> Result<(String, String, &'static str), String> {
+        let mut pending = self.lock_pending_media();
+        if pending.len() >= MAX_ATTACHMENTS {
+            return Err("too many attachments".into());
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let name = attachment.display_name().to_string();
+        let kind = match attachment.kind {
+            AttachmentKind::Image => "image",
+            AttachmentKind::Video => "video",
+        };
+        pending.push(PendingMedia {
+            id: id.clone(),
+            attachment,
+        });
+        Ok((id, name, kind))
+    }
+
+    pub fn remove_pending(&self, id: &str) {
+        self.lock_pending_media().retain(|item| item.id != id);
+    }
+
+    pub fn take_pending(&self, ids: &[String]) -> Vec<UserAttachment> {
+        let mut pending = self.lock_pending_media();
+        let mut taken = Vec::new();
+        for id in ids {
+            if let Some(index) = pending.iter().position(|item| item.id == *id) {
+                taken.push(pending.remove(index).attachment);
+            }
+        }
+        taken
+    }
+
+    pub fn clear_pending(&self) {
+        self.lock_pending_media().clear();
     }
 }
 
