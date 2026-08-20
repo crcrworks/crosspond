@@ -55,12 +55,7 @@ The repo must be **public** (or Releases must be downloadable without auth) or i
 
 Prepare Release PR and Publish Release run only from **main** and refuse anyone who is not a repository **admin**. Apple / updater secrets are injected only into the macOS **bundle** job via GitHub Environment **`release`**.
 
-### Before the first public Release
-
-These are blockers for shipping a downloadable `.dmg`. Do not skip them.
-
-- **OSS license** — `Cargo.toml` is still `UNLICENSED`. Public source and a GitHub Release are not a license. Choose MIT / Apache-2.0 / GPL (or another) yourself, then add `LICENSE` and set `workspace.package.license`. This change does not pick one.
-- **Bundle identifier** — `crates/crosspond-app/tauri.conf.json` uses `com.crosspond.app`. Changing it after the first signed build is painful (Gatekeeper, updater, Keychain). Confirm you want this id before `/release`.
+Crosspond is licensed under **MIT OR Apache-2.0**. See [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE). The macOS Bundle ID is `com.crosspond.app`.
 
 ### GitHub Environment `release`
 

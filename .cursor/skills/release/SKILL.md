@@ -16,7 +16,6 @@ Crosspond の GitHub Release を実行する。**Publish Release** ワークフ�
 - `gh` CLI が認証済みであること
 - `PUBLIC_CHANGELOG.md` が埋まった prepare PR が存在する（または main にマージ済みである）こと
 - GitHub Environment **`release`** に Updater 署名鍵と Apple 署名・公証が揃っていること。手順は [README.md](../../../README.md) の Release 節
-- `Cargo.toml` が `UNLICENSED` のままなら、初回 public Release の前にライセンスを決める必要があることをユーザに伝える
 - 起動する GitHub ユーザーが repository **admin** であること（Write では失敗する）
 
 ## 手順
