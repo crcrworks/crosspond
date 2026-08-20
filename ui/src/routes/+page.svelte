@@ -467,6 +467,7 @@
 					<CredentialCard
 						title={session.pendingCredential.title}
 						credentialRef={session.pendingCredential.credentialRef}
+						destination={session.pendingCredential.destination}
 						saveOffered={session.pendingCredential.saveOffered}
 						onfill={(username, password, save) => {
 							const id = session.pendingCredential?.id;

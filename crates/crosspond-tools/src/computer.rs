@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::ax_outline::truncate_ax_text;
-use crate::browser::{BrowserBackend, DisconnectedBrowser};
+use crate::browser::{BrowserBackend, DisconnectedBrowser, site_is_allowed};
 use crate::registry::ToolRegistry;
 use crate::tool::{
     Tool, ToolContext, ToolDefinition, ToolError, ToolImage, ToolResult, truncate_output,
@@ -557,10 +557,27 @@ impl Tool for FillCredential {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("a saved login");
+        let destination = context
+            .credential_destination
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or_else(|| context.credential_hosts.first().map(String::as_str))
+            .unwrap_or("this login");
         (
-            format!("Fill saved login for {credential_ref}"),
+            format!("Fill saved login for {credential_ref} on {destination}"),
             app_clause(context),
         )
+    }
+
+    fn target_host(&self, _context: &ToolContext, _input: &Value) -> Option<String> {
+        self.browser
+            .pending_http_auth()
+            .map(|challenge| challenge.host)
+    }
+
+    fn abort_http_auth(&self) {
+        let _ = self.browser.cancel_http_auth();
     }
 
     fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
@@ -580,7 +597,6 @@ impl Tool for FillCredential {
         let password = context
             .fill_password
             .as_deref()
-            .map(str::trim)
             .filter(|value| !value.is_empty());
         if username_node.is_none() && password_node.is_none() {
             let Some(challenge) = self.browser.pending_http_auth() else {
@@ -588,6 +604,18 @@ impl Tool for FillCredential {
                     "no HTTP authentication challenge is pending. For HTTP file servers, use fetch_url with credential_ref (do not use the browser). For Chromium basic/digest auth, call browser_navigate or browser_new_tab first, then fill_credential with only credential_ref. For native login dialogs, pass username_node_id and/or password_node_id from get_accessibility_snapshot.".into(),
                 ));
             };
+            if !site_is_allowed(&context.credential_hosts, &challenge.host) {
+                let _ = self.browser.cancel_http_auth();
+                let message = if context.credential_hosts.is_empty() {
+                    "credential_ref has no http(s) URL on a vault Resource. Add the file server URL to that note.".into()
+                } else {
+                    format!(
+                        "credential_ref is not for {}. Use a URL from that Resource note.",
+                        challenge.host
+                    )
+                };
+                return Err(ToolError::Failed(message));
+            }
             let Some(username) = username else {
                 return Err(ToolError::Failed(
                     "login was not provided; Crosspond must collect it from the user".into(),
@@ -616,6 +644,13 @@ impl Tool for FillCredential {
         if password_node.is_some() && password.is_none() {
             return Err(ToolError::Failed(
                 "login was not provided; Crosspond must collect it from the user".into(),
+            ));
+        }
+        if let Some(node_id) = password_node.as_deref()
+            && !self.ax.is_secure_node(node_id)
+        {
+            return Err(ToolError::Failed(
+                "won't fill a password into a non-password field".into(),
             ));
         }
         if let (Some(node_id), Some(value)) = (username_node.as_deref(), username) {
@@ -1196,6 +1231,11 @@ mod tests {
         }
 
         fn set_secure_value(&self, node_id: &str, value: &str) -> Result<String, ToolError> {
+            if !self.is_secure_node(node_id) {
+                return Err(ToolError::Failed(
+                    "won't fill a password into a non-password field".into(),
+                ));
+            }
             if !self.known.contains(&node_id) && node_id != "9" {
                 return Err(ToolError::Failed(
                     "stale or unknown node id. Call get_accessibility_snapshot again.".into(),
@@ -1431,6 +1471,7 @@ mod tests {
         let mut context = ctx();
         context.fill_username = Some("labuser".into());
         context.fill_password = Some("hunter2".into());
+        context.credential_hosts = vec!["files.example.invalid".into()];
         let result = registry
             .execute(
                 "fill_credential",
@@ -1450,6 +1491,56 @@ mod tests {
     }
 
     #[test]
+    fn fill_credential_http_auth_rejects_unbound_host() {
+        let browser = Arc::new(MockBrowser::with_digest_auth());
+        let registry = computer_and_screenshot_registry_with_browser(
+            Arc::new(MockAx::checkout()),
+            Arc::new(MockShot::new()),
+            mock_apps(),
+            Arc::new(MockInput::new()),
+            Arc::new(MockCalendar),
+            Arc::clone(&browser) as _,
+        );
+        let mut context = ctx();
+        context.fill_username = Some("labuser".into());
+        context.fill_password = Some("hunter2".into());
+        context.credential_hosts = vec!["other.example.invalid".into()];
+        let err = registry
+            .execute(
+                "fill_credential",
+                &context,
+                json!({ "credential_ref": "lab.fileserver" }),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("not for"));
+        assert!(browser.pending_auth.lock().expect("lock").is_none());
+        assert!(browser.http_auth_fills.lock().expect("lock").is_empty());
+    }
+
+    #[test]
+    fn fill_credential_refuses_password_on_non_secure_node() {
+        let backend = Arc::new(MockAx::checkout());
+        let registry = computer_registry(Arc::clone(&backend) as _, mock_apps());
+        let mut context = ctx();
+        context.fill_username = Some("labuser".into());
+        context.fill_password = Some("hunter2".into());
+        let err = registry
+            .execute(
+                "fill_credential",
+                &context,
+                json!({
+                    "credential_ref": "lab.fileserver",
+                    "username_node_id": "2",
+                    "password_node_id": "2"
+                }),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("non-password"));
+        assert!(!err.to_string().contains("hunter2"));
+        assert!(backend.values.lock().expect("lock").is_empty());
+    }
+
+    #[test]
     fn fill_credential_http_auth_without_host_login_errors() {
         let browser = Arc::new(MockBrowser::with_digest_auth());
         let registry = computer_and_screenshot_registry_with_browser(
@@ -1460,10 +1551,12 @@ mod tests {
             Arc::new(MockCalendar),
             browser,
         );
+        let mut context = ctx();
+        context.credential_hosts = vec!["files.example.invalid".into()];
         let err = registry
             .execute(
                 "fill_credential",
-                &ctx(),
+                &context,
                 json!({ "credential_ref": "lab.fileserver" }),
             )
             .unwrap_err();

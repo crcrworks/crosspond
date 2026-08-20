@@ -22,6 +22,7 @@ impl KnowledgeBackend for VaultKnowledge {
             body: note.body,
             path: note.path.display().to_string(),
             credential_ref: note.credential_ref,
+            url: note.url,
         })
     }
 

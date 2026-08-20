@@ -109,6 +109,8 @@ async function dispatch(message) {
       return pendingHttpAuth(requiredTabId(message));
     case "continue_http_auth":
       return continueHttpAuth(requiredTabId(message), message);
+    case "cancel_http_auth":
+      return cancelPendingAuth(requiredTabId(message));
     default:
       throw new Error(`unknown op: ${op || "(missing)"}`);
   }
@@ -157,7 +159,10 @@ async function attach(tabId) {
     }
   }
   try {
-    await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", { handleAuthRequests: true });
+    await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", {
+      handleAuthRequests: true,
+      patterns: []
+    });
   } catch {
     // Already enabled on this target.
   }
@@ -376,9 +381,26 @@ async function continueHttpAuth(tabId, message) {
   return { tabId, url: tab.url || "", title: tab.title || "" };
 }
 
+async function cancelPendingAuth(tabId) {
+  const pending = pendingAuthByTab.get(tabId);
+  pendingAuthByTab.delete(tabId);
+  if (!pending || !pending.requestId) {
+    return { cancelled: false };
+  }
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Fetch.continueWithAuth", {
+      requestId: pending.requestId,
+      authChallengeResponse: { response: "CancelAuth" }
+    });
+  } catch {
+    // Challenge already settled or the tab is gone.
+  }
+  return { cancelled: true };
+}
+
 async function navigate(tabId, action, url) {
   await attach(tabId);
-  pendingAuthByTab.delete(tabId);
+  await cancelPendingAuth(tabId);
   if (action === "goto") {
     if (!url) {
       throw new Error("url is required for goto");

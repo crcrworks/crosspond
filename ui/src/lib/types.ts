@@ -22,6 +22,7 @@ export type AgentEvent =
 			approval_id: string;
 			title: string;
 			credential_ref: string;
+			destination: string;
 			save_offered: boolean;
 	  }
 	| { type: 'artifact_created'; task_id: string; display_name: string }

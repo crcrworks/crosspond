@@ -52,6 +52,8 @@ pub enum AgentEvent {
         approval_id: ApprovalId,
         title: String,
         credential_ref: String,
+        /// Host or app that will receive the login. Never a secret.
+        destination: String,
         save_offered: bool,
     },
     ArtifactCreated {
@@ -102,13 +104,15 @@ mod tests {
         let event = AgentEvent::CredentialRequired {
             task_id: TaskId::new(),
             approval_id: crate::command::ApprovalId::new(),
-            title: "Enter login for lab.fileserver".into(),
+            title: "Enter login for lab.fileserver on files.example.invalid".into(),
             credential_ref: "lab.fileserver".into(),
+            destination: "files.example.invalid".into(),
             save_offered: true,
         };
         let json = serde_json::to_value(&event).expect("serialize");
         assert_eq!(json["type"], "credential_required");
         assert_eq!(json["credential_ref"], "lab.fileserver");
+        assert_eq!(json["destination"], "files.example.invalid");
         assert_eq!(json["save_offered"].as_bool(), Some(true));
         assert!(json.get("username").is_none());
         assert!(json.get("password").is_none());

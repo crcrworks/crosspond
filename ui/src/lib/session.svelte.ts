@@ -40,6 +40,7 @@ export class LauncherSession {
 		id: string;
 		title: string;
 		credentialRef: string;
+		destination: string;
 		saveOffered: boolean;
 	} | null>(null);
 	artifacts = $state<string[]>([]);
@@ -183,6 +184,7 @@ export class LauncherSession {
 					id: event.approval_id,
 					title: event.title,
 					credentialRef: event.credential_ref,
+					destination: event.destination,
 					saveOffered: event.save_offered
 				};
 				this.state = 'waiting_approval';

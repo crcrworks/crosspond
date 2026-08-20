@@ -25,9 +25,9 @@ pub use ax_outline::{
 };
 pub use browser::{
     BrowserBackend, BrowserTransport, DisconnectedBrowser, EXTENSION_DISCONNECTED,
-    HttpAuthChallenge, host_from_url, http_auth_required_message, is_browser_tool,
-    is_browser_write_tool, normalize_host, parse_host_list, register_browser_tools,
-    site_is_allowed, site_is_blocked,
+    HttpAuthChallenge, host_from_url, http_auth_required_message, http_hosts_from_note,
+    is_browser_tool, is_browser_write_tool, normalize_host, parse_host_list,
+    register_browser_tools, site_is_allowed, site_is_blocked,
 };
 pub use browser_cdp::ExtensionBrowser;
 pub use calendar::{CalendarBackend, register_calendar_tools};
@@ -47,7 +47,7 @@ pub use path::{
 pub use registry::ToolRegistry;
 pub use scratch::{ScratchError, ScratchReason, ScratchSpace};
 pub use shell::{command_embeds_credentials, register_shell_tools};
-pub use ssrf::{is_blocked_ip, validate_fetch_url};
+pub use ssrf::{is_blocked_ip, validate_fetch_url, validate_fetch_url_for_hosts};
 pub use tool::{
     MAX_TOOL_OUTPUT_BYTES, Tool, ToolContext, ToolDefinition, ToolError, ToolImage, ToolResult,
 };

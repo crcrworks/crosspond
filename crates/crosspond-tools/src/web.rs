@@ -10,8 +10,12 @@ use reqwest::redirect::Policy;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::browser::{host_from_url, normalize_host};
 use crate::registry::ToolRegistry;
-use crate::ssrf::{max_redirects, validate_fetch_url, validate_url};
+use crate::ssrf::{
+    max_redirects, validate_fetch_url, validate_fetch_url_for_hosts, validate_url,
+    validate_url_allowing_private,
+};
 use crate::tool::{Tool, ToolContext, ToolDefinition, ToolError, ToolResult, truncate_output};
 
 const EXA_SEARCH_URL: &str = "https://api.exa.ai/search";
@@ -42,6 +46,39 @@ fn http_client() -> Result<Client, ToolError> {
                 return attempt.stop();
             }
             match validate_url(attempt.url()) {
+                Ok(()) => attempt.follow(),
+                Err(_) => attempt.error(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "redirect to blocked URL",
+                )),
+            }
+        }))
+        .build()
+        .map_err(|err| ToolError::Failed(format!("http client: {err}")))
+}
+
+fn http_client_same_host(origin_host: &str) -> Result<Client, ToolError> {
+    let origin = normalize_host(origin_host);
+    Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .redirect(Policy::custom(move |attempt| {
+            if attempt.previous().len() >= max_redirects() {
+                return attempt.stop();
+            }
+            let Some(host) = attempt.url().host_str() else {
+                return attempt.error(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "redirect to blocked URL",
+                ));
+            };
+            if normalize_host(host) != origin {
+                return attempt.error(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "redirect to a different host",
+                ));
+            }
+            match validate_url_allowing_private(attempt.url()) {
                 Ok(()) => attempt.follow(),
                 Err(_) => attempt.error(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
@@ -300,7 +337,7 @@ impl Tool for FetchUrl {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "fetch_url".into(),
-            description: "Fetch an http(s) page as the Crosspond host (no browser cookies). Starts with an unauthenticated HEAD. If the host requires HTTP basic or digest auth, call again with credential_ref from a Resource note; Crosspond collects the login. Do not pass a username or password, and do not use curl or run_command.".into(),
+            description: "Fetch an http(s) page as the Crosspond host (no browser cookies). Starts with an unauthenticated HEAD. If the host requires HTTP basic or digest auth, call again with credential_ref from a Resource note that lists this URL; Crosspond collects the login. Do not pass a username or password, and do not use curl or run_command.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -321,6 +358,11 @@ impl Tool for FetchUrl {
     fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
         let raw = required_string(&input, "url")?;
         let wants_login = optional_string(&input, "credential_ref").is_some();
+        let url = if wants_login {
+            validate_fetch_url_for_hosts(&raw, &context.credential_hosts)?
+        } else {
+            validate_fetch_url(&raw)?
+        };
         let creds = if wants_login {
             match (
                 context
@@ -331,7 +373,6 @@ impl Tool for FetchUrl {
                 context
                     .fill_password
                     .as_deref()
-                    .map(str::trim)
                     .filter(|value| !value.is_empty()),
             ) {
                 (Some(user), Some(password)) => Some((user, password)),
@@ -344,9 +385,39 @@ impl Tool for FetchUrl {
         } else {
             None
         };
-        let url = validate_fetch_url(&raw)?;
-        let client = http_client()?;
+        let client = if creds.is_some() {
+            let origin = url.host_str().unwrap_or("");
+            http_client_same_host(origin)?
+        } else {
+            http_client()?
+        };
         fetch_page(&client, url, creds)
+    }
+
+    fn approval_prompt(&self, context: &ToolContext, input: &Value) -> (String, String) {
+        let credential_ref =
+            optional_string(input, "credential_ref").unwrap_or_else(|| "a saved login".into());
+        let destination = context
+            .credential_destination
+            .clone()
+            .or_else(|| {
+                input
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .and_then(host_from_url)
+            })
+            .unwrap_or_else(|| "this host".into());
+        (
+            format!("Fetch {destination} with saved login {credential_ref}"),
+            String::new(),
+        )
+    }
+
+    fn target_host(&self, _context: &ToolContext, input: &Value) -> Option<String> {
+        input
+            .get("url")
+            .and_then(Value::as_str)
+            .and_then(host_from_url)
     }
 }
 
@@ -415,7 +486,7 @@ fn content_type_of(response: &reqwest::blocking::Response) -> String {
 }
 
 fn is_auth_status(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 401 | 403)
+    status.as_u16() == 401
 }
 
 fn is_method_not_allowed(status: reqwest::StatusCode) -> bool {
@@ -769,16 +840,15 @@ mod tests {
         assert!(unauthorized.contains("curl"));
         assert!(!unauthorized.contains(nonce));
         assert!(!unauthorized.contains("browser_navigate"));
-        let forbidden = auth_required_message(403, Some("Basic realm=\"files\""));
-        assert!(forbidden.contains("HTTP 403"));
-        assert!(forbidden.contains("Basic authentication"));
-        assert!(forbidden.contains("credential_ref"));
+        assert_eq!(fetch_failed_status(403), "fetch failed (HTTP 403)");
+        assert!(!fetch_failed_status(403).contains("credential_ref"));
         assert_eq!(fetch_failed_status(404), "fetch failed (HTTP 404)");
     }
 
     #[test]
     fn fetch_url_with_credential_ref_requires_injected_login() {
-        let context = ToolContext::new();
+        let mut context = ToolContext::new();
+        context.credential_hosts = vec!["example.com".into()];
         let err = FetchUrl
             .execute(
                 &context,
@@ -790,6 +860,43 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("collect"));
         assert!(!err.to_string().contains("labuser"));
+    }
+
+    #[test]
+    fn fetch_url_credential_ref_rejects_unbound_host() {
+        let mut context = ToolContext::new();
+        context.fill_username = Some("labuser".into());
+        context.fill_password = Some("hunter2".into());
+        context.credential_hosts = vec!["files.example.invalid".into()];
+        let err = FetchUrl
+            .execute(
+                &context,
+                json!({
+                    "url": "https://example.com/",
+                    "credential_ref": "lab.fileserver"
+                }),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("not for example.com"));
+        assert!(!err.to_string().contains("hunter2"));
+    }
+
+    #[test]
+    fn fetch_url_credential_ref_requires_note_hosts() {
+        let mut context = ToolContext::new();
+        context.fill_username = Some("labuser".into());
+        context.fill_password = Some("hunter2".into());
+        let err = FetchUrl
+            .execute(
+                &context,
+                json!({
+                    "url": "https://example.com/",
+                    "credential_ref": "lab.fileserver"
+                }),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("Resource"));
+        assert!(!err.to_string().contains("hunter2"));
     }
 
     #[test]
@@ -830,6 +937,45 @@ mod tests {
         let listing = fetch_page(&client, url, Some((TEST_USER, TEST_PASSWORD))).unwrap();
         assert!(listing.text.contains("Index of /share"));
         assert!(!listing.text.contains(TEST_PASSWORD));
+    }
+
+    #[test]
+    fn fetch_url_bound_loopback_digest_via_execute() {
+        let server = DigestServer::spawn();
+        let url = format!("http://{}/share/", server.addr);
+        let mut context = ToolContext::new();
+        context.fill_username = Some(TEST_USER.into());
+        context.fill_password = Some(TEST_PASSWORD.into());
+        context.credential_hosts = vec!["127.0.0.1".into()];
+        let listing = FetchUrl
+            .execute(
+                &context,
+                json!({
+                    "url": url,
+                    "credential_ref": "lab.fileserver"
+                }),
+            )
+            .unwrap();
+        assert!(listing.text.contains("Index of /share"));
+        assert!(!listing.text.contains(TEST_PASSWORD));
+    }
+
+    #[test]
+    fn fetch_url_forbidden_is_not_authentication_required() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            for mut stream in listener.incoming().take(4).flatten() {
+                let _ = stream
+                    .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\nforbidden");
+            }
+        });
+        let url = reqwest::Url::parse(&format!("http://{addr}/share/")).unwrap();
+        let client = http_client().unwrap();
+        let err = fetch_page(&client, url, None).unwrap_err().to_string();
+        assert!(err.contains("HTTP 403"));
+        assert!(!err.contains("credential_ref"));
     }
 
     const TEST_USER: &str = "alice";

@@ -14,7 +14,8 @@ use crosspond_model::{
 };
 use crosspond_tools::{
     KnowledgeBackend, PathScope, ScratchReason, ScratchSpace, ToolContext, ToolRegistry,
-    classify_write_path, filesystem_registry, is_browser_tool, normalize_host, site_is_allowed,
+    classify_write_path, filesystem_registry, host_from_url, http_hosts_from_note, is_browser_tool,
+    normalize_host, site_is_allowed,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -122,8 +123,8 @@ Routing:\n\
 - Native unlabeled UI → take_screenshot then ui_click with exact image pixels (origin top-left). Use stated width×height; do not normalize to 1000×1000 or use screen coordinates.\n\
 - Typing / shortcuts / scrolling in native apps → ui_type, ui_hotkey, ui_scroll after a snapshot of the target app.\n\
 - Native login dialogs → fill_credential with credential_ref from a Resource note and username_node_id / password_node_id from get_accessibility_snapshot. Never ask the user to paste a username or password in chat. Never pass them to ui_set_value, ui_type, browser_fill, or run_command. Do not invent a new credential_ref.\n\
-- HTTP basic/digest file servers (directory listings and downloads) → fetch_url first (unauthenticated HEAD, no browser cookies). If it reports authentication required, call fetch_url again with the same url and credential_ref from a Resource note. Crosspond collects the login if it is not in Keychain. Do not use the browser (saved cookies would skip the login). Do not use curl, wget, or run_command.\n\
-- Chromium HTTP authentication when already in a browser tab (basic/digest; a browser_* result that says authentication required) → fill_credential with only credential_ref. Do not pass node ids. Do not use curl, wget, run_command, or browser_fill for that challenge.\n\
+- HTTP basic/digest file servers (directory listings and downloads) → fetch_url first (unauthenticated HEAD, no browser cookies). If it reports authentication required, call fetch_url again with the same url and credential_ref from a Resource note that lists that host. Crosspond collects the login if it is not in Keychain. Do not use the browser (saved cookies would skip the login). Do not use curl, wget, or run_command.\n\
+- Chromium HTTP authentication when already in a browser tab (basic/digest; a browser_* result that says authentication required) → fill_credential with only credential_ref. The challenge host must match an http(s) URL on that Resource. Do not pass node ids. Do not use curl, wget, run_command, or browser_fill for that challenge.\n\
 {shell_route}\
 ui_click returns a fresh post-click screenshot. Verify before another click; do not retry against an older image.\n\
 Click coordinates and node ids are only valid for the latest snapshot/screenshot.\n\
@@ -1137,6 +1138,24 @@ impl Runtime {
         input: &serde_json::Value,
         context: &mut ToolContext,
     ) -> ApprovalOutcome {
+        let is_http_fill = call.name == "fill_credential" && !fill_uses_ax_nodes(input);
+        let outcome = self
+            .bind_and_collect_credentials(task_id, task_dir, call, input, context)
+            .await;
+        if is_http_fill && !matches!(outcome, ApprovalOutcome::Allowed) {
+            self.tools.abort_http_auth();
+        }
+        outcome
+    }
+
+    async fn bind_and_collect_credentials(
+        &mut self,
+        task_id: TaskId,
+        task_dir: &Path,
+        call: &ToolCall,
+        input: &serde_json::Value,
+        context: &mut ToolContext,
+    ) -> ApprovalOutcome {
         let credential_ref = match input
             .get("credential_ref")
             .and_then(Value::as_str)
@@ -1148,6 +1167,17 @@ impl Runtime {
             Ok(value) => value,
             Err(message) => return ApprovalOutcome::Rejected(message),
         };
+        let hosts = self.credential_hosts_for(&credential_ref);
+        context.credential_hosts = hosts.clone();
+        match self.credential_destination_for(call, input, context, &hosts) {
+            Ok(destination) => context.credential_destination = Some(destination),
+            Err(message) => return ApprovalOutcome::Rejected(message),
+        }
+        let destination = context
+            .credential_destination
+            .as_deref()
+            .unwrap_or("this login")
+            .to_string();
         let save_offered = self
             .knowledge
             .as_ref()
@@ -1165,6 +1195,7 @@ impl Runtime {
             json!({
                 "type": "credential_required",
                 "credential_ref": credential_ref,
+                "destination": destination,
                 "save_offered": save_offered
             }),
         );
@@ -1173,8 +1204,9 @@ impl Runtime {
             .send(AgentEvent::CredentialRequired {
                 task_id,
                 approval_id,
-                title: format!("Enter login for {credential_ref}"),
+                title: format!("Enter login for {credential_ref} on {destination}"),
                 credential_ref: credential_ref.clone(),
+                destination: destination.clone(),
                 save_offered,
             })
             .is_err()
@@ -1189,7 +1221,7 @@ impl Runtime {
             } => {
                 let username = username.expose().to_string();
                 let password = password.expose().to_string();
-                if username.trim().is_empty() || password.trim().is_empty() {
+                if username.trim().is_empty() || password.is_empty() {
                     return ApprovalOutcome::Rejected("username and password are required".into());
                 }
                 if save && save_offered {
@@ -1226,6 +1258,59 @@ impl Runtime {
             }
             CredentialWait::Cancelled { reset } => ApprovalOutcome::Cancelled { reset },
         }
+    }
+
+    fn credential_hosts_for(&self, credential_ref: &str) -> Vec<String> {
+        let Some(vault) = &self.knowledge else {
+            return Vec::new();
+        };
+        let mut hosts = Vec::new();
+        for (url, body) in vault.credential_note_sources(credential_ref) {
+            for host in http_hosts_from_note(url.as_deref(), &body) {
+                if !hosts.iter().any(|existing| existing == &host) {
+                    hosts.push(host);
+                }
+            }
+        }
+        hosts
+    }
+
+    fn credential_destination_for(
+        &self,
+        call: &ToolCall,
+        input: &serde_json::Value,
+        context: &ToolContext,
+        hosts: &[String],
+    ) -> Result<String, String> {
+        if call.name == "fetch_url" {
+            let raw = input
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let host = host_from_url(raw).ok_or_else(|| "url is required".to_string())?;
+            return bind_http_host(hosts, &host);
+        }
+        if call.name == "fill_credential" && !fill_uses_ax_nodes(input) {
+            let host = self
+                .tools
+                .target_host(&call.name, context, input)
+                .map(|value| normalize_host(&value))
+                .filter(|value| !value.is_empty());
+            let Some(host) = host else {
+                return Err(
+                    "no HTTP authentication challenge is pending. For HTTP file servers, use fetch_url with credential_ref (do not use the browser). For Chromium basic/digest auth, call browser_navigate or browser_new_tab first, then fill_credential with only credential_ref. For native login dialogs, pass username_node_id and/or password_node_id from get_accessibility_snapshot.".into(),
+                );
+            };
+            return bind_http_host(hosts, &host);
+        }
+        Ok(context
+            .frontmost_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("this app")
+            .to_string())
     }
 
     fn load_credential_bundle(&self, credential_ref: &str) -> Option<CredentialBundle> {
@@ -1694,6 +1779,31 @@ fn tool_call_needs_credentials(name: &str, input: &Value) -> bool {
     }
 }
 
+fn fill_uses_ax_nodes(input: &Value) -> bool {
+    ["username_node_id", "password_node_id"]
+        .iter()
+        .any(|key| match input.get(*key) {
+            None | Some(Value::Null) => false,
+            Some(Value::String(value)) => !value.trim().is_empty(),
+            Some(Value::Number(_)) => true,
+            _ => true,
+        })
+}
+
+fn bind_http_host(hosts: &[String], host: &str) -> Result<String, String> {
+    if hosts.is_empty() {
+        return Err(
+            "credential_ref has no http(s) URL on a vault Resource. Add the file server URL to that note.".into(),
+        );
+    }
+    if !site_is_allowed(hosts, host) {
+        return Err(format!(
+            "credential_ref is not for {host}. Use a URL from that Resource note."
+        ));
+    }
+    Ok(normalize_host(host))
+}
+
 fn model_tools(registry: &ToolRegistry) -> Vec<ToolDefinition> {
     registry
         .definitions()
@@ -2078,7 +2188,7 @@ mod tests {
                 NoteKind::Resource,
                 "Lab File Server",
                 &[],
-                "# Lab File Server\n\nsmb://lab-files\n",
+                "# Lab File Server\n\nhttps://files.example.invalid/inner/lab-share/\n\nsmb://lab-files\n",
                 Relations::default(),
                 Some("lab.fileserver"),
             ))
@@ -3769,6 +3879,7 @@ mod tests {
             approval_id,
             save_offered,
             credential_ref,
+            destination,
             ..
         } = event
         else {
@@ -3776,6 +3887,7 @@ mod tests {
         };
         assert!(save_offered);
         assert_eq!(credential_ref, "lab.fileserver");
+        assert_eq!(destination, "this app");
         command_tx
             .send(RuntimeCommand::SubmitCredential {
                 id: approval_id,
@@ -4076,6 +4188,121 @@ mod tests {
         let _ = std::fs::remove_file(sqlite);
     }
 
+    #[tokio::test]
+    async fn fill_credential_http_auth_prompts_with_destination() {
+        let continues = Arc::new(Mutex::new(0u32));
+        let browser = Arc::new(TestBrowser::lab_digest(Arc::clone(&continues)));
+        let tools = test_browser_registry(Arc::clone(&browser) as _);
+        let secrets = seeded_secrets();
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let (mut runtime, tmp) = test_runtime(fill_http_provider("lab.fileserver"), secrets, tools);
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "open the lab files",
+            )))
+            .unwrap();
+        let event = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::CredentialRequired { .. })
+        })
+        .await;
+        let AgentEvent::CredentialRequired {
+            approval_id,
+            destination,
+            title,
+            ..
+        } = event
+        else {
+            panic!("expected credential prompt");
+        };
+        assert_eq!(destination, "files.example.invalid");
+        assert!(title.contains("files.example.invalid"));
+        command_tx
+            .send(RuntimeCommand::SubmitCredential {
+                id: approval_id,
+                username: SecretString::new("labuser"),
+                password: SecretString::new("hunter2"),
+                save: false,
+            })
+            .unwrap();
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "login card is consent for HTTP fill"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert_eq!(*continues.lock().expect("lock"), 1);
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn fill_credential_http_auth_rejects_unbound_host() {
+        let continues = Arc::new(Mutex::new(0u32));
+        let browser = Arc::new(TestBrowser::digest_on(
+            "evil.example.invalid",
+            Arc::clone(&continues),
+        ));
+        let tools = test_browser_registry(Arc::clone(&browser) as _);
+        let secrets = seeded_secrets();
+        secrets
+            .set(
+                &SecretKey::credential("lab.fileserver").unwrap(),
+                &CredentialBundle {
+                    username: "labuser".into(),
+                    password: "hunter2".into(),
+                }
+                .encode(),
+            )
+            .unwrap();
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let (mut runtime, tmp) = test_runtime(fill_http_provider("lab.fileserver"), secrets, tools);
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "open the lab files",
+            )))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert_eq!(*continues.lock().expect("lock"), 0);
+        assert!(browser.pending_http_auth().is_none());
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
     struct RecordingFetchUrl {
         seen: Arc<Mutex<Option<(String, String)>>>,
     }
@@ -4124,6 +4351,21 @@ mod tests {
                 created_file: None,
                 image: None,
             })
+        }
+
+        fn approval_prompt(
+            &self,
+            context: &ToolContext,
+            _input: &serde_json::Value,
+        ) -> (String, String) {
+            let destination = context
+                .credential_destination
+                .as_deref()
+                .unwrap_or("this host");
+            (
+                format!("Fetch {destination} with saved login"),
+                String::new(),
+            )
         }
     }
 
@@ -4185,6 +4427,7 @@ mod tests {
             approval_id,
             save_offered,
             credential_ref,
+            destination,
             ..
         } = event
         else {
@@ -4192,6 +4435,7 @@ mod tests {
         };
         assert!(save_offered);
         assert_eq!(credential_ref, "lab.fileserver");
+        assert_eq!(destination, "files.example.invalid");
         command_tx
             .send(RuntimeCommand::SubmitCredential {
                 id: approval_id,
@@ -4291,6 +4535,137 @@ mod tests {
             *seen.lock().expect("lock"),
             Some(("labuser".into(), "hunter2".into()))
         );
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn fetch_url_with_credential_ref_asks_allow_in_manual() {
+        let seen = Arc::new(Mutex::new(None));
+        let tools = fetch_url_test_registry(Arc::clone(&seen));
+        let secrets = seeded_secrets();
+        secrets
+            .set(
+                &SecretKey::credential("lab.fileserver").unwrap(),
+                &CredentialBundle {
+                    username: "labuser".into(),
+                    password: "hunter2".into(),
+                }
+                .encode(),
+            )
+            .unwrap();
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let (mut runtime, tmp) = test_runtime(fetch_url_provider("lab.fileserver"), secrets, tools);
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Manual,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "list the lab files with curl",
+            )))
+            .unwrap();
+        let event = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        let AgentEvent::ApprovalRequired {
+            approval_id, title, ..
+        } = event
+        else {
+            panic!("expected Allow card");
+        };
+        assert!(title.contains("files.example.invalid"), "{title}");
+        command_tx
+            .send(RuntimeCommand::Approve(approval_id))
+            .unwrap();
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::CredentialRequired { .. }),
+                "Keychain hit must not show the login card"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert_eq!(
+            *seen.lock().expect("lock"),
+            Some(("labuser".into(), "hunter2".into()))
+        );
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn fetch_url_with_credential_ref_rejects_unbound_host() {
+        let seen = Arc::new(Mutex::new(None));
+        let tools = fetch_url_test_registry(Arc::clone(&seen));
+        let secrets = seeded_secrets();
+        secrets
+            .set(
+                &SecretKey::credential("lab.fileserver").unwrap(),
+                &CredentialBundle {
+                    username: "labuser".into(),
+                    password: "hunter2".into(),
+                }
+                .encode(),
+            )
+            .unwrap();
+        let arguments = serde_json::json!({
+            "url": "https://evil.example.invalid/share/",
+            "credential_ref": "lab.fileserver"
+        })
+        .to_string();
+        let provider: ProviderBuilder = Arc::new(move |_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "fetch_url",
+                arguments.clone(),
+                "Listed the lab share",
+            ))
+        });
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let (mut runtime, tmp) = test_runtime(provider, secrets, tools);
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "list the lab files with curl",
+            )))
+            .unwrap();
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::CredentialRequired { .. }),
+                "unbound host must not collect a login"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert!(seen.lock().expect("lock").is_none());
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;
@@ -5115,11 +5490,15 @@ mod tests {
         }
 
         fn lab_digest(continues: Arc<Mutex<u32>>) -> Self {
+            Self::digest_on("files.example.invalid", continues)
+        }
+
+        fn digest_on(host: &str, continues: Arc<Mutex<u32>>) -> Self {
             Self {
-                host: "files.example.invalid".into(),
+                host: host.into(),
                 snapshots: Arc::new(Mutex::new(0)),
                 http_auth: Mutex::new(Some(HttpAuthChallenge {
-                    host: "files.example.invalid".into(),
+                    host: host.into(),
                     scheme: "digest".into(),
                     realm: "lab-share".into(),
                 })),
@@ -5206,6 +5585,11 @@ mod tests {
             *self.http_auth_continues.lock().expect("continues") += 1;
             Ok("Filled HTTP authentication. Values were not returned.".into())
         }
+
+        fn cancel_http_auth(&self) -> Result<String, ToolError> {
+            *self.http_auth.lock().expect("auth") = None;
+            Ok(String::new())
+        }
     }
 
     struct RecordingAx {
@@ -5272,6 +5656,11 @@ mod tests {
         }
 
         fn set_secure_value(&self, node_id: &str, value: &str) -> Result<String, ToolError> {
+            if !self.is_secure_node(node_id) {
+                return Err(ToolError::Failed(
+                    "won't fill a password into a non-password field".into(),
+                ));
+            }
             self.values
                 .lock()
                 .expect("lock")

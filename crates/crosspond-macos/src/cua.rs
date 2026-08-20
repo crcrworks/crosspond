@@ -200,6 +200,11 @@ impl CuaHost {
         let id = parse_node_id(node_id)?;
         let live = self.live_state()?;
         let node = live.nodes.get(&id).cloned().ok_or_else(stale_node)?;
+        if !node.secure {
+            return Err(ToolError::Failed(
+                "won't fill a password into a non-password field".into(),
+            ));
+        }
         let mut arguments = json!({
             "pid": live.pid,
             "window_id": live.window_id,

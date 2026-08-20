@@ -11,14 +11,16 @@ describe('CredentialCard', () => {
 	it('shows login copy and the credential pointer, not a save switch by default', () => {
 		const { body } = render(CredentialCard, {
 			props: {
-				title: 'Enter login for lab.fileserver',
+				title: 'Enter login for lab.fileserver on files.example.invalid',
 				credentialRef: 'lab.fileserver',
+				destination: 'files.example.invalid',
 				saveOffered: false,
 				...handlers
 			}
 		});
 		expect(body).toContain('Needs login');
-		expect(body).toContain('Enter login for lab.fileserver');
+		expect(body).toContain('Enter login for lab.fileserver on files.example.invalid');
+		expect(body).toContain('files.example.invalid');
 		expect(body).toContain('lab.fileserver');
 		expect(body).toContain('Username');
 		expect(body).toContain('Password');
@@ -31,8 +33,9 @@ describe('CredentialCard', () => {
 	it('offers a Keychain switch defaulting to Off when save is allowed', () => {
 		const { body } = render(CredentialCard, {
 			props: {
-				title: 'Enter login for lab.fileserver',
+				title: 'Enter login for lab.fileserver on this app',
 				credentialRef: 'lab.fileserver',
+				destination: 'this app',
 				saveOffered: true,
 				...handlers
 			}

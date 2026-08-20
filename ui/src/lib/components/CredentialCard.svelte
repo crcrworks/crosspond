@@ -6,6 +6,7 @@
 	let {
 		title,
 		credentialRef,
+		destination,
 		saveOffered,
 		onfill,
 		oncancel,
@@ -14,6 +15,7 @@
 	}: {
 		title: string;
 		credentialRef: string;
+		destination: string;
 		saveOffered: boolean;
 		onfill: (username: string, password: string, save: boolean) => void;
 		oncancel: () => void;
@@ -25,7 +27,7 @@
 	let password = $state('');
 	let save = $state(false);
 
-	const canFill = $derived(username.trim().length > 0 && password.trim().length > 0);
+	const canFill = $derived(username.trim().length > 0 && password.length > 0);
 
 	const focusUsername: Attachment<HTMLInputElement> = (node) => {
 		node.focus();
@@ -54,6 +56,7 @@
 	<form class="flex flex-col gap-2" onsubmit={handleSubmit}>
 		<Badge label="Needs login" tone="yellow" />
 		<div class="text-sm">{title}</div>
+		<div class="text-sm text-[var(--muted)]">{destination}</div>
 		<div class="text-sm text-[var(--muted)]">{credentialRef}</div>
 		<label class="flex flex-col gap-1">
 			<span class="text-sm text-[var(--muted)]">Username</span>

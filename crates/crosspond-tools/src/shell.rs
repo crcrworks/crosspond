@@ -257,7 +257,7 @@ impl Tool for RunCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "run_command".into(),
-            description: "Run a shell command in the task scratch directory. stdout and stderr are returned. sudo is not allowed. Do not put usernames, passwords, curl --user/--digest, or user:pass URLs in the command; use fetch_url with credential_ref or fill_credential.".into(),
+            description: "Run a shell command in the task scratch directory. stdout and stderr are returned. sudo is not allowed. Do not put usernames, passwords, curl --user/--digest, or user:pass URLs in the command; use fetch_url with credential_ref or fill_credential. The login denylist is heuristic — Authorization headers and other flags are not covered.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {

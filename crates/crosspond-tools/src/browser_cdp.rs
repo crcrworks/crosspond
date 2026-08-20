@@ -494,6 +494,16 @@ impl BrowserBackend for ExtensionBrowser {
         self.with_action_snapshot("Filled HTTP authentication. Values were not returned.".into())
     }
 
+    fn cancel_http_auth(&self) -> Result<String, ToolError> {
+        self.session().http_auth = None;
+        let Some(tab_id) = self.session().tab_id else {
+            return Ok(String::new());
+        };
+        let _ = self.request(json!({ "op": "cancel_http_auth", "tabId": tab_id }));
+        self.session().http_auth = None;
+        Ok(String::new())
+    }
+
     fn describe_ref(&self, element_ref: &str) -> Option<String> {
         self.session().refs.get(element_ref).map(|bound| {
             let _redact_value = bound.secret;
@@ -665,6 +675,7 @@ mod tests {
 
     struct FakeTransport {
         calls: Mutex<Vec<String>>,
+        requests: Mutex<Vec<Value>>,
         http_auth_pending: Mutex<bool>,
     }
 
@@ -672,6 +683,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                requests: Mutex::new(Vec::new()),
                 http_auth_pending: Mutex::new(false),
             }
         }
@@ -683,6 +695,10 @@ mod tests {
         }
 
         fn call(&self, request: Value) -> Result<Value, ToolError> {
+            self.requests
+                .lock()
+                .expect("requests")
+                .push(request.clone());
             let op = request
                 .get("op")
                 .and_then(Value::as_str)
@@ -742,6 +758,10 @@ mod tests {
                         "title": "Share",
                         "url": "https://files.example.invalid/inner/"
                     })
+                }
+                "cancel_http_auth" => {
+                    *self.http_auth_pending.lock().expect("auth") = false;
+                    json!({ "cancelled": true })
                 }
                 "cdp" => {
                     let method = request
@@ -856,6 +876,21 @@ mod tests {
         assert!(filled.contains("Filled HTTP authentication"));
         assert!(!filled.contains("hunter2"));
         assert!(!filled.contains("labuser"));
+        let requests = transport.requests.lock().unwrap().clone();
+        let continue_req = requests
+            .iter()
+            .find(|request| request.get("op").and_then(Value::as_str) == Some("continue_http_auth"))
+            .expect("continue_http_auth");
+        assert_eq!(continue_req["username"], "labuser");
+        assert_eq!(continue_req["password"], "hunter2");
+        for request in &requests {
+            if request.get("op").and_then(Value::as_str) == Some("continue_http_auth") {
+                continue;
+            }
+            let text = request.to_string();
+            assert!(!text.contains("hunter2"), "{text}");
+            assert!(!text.contains("labuser"), "{text}");
+        }
         assert!(
             transport
                 .calls
@@ -864,14 +899,32 @@ mod tests {
                 .iter()
                 .any(|call| call == "continue_http_auth")
         );
-        assert!(
-            !transport
-                .calls
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|call| call.contains("hunter2") || call.contains("labuser"))
-        );
         assert!(browser.pending_http_auth().is_none());
+    }
+
+    #[test]
+    fn cancel_http_auth_does_not_send_secrets() {
+        let transport = Arc::new(FakeTransport::new());
+        let browser = ExtensionBrowser::new(Arc::clone(&transport) as Arc<dyn BrowserTransport>);
+        browser
+            .navigate(
+                "goto",
+                Some("https://files.example.invalid/inner/lab-share/"),
+            )
+            .unwrap();
+        assert!(browser.pending_http_auth().is_some());
+        browser.cancel_http_auth().unwrap();
+        assert!(browser.pending_http_auth().is_none());
+        let requests = transport.requests.lock().unwrap().clone();
+        assert!(
+            requests.iter().any(
+                |request| request.get("op").and_then(Value::as_str) == Some("cancel_http_auth")
+            )
+        );
+        for request in &requests {
+            let text = request.to_string();
+            assert!(!text.contains("hunter2"), "{text}");
+            assert!(!text.contains("labuser"), "{text}");
+        }
     }
 }

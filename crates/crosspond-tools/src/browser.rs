@@ -53,6 +53,10 @@ pub trait BrowserBackend: Send + Sync {
             "no HTTP authentication challenge is pending".into(),
         ))
     }
+    /// Drop a paused HTTP auth challenge without sending credentials.
+    fn cancel_http_auth(&self) -> Result<String, ToolError> {
+        Ok(String::new())
+    }
 }
 
 /// Public HTTP auth metadata. Never includes a username or password.
@@ -140,6 +144,50 @@ pub fn host_from_url(url: &str) -> Option<String> {
     };
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
     if host.is_empty() { None } else { Some(host) }
+}
+
+/// http(s) hosts listed on a Resource note (`url` frontmatter and body links).
+pub fn http_hosts_from_note(url: Option<&str>, body: &str) -> Vec<String> {
+    let mut hosts = Vec::new();
+    let mut push = |raw: &str| {
+        if let Some(host) = host_from_url(raw)
+            && !hosts.iter().any(|existing| existing == &host)
+        {
+            hosts.push(host);
+        }
+    };
+    if let Some(url) = url {
+        push(url);
+    }
+    let mut rest = body;
+    while let Some((start, end)) = next_http_url(rest) {
+        let mut token = rest[start..end].trim();
+        token = token.trim_end_matches(['.', ',', ';', ':', ')', ']']);
+        push(token);
+        if end >= rest.len() {
+            break;
+        }
+        rest = &rest[end..];
+    }
+    hosts
+}
+
+fn next_http_url(text: &str) -> Option<(usize, usize)> {
+    let http = text.find("http://");
+    let https = text.find("https://");
+    let start = match (http, https) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => return None,
+    };
+    let after = &text[start..];
+    let end_rel = after
+        .find(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ')' | ']' | '"' | '\'' | '<' | '>' | '`')
+        })
+        .unwrap_or(after.len());
+    Some((start, start + end_rel))
 }
 
 pub fn normalize_host(host: &str) -> String {
@@ -911,6 +959,11 @@ pub(crate) mod tests {
             *self.pending_auth.lock().expect("auth") = None;
             Ok("Filled HTTP authentication. Values were not returned.".into())
         }
+
+        fn cancel_http_auth(&self) -> Result<String, ToolError> {
+            *self.pending_auth.lock().expect("auth") = None;
+            Ok(String::new())
+        }
     }
 
     struct PanicShot;
@@ -1103,5 +1156,21 @@ pub(crate) mod tests {
             hosts,
             vec!["example.com".to_string(), "mail.example.com".to_string()]
         );
+    }
+
+    #[test]
+    fn http_hosts_from_note_reads_frontmatter_and_body() {
+        let hosts = http_hosts_from_note(
+            Some("https://files.example.invalid/inner/lab-share/"),
+            "# Lab File Server\n\nSee https://wiki.example.invalid/files and smb://lab-files\n",
+        );
+        assert_eq!(
+            hosts,
+            vec![
+                "files.example.invalid".to_string(),
+                "wiki.example.invalid".to_string()
+            ]
+        );
+        assert!(http_hosts_from_note(None, "smb://lab-files\n").is_empty());
     }
 }

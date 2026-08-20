@@ -131,6 +131,18 @@ pub fn risk_for_tool(name: &str, scope: PathScope, input: &serde_json::Value) ->
             RiskLevel::ComputerAction
         }
         "browser_tabs" | "browser_snapshot" | "browser_text" => RiskLevel::ReadOnly,
+        "fetch_url" => {
+            let has_ref = input
+                .get("credential_ref")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty());
+            if has_ref {
+                RiskLevel::ComputerAction
+            } else {
+                RiskLevel::ReadOnly
+            }
+        }
         name if is_browser_write_tool(name) => RiskLevel::ComputerAction,
         _ => risk_for_tool_scope(name, scope),
     }
@@ -138,9 +150,7 @@ pub fn risk_for_tool(name: &str, scope: PathScope, input: &serde_json::Value) ->
 
 fn risk_for_tool_scope(name: &str, scope: PathScope) -> RiskLevel {
     match (name, scope) {
-        ("get_accessibility_snapshot" | "take_screenshot" | "web_search" | "fetch_url", _) => {
-            RiskLevel::ReadOnly
-        }
+        ("get_accessibility_snapshot" | "take_screenshot" | "web_search", _) => RiskLevel::ReadOnly,
         ("read_file" | "list_directory", PathScope::Workspace) => RiskLevel::ReadOnly,
         ("read_file" | "list_directory", PathScope::External) => RiskLevel::ExternalWrite,
         ("write_file" | "create_directory", PathScope::Workspace) => RiskLevel::WorkspaceWrite,
@@ -315,6 +325,22 @@ mod tests {
                 &empty_input()
             )),
             PolicyDecision::Allow
+        );
+        assert_eq!(
+            risk_for_tool(
+                "fetch_url",
+                PathScope::Workspace,
+                &json!({"url": "https://example.com/", "credential_ref": "lab.fileserver"})
+            ),
+            RiskLevel::ComputerAction
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "fetch_url",
+                PathScope::Workspace,
+                &json!({"url": "https://example.com/", "credential_ref": "lab.fileserver"})
+            )),
+            PolicyDecision::RequireApproval
         );
     }
 

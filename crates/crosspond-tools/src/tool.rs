@@ -30,6 +30,10 @@ pub struct ToolContext {
     pub fill_username: Option<String>,
     /// Host-injected password for `fill_credential`. `Debug` redacts the value.
     pub fill_password: Option<String>,
+    /// http(s) hosts listed on the Resource note for this `credential_ref`.
+    pub credential_hosts: Vec<String>,
+    /// Host or app name shown on Allow / login cards. Never a secret.
+    pub credential_destination: Option<String>,
     /// Read-only Knowledge Vault lookup. Absent when no vault is configured.
     pub knowledge: Option<Arc<dyn KnowledgeBackend>>,
 }
@@ -60,6 +64,8 @@ impl std::fmt::Debug for ToolContext {
             )
             .field("fill_username", &self.fill_username.as_ref().map(|_| "***"))
             .field("fill_password", &self.fill_password.as_ref().map(|_| "***"))
+            .field("credential_hosts", &self.credential_hosts)
+            .field("credential_destination", &self.credential_destination)
             .field("knowledge", &self.knowledge.as_ref().map(|_| "set"))
             .finish()
     }
@@ -113,6 +119,9 @@ pub trait Tool: Send + Sync {
     fn target_host(&self, _context: &ToolContext, _input: &Value) -> Option<String> {
         None
     }
+
+    /// Drop a paused Chromium HTTP auth challenge without sending credentials.
+    fn abort_http_auth(&self) {}
 }
 
 pub fn truncate_output(text: String) -> String {
