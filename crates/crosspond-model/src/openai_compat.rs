@@ -685,6 +685,7 @@ mod tests {
                     bytes: b"\xff\xd8\xff".to_vec(),
                     width: Some(100),
                     height: Some(50),
+                    source: crate::provider::ImageSource::Screenshot,
                 }],
             ),
         ];

@@ -495,6 +495,7 @@ mod tests {
                     bytes: b"PNGSECRET".to_vec(),
                     width: Some(10),
                     height: Some(10),
+                    source: crosspond_model::ImageSource::Screenshot,
                 }],
             ),
             Message::assistant("Done."),

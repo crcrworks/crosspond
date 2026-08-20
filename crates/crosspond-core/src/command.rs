@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::attachment::UserAttachment;
 use crate::context::ContextCapsule;
 use crate::ids::{ConversationId, TaskId};
 use crate::mention::Mention;
@@ -43,13 +44,27 @@ pub enum RuntimeCommand {
     ReloadKnowledge,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct StartTaskRequest {
     pub task_id: TaskId,
     pub prompt: String,
     pub context: ContextCapsule,
     pub conversation_id: ConversationId,
     pub mentions: Vec<Mention>,
+    pub attachments: Vec<UserAttachment>,
+}
+
+impl std::fmt::Debug for StartTaskRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StartTaskRequest")
+            .field("task_id", &self.task_id)
+            .field("prompt", &self.prompt)
+            .field("context", &self.context)
+            .field("conversation_id", &self.conversation_id)
+            .field("mentions", &self.mentions)
+            .field("attachments", &self.attachments)
+            .finish()
+    }
 }
 
 impl StartTaskRequest {
@@ -60,6 +75,7 @@ impl StartTaskRequest {
             context: ContextCapsule::default(),
             conversation_id: ConversationId::new(),
             mentions: Vec::new(),
+            attachments: Vec::new(),
         }
     }
 }

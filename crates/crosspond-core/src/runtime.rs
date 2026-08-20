@@ -9,8 +9,9 @@ use crosspond_knowledge::{
     VaultRepository, VaultWatcher, WatchMode, index_db_path, looks_like_read_later, parse_note_id,
 };
 use crosspond_model::{
-    ImagePart, Message, ModelError, ModelEvent, ModelProvider, ModelRequest, ProviderAuth,
-    ProviderBuilder, Role, ToolCall, ToolDefinition, default_provider_builder, keep_latest_images,
+    ImagePart, ImageSource, Message, ModelError, ModelEvent, ModelProvider, ModelRequest,
+    ProviderAuth, ProviderBuilder, Role, ToolCall, ToolDefinition, default_provider_builder,
+    keep_latest_images,
 };
 use crosspond_tools::{
     KnowledgeBackend, PathScope, ScratchReason, ScratchSpace, ToolContext, ToolRegistry,
@@ -19,6 +20,7 @@ use crosspond_tools::{
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
+use crate::attachment;
 use crate::command::{ApprovalId, RuntimeCommand, StartTaskRequest};
 use crate::config::{AppConfig, ConfigStore};
 use crate::context::{ContextCapsule, StagedInput, stage_selected_files};
@@ -374,7 +376,11 @@ impl Runtime {
 
     async fn start_task(&mut self, request: StartTaskRequest) {
         let task_id = request.task_id;
-        let stored_prompt = mention::display_prompt(&request.prompt, &request.mentions);
+        let stored_prompt = mention::display_prompt_with_attachments(
+            &request.prompt,
+            &request.mentions,
+            &attachment::display_names(&request.attachments),
+        );
         if self
             .events
             .send(AgentEvent::TaskStarted {
@@ -436,6 +442,22 @@ impl Runtime {
             }
         } else if self.conversation_id.is_none() {
             self.conversation_id = Some(request.conversation_id);
+        }
+        let mut staged_this_turn = Vec::new();
+        if !request.attachments.is_empty() {
+            match self.ensure_scratch(task_id, ScratchReason::FileProcessing) {
+                Ok(scratch) => {
+                    staged_this_turn =
+                        attachment::stage_user_attachments(&scratch.input, &request.attachments);
+                    self.staged_inputs.extend(staged_this_turn.clone());
+                }
+                Err(message) => {
+                    let _ = self
+                        .events
+                        .send(AgentEvent::TaskFailed { task_id, message });
+                    return;
+                }
+            }
         }
         self.write_meta(&task_dir, task_id, &stored_prompt, "running", None);
         append_event_log(&task_dir, json!({ "type": "task_started" }));
@@ -502,15 +524,24 @@ impl Runtime {
             .as_ref()
             .map(KnowledgeBrief::render)
             .unwrap_or_default();
-        let mentions_block = mention::mention_routing(&request.mentions);
-        let mut screen_images = Vec::new();
+        let mut mentions_block = mention::mention_routing(&request.mentions);
+        let attach_block = attachment::routing(&request.attachments, &staged_this_turn);
+        if !attach_block.is_empty() {
+            if mentions_block.is_empty() {
+                mentions_block = attach_block;
+            } else {
+                mentions_block.push('\n');
+                mentions_block.push_str(&attach_block);
+            }
+        }
+        let mut user_images = attachment::vision_parts(&request.attachments);
         if request.mentions.iter().any(Mention::wants_screenshot) {
             let app = request.mentions.iter().find_map(Mention::app_name);
             match self
                 .capture_mention_screenshot(task_id, &task_dir, app)
                 .await
             {
-                Ok(image) => screen_images.push(image),
+                Ok(image) => user_images.push(image),
                 Err(message) => {
                     let _ = self
                         .events
@@ -530,11 +561,16 @@ impl Runtime {
             &mentions_block,
         )));
         messages.extend(self.session.iter().cloned());
-        let user_text = mention::model_user_text(&request.prompt, &request.mentions);
+        let user_text = mention::model_user_text_with_staged(
+            &request.prompt,
+            &request.mentions,
+            &request.attachments,
+            &staged_this_turn,
+        );
         messages.push(Message {
             role: Role::User,
             content: user_text,
-            images: screen_images,
+            images: user_images,
             tool_calls: Vec::new(),
             tool_call_id: None,
             encrypted_reasoning: None,
@@ -736,6 +772,7 @@ impl Runtime {
                                     bytes: img.bytes,
                                     width: Some(img.width),
                                     height: Some(img.height),
+                                    source: ImageSource::Screenshot,
                                 }]
                             })
                             .unwrap_or_default();
@@ -1105,6 +1142,7 @@ impl Runtime {
             bytes: image.bytes,
             width: Some(image.width),
             height: Some(image.height),
+            source: ImageSource::Screenshot,
         })
     }
 
@@ -2621,6 +2659,233 @@ mod tests {
             assert!(system.contains("browser_snapshot"));
             assert!(system.contains("browser_click"));
             assert!(!system.contains("Look at that image before acting"));
+        }
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn user_image_attachment_is_sent_and_staged() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&requests),
+                })
+            })
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let task_id = TaskId::new();
+        let secret_bytes = b"\x89PNGSECRET".to_vec();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                attachments: vec![crate::attachment::UserAttachment {
+                    name: "photo.png".into(),
+                    kind: crate::attachment::AttachmentKind::Image,
+                    media_type: "image/png".into(),
+                    bytes: secret_bytes.clone(),
+                    source_path: Some(PathBuf::from("/Users/me/Desktop/photo.png")),
+                    width: None,
+                    height: None,
+                }],
+                ..StartTaskRequest::new(task_id, "これは何")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        {
+            let captured = requests.lock().expect("lock");
+            let user = captured[0]
+                .iter()
+                .find(|message| message.role == Role::User)
+                .expect("user");
+            assert_eq!(user.images.len(), 1);
+            assert_eq!(user.images[0].source, ImageSource::Attachment);
+            assert_eq!(user.images[0].bytes, secret_bytes);
+            assert!(user.content.contains("photo.png"));
+            let system = &captured[0][0].content;
+            assert!(system.contains("input/photo.png") || system.contains("attached as an image"));
+            assert!(!system.contains("/Users/me/Desktop/photo.png"));
+        }
+        let copied = scratch_dir(&tmp.0, task_id).join("input").join("photo.png");
+        assert_eq!(std::fs::read(&copied).unwrap(), secret_bytes);
+        let events = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert!(!events.contains('\u{89}'));
+        assert!(!events.contains("PNGSECRET"));
+        assert!(!events.contains("/Users/me/Desktop/photo.png"));
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn user_video_attachment_is_staged_with_poster() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&requests),
+                })
+            })
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let source = tmp.0.join("clip.mov");
+        std::fs::write(&source, "movie-bytes").unwrap();
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                attachments: vec![crate::attachment::UserAttachment {
+                    name: "clip.mov".into(),
+                    kind: crate::attachment::AttachmentKind::Video,
+                    media_type: "video/quicktime".into(),
+                    bytes: b"\xff\xd8poster".to_vec(),
+                    source_path: Some(source.clone()),
+                    width: None,
+                    height: None,
+                }],
+                ..StartTaskRequest::new(task_id, String::new())
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        {
+            let captured = requests.lock().expect("lock");
+            let user = captured[0]
+                .iter()
+                .find(|message| message.role == Role::User)
+                .expect("user");
+            assert_eq!(user.images.len(), 1);
+            assert_eq!(user.images[0].media_type, "image/jpeg");
+            assert_eq!(user.images[0].source, ImageSource::Attachment);
+            assert!(user.content.contains("cannot play video"));
+            let system = &captured[0][0].content;
+            assert!(system.contains("input/clip.mov"));
+            assert!(!system.contains(&source.display().to_string()));
+        }
+        let copied = scratch_dir(&tmp.0, task_id).join("input").join("clip.mov");
+        assert_eq!(std::fs::read_to_string(copied).unwrap(), "movie-bytes");
+        let events = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert!(!events.contains(&source.display().to_string()));
+        assert!(!events.contains("movie-bytes"));
+
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn later_screenshot_keeps_user_attachment() {
+        let pids = Arc::new(Mutex::new(Vec::new()));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let tools = computer_and_screenshot_registry(
+            Arc::new(RecordingAx {
+                pressed: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(TestShot {
+                pids: Arc::clone(&pids),
+            }),
+            Arc::new(TestApps),
+            Arc::new(TestInput),
+            Arc::new(TestCalendar),
+        );
+        let build: ProviderBuilder = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_, _| {
+                Arc::new(RecordingProvider {
+                    delay: Duration::from_millis(10),
+                    requests: Arc::clone(&requests),
+                })
+            })
+        };
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), tools);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+
+        let first = TaskId::new();
+        let photo = b"\x89PNGATTACH".to_vec();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                attachments: vec![crate::attachment::UserAttachment {
+                    name: "photo.png".into(),
+                    kind: crate::attachment::AttachmentKind::Image,
+                    media_type: "image/png".into(),
+                    bytes: photo.clone(),
+                    source_path: None,
+                    width: None,
+                    height: None,
+                }],
+                ..StartTaskRequest::new(first, "これは何")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        let second = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest {
+                mentions: vec![Mention::Screen],
+                ..StartTaskRequest::new(second, "この画面")
+            }))
+            .unwrap();
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+
+        {
+            let captured = requests.lock().expect("lock");
+            assert_eq!(captured.len(), 2);
+            let follow = &captured[1];
+            let users: Vec<_> = follow
+                .iter()
+                .filter(|message| message.role == Role::User)
+                .collect();
+            assert_eq!(users.len(), 2);
+            assert!(
+                users[0]
+                    .images
+                    .iter()
+                    .any(|image| image.source == ImageSource::Attachment && image.bytes == photo)
+            );
+            assert!(
+                users[1]
+                    .images
+                    .iter()
+                    .any(|image| image.source == ImageSource::Screenshot)
+            );
         }
 
         drop(command_tx);

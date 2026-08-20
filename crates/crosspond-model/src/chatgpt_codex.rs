@@ -719,6 +719,7 @@ mod tests {
                             bytes: vec![1, 2, 3],
                             width: Some(100),
                             height: Some(50),
+                            source: crate::provider::ImageSource::Screenshot,
                         }],
                     ),
                 ],
