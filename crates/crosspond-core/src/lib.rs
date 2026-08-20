@@ -50,8 +50,8 @@ pub use hotkey::{GlobalHotkeyService, HotkeyEvent, HotkeySpecError, HotkeyView, 
 pub use ids::{ConversationId, TaskId};
 pub use mention::{Mention, display_prompt, parse_running_app_names};
 pub use policy::{
-    AgentAsk, ComputerApprovalMode, PolicyDecision, RiskLevel, evaluate, evaluate_with,
-    risk_for_tool,
+    AgentAsk, BrowserHostDecision, ComputerApprovalMode, PolicyDecision, RiskLevel,
+    browser_host_decision, evaluate, evaluate_with, risk_for_tool,
 };
 pub use receipt::{Receipt, receipt_action_line, tool_ui_summary};
 pub use runtime::{
@@ -60,8 +60,9 @@ pub use runtime::{
 };
 pub use scratch::default_tasks_root;
 pub use secret::{
-    SecretChatGptTokenStore, SecretError, SecretKey, SecretStore, SecretString,
+    CredentialBundle, SecretChatGptTokenStore, SecretError, SecretKey, SecretStore, SecretString,
     any_compat_key_is_set, chatgpt_oauth_is_set, compat_key_is_set, load_chatgpt_tokens,
-    provider_is_ready, provider_key_is_set, save_chatgpt_tokens, selected_provider_is_ready,
+    parse_credential_ref, provider_is_ready, provider_key_is_set, save_chatgpt_tokens,
+    selected_provider_is_ready,
 };
 pub use status::{CommandWindowState, TaskStatus};

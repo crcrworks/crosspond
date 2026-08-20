@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use crosspond_chrome_host::BrowserBridge;
 use crosspond_core::{
     CommandSender, ConfigStore, ContextCapsule, ContextCollector, ConversationId,
     GlobalHotkeyService, SecretStore, TaskId, provider_is_ready,
@@ -22,6 +23,7 @@ pub struct AppState {
     pub collector: Arc<dyn ContextCollector>,
     pub hotkey: Mutex<Box<dyn GlobalHotkeyService>>,
     pub inner: Mutex<InnerState>,
+    pub browser: Arc<BrowserBridge>,
     pub pending_chatgpt: Mutex<Option<PendingChatGptLogin>>,
     pub models_cache: Mutex<Option<ModelsCacheEntry>>,
     pub models_generation: AtomicU64,
@@ -59,6 +61,7 @@ impl AppState {
         collector: Arc<dyn ContextCollector>,
         hotkey: Box<dyn GlobalHotkeyService>,
         runtime: JoinHandle<()>,
+        browser: Arc<BrowserBridge>,
     ) -> Self {
         let onboarding = !provider_is_ready(&config.load().unwrap_or_default(), &*secrets);
         Self {
@@ -80,6 +83,7 @@ impl AppState {
                 resize_seq: 0,
                 capturing_hotkey: false,
             }),
+            browser,
             pending_chatgpt: Mutex::new(None),
             models_cache: Mutex::new(None),
             models_generation: AtomicU64::new(0),

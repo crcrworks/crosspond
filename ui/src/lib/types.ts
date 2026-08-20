@@ -16,6 +16,15 @@ export type AgentEvent =
 			title: string;
 			description: string;
 	  }
+	| {
+			type: 'credential_required';
+			task_id: string;
+			approval_id: string;
+			title: string;
+			credential_ref: string;
+			destination: string;
+			save_offered: boolean;
+	  }
 	| { type: 'artifact_created'; task_id: string; display_name: string }
 	| { type: 'task_completed'; task_id: string; summary: string; receipt: Receipt }
 	| { type: 'task_failed'; task_id: string; message: string }
@@ -105,6 +114,11 @@ export type SettingsView = {
 	};
 	computer_approval: ComputerApproval;
 	launcher_hotkey: HotkeyView;
+	browser_connected: boolean;
+	browser_extension_id: string;
+	browser_extension_path: string;
+	browser_allowed_hosts: string[];
+	browser_blocked_hosts: string[];
 };
 
 export type Bootstrap = {

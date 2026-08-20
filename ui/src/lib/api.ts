@@ -32,6 +32,10 @@ export function reject(id: string) {
 	return invoke('reject', { id });
 }
 
+export function submitCredential(id: string, username: string, password: string, save: boolean) {
+	return invoke('submit_credential', { id, username, password, save });
+}
+
 export function cancel() {
 	return invoke('cancel');
 }
@@ -52,8 +56,16 @@ export function loadSettings() {
 	return invoke<SettingsView>('load_settings');
 }
 
-export function saveConfig(vaultPath: string) {
-	return invoke('save_config', { vaultPath });
+export function saveConfig(
+	vaultPath: string,
+	browserAllowedHosts?: string[],
+	browserBlockedHosts?: string[]
+) {
+	return invoke('save_config', {
+		vaultPath,
+		browserAllowedHosts,
+		browserBlockedHosts
+	});
 }
 
 export function saveCompat(id: string, name: string, baseUrl: string) {

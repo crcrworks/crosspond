@@ -252,6 +252,8 @@ describe('transcript', () => {
 		});
 		expect(toolVisual('run_command')).toEqual({ icon: '/icons/terminal.svg', tone: 'red' });
 		expect(toolVisual('web_search')).toEqual({ icon: '/icons/globe.svg', tone: 'blue' });
+		expect(toolVisual('browser_snapshot')).toEqual({ icon: '/icons/globe.svg', tone: 'blue' });
+		expect(toolVisual('browser_click')).toEqual({ icon: '/icons/pointer.svg', tone: 'blue' });
 		expect(toolVisual('unknown_tool')).toEqual({ icon: '/icons/wrench.svg', tone: 'muted' });
 	});
 

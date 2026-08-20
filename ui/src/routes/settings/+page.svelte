@@ -24,11 +24,13 @@
 	import type { AgentEvent, CompatEndpoint, HotkeyView, SettingsView } from '$lib/types';
 	import { onMount } from 'svelte';
 
-	type TabId = 'general' | 'models' | 'knowledge' | 'search' | 'permissions';
+	type TabId = 'general' | 'models' | 'knowledge' | 'search' | 'browser' | 'permissions';
 
 	let settings = $state<SettingsView | null>(null);
 	let tab = $state<TabId>('models');
 	let vaultPath = $state('');
+	let allowedHosts = $state('');
+	let blockedHosts = $state('');
 	let apiKeys = $state<Record<string, string>>({});
 	let exaKey = $state('');
 	let redirectUrl = $state('');
@@ -84,6 +86,8 @@
 	function applySettings(loaded: SettingsView) {
 		settings = loaded;
 		vaultPath = loaded.vault_path;
+		allowedHosts = loaded.browser_allowed_hosts.join('\n');
+		blockedHosts = loaded.browser_blocked_hosts.join('\n');
 		const next: Record<string, string> = {};
 		for (const endpoint of loaded.openai_compat) {
 			next[endpoint.id] = apiKeys[endpoint.id] ?? '';
@@ -136,6 +140,27 @@
 		} catch (error) {
 			setFeedback('search', { ok: false, message: String(error) });
 		}
+	}
+
+	async function persistBrowser() {
+		await saveConfig(vaultPath, splitHostLines(allowedHosts), splitHostLines(blockedHosts));
+		await refresh();
+	}
+
+	async function onSaveBrowser() {
+		try {
+			await persistBrowser();
+			setFeedback('browser', { ok: true, message: 'Saved.' });
+		} catch (error) {
+			setFeedback('browser', { ok: false, message: String(error) });
+		}
+	}
+
+	function splitHostLines(text: string): string[] {
+		return text
+			.split('\n')
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0);
 	}
 
 	async function onSaveEndpoint(endpoint: CompatEndpoint) {
@@ -344,6 +369,13 @@
 			>
 			<button
 				type="button"
+				class={['settings-tab', tab === 'browser' && 'active']}
+				role="tab"
+				aria-selected={tab === 'browser'}
+				onclick={() => selectTab('browser')}>Browser</button
+			>
+			<button
+				type="button"
 				class={['settings-tab', tab === 'permissions' && 'active']}
 				role="tab"
 				aria-selected={tab === 'permissions'}
@@ -515,6 +547,51 @@
 			</div>
 			<Button label="Save" onclick={() => void onSaveSearch()} variant="primary" />
 			{@render feedbackLine('search')}
+		{:else if tab === 'browser'}
+			<div class="surface flex flex-col gap-2">
+				<div class="flex flex-row items-center gap-2">
+					<div class="text-sm">Chrome extension</div>
+					<Badge
+						label={settings?.browser_connected ? 'Connected' : 'Not connected'}
+						tone={settings?.browser_connected ? 'green' : 'muted'}
+					/>
+				</div>
+				<div class="text-sm text-[var(--muted)]">
+					chrome://extensions → Developer mode → Load unpacked → the folder below. Chromium pages
+					then use DOM snapshots instead of Accessibility.
+				</div>
+				<div class="font-mono text-sm break-all"
+					>{settings?.browser_extension_path ?? 'extension/chrome'}</div
+				>
+			</div>
+			<label class="flex flex-col gap-1">
+				<span class="text-sm text-[var(--muted)]">Allowed sites</span>
+				<textarea
+					bind:value={allowedHosts}
+					rows="4"
+					placeholder="example.com"
+					class="rounded-md border px-2 py-1 font-mono text-sm"
+					style:border-color="var(--border)"
+					style:background="var(--bg)"
+				></textarea>
+			</label>
+			<label class="flex flex-col gap-1">
+				<span class="text-sm text-[var(--muted)]">Blocked sites</span>
+				<textarea
+					bind:value={blockedHosts}
+					rows="3"
+					class="rounded-md border px-2 py-1 font-mono text-sm"
+					style:border-color="var(--border)"
+					style:background="var(--bg)"
+				></textarea>
+			</label>
+			<div class="text-sm text-[var(--muted)]">
+				One host per line. Manual and AI ask once per new site, then save it here. Auto runs
+				without asking and does not add hosts. Blocked hosts are always refused. Page contents
+				are not shown here.
+			</div>
+			<Button label="Save" onclick={() => void onSaveBrowser()} variant="primary" />
+			{@render feedbackLine('browser')}
 		{:else}
 			<div class="text-sm text-[var(--muted)]">
 				Chat works without these. Enable them when you want selected text, screenshots, or calendar

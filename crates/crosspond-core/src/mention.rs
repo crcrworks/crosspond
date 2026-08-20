@@ -10,6 +10,7 @@ pub enum Mention {
     VaultLater,
     Screen,
     Computer,
+    Browser,
     App {
         name: String,
     },
@@ -30,6 +31,10 @@ impl Mention {
 
     pub fn is_computer(&self) -> bool {
         matches!(self, Self::Computer)
+    }
+
+    pub fn is_browser(&self) -> bool {
+        matches!(self, Self::Browser)
     }
 
     pub fn wants_screenshot(&self) -> bool {
@@ -58,6 +63,7 @@ impl Mention {
             Self::VaultLater => "@vault-later".into(),
             Self::Screen => "@screen".into(),
             Self::Computer => "@computer".into(),
+            Self::Browser => "@browser".into(),
             Self::App { name } if !name.trim().is_empty() => format!("@app {name}"),
             Self::App { .. } => "@app".into(),
             Self::Files => "@files".into(),
@@ -111,7 +117,13 @@ pub fn mention_routing(mentions: &[Mention]) -> String {
             }
             Mention::Computer => {
                 lines.push(
-                    "- A screenshot of the user's frontmost window is attached. Look at that image, then operate the computer with get_accessibility_snapshot, take_screenshot, and UI tools (ui_press, ui_click, ui_type, ui_hotkey, ui_scroll) to complete the request. Do not only describe the screen."
+                    "- A screenshot of the user's frontmost window is attached. If the work is in Chrome, Arc, Brave, or Edge, use browser_snapshot and browser_* ref tools rather than Accessibility or screenshots. For native apps, operate with get_accessibility_snapshot, take_screenshot, and UI tools (ui_press, ui_click, ui_type, ui_hotkey, ui_scroll). Do not only describe the screen."
+                        .into(),
+                );
+            }
+            Mention::Browser => {
+                lines.push(
+                    "- Operate the current Chromium tab with browser_snapshot, then browser_click / browser_fill / browser_type / browser_press_key / browser_scroll / browser_select / browser_navigate / browser_new_tab. Do not use get_accessibility_snapshot or take_screenshot for this request. If browser_* tools say the extension is not connected, tell the user to load it from Settings."
                         .into(),
                 );
             }
@@ -162,6 +174,10 @@ pub fn model_user_text(prompt: &str, mentions: &[Mention]) -> String {
     if trimmed.is_empty() {
         if mentions.iter().any(Mention::is_computer) {
             body.push_str("Look at the attached screen and operate the computer to continue.");
+        } else if mentions.iter().any(Mention::is_browser) {
+            body.push_str(
+                "Operate the current Chromium tab with browser_snapshot and browser_* tools.",
+            );
         } else if mentions.iter().any(Mention::is_screen) {
             body.push_str("Look at the attached screen and continue.");
         } else if mentions.iter().any(Mention::is_vault_query) {
@@ -218,6 +234,10 @@ mod tests {
             display_prompt("進めて", &[Mention::Computer]),
             "@computer 進めて"
         );
+        assert_eq!(
+            display_prompt("クリックして", &[Mention::Browser]),
+            "@browser クリックして"
+        );
         assert_eq!(display_prompt("hello", &[]), "hello");
         assert_eq!(
             display_prompt("調べて", &[Mention::Search]),
@@ -244,6 +264,7 @@ mod tests {
         assert!(text.contains("screenshot"));
         assert!(text.contains("ui_press"));
         assert!(text.contains("ui_click"));
+        assert!(text.contains("browser_snapshot"));
         assert!(text.contains("Do not only describe the screen"));
         let screen = mention_routing(&[Mention::Screen]);
         assert!(!screen.contains("ui_press"));
@@ -256,6 +277,19 @@ mod tests {
         assert!(text.contains("web_search"));
         assert!(text.contains("fetch_url"));
         assert_eq!(Mention::Search.display_token(), "@search");
+    }
+
+    #[test]
+    fn browser_routing_uses_dom_tools_not_screenshots() {
+        let text = mention_routing(&[Mention::Browser]);
+        assert!(text.contains("browser_snapshot"));
+        assert!(text.contains("browser_click"));
+        assert!(text.contains("browser_fill"));
+        assert!(text.contains("Do not use get_accessibility_snapshot or take_screenshot"));
+        assert!(!text.contains("ui_press"));
+        let empty = model_user_text("  ", &[Mention::Browser]);
+        assert!(empty.contains("Operate the current Chromium tab"));
+        assert!(empty.contains("browser_snapshot"));
     }
 
     #[test]
@@ -272,7 +306,7 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_matches_ui_payload() {
-        let raw = r#"[{"kind":"screen"},{"kind":"vault_query"},{"kind":"computer"},{"kind":"app","name":"Safari"},{"kind":"search"},{"kind":"web"}]"#;
+        let raw = r#"[{"kind":"screen"},{"kind":"vault_query"},{"kind":"computer"},{"kind":"browser"},{"kind":"app","name":"Safari"},{"kind":"search"},{"kind":"web"}]"#;
         let mentions: Vec<Mention> = serde_json::from_str(raw).unwrap();
         assert_eq!(
             mentions,
@@ -280,6 +314,7 @@ mod tests {
                 Mention::Screen,
                 Mention::VaultQuery,
                 Mention::Computer,
+                Mention::Browser,
                 Mention::App {
                     name: "Safari".into()
                 },

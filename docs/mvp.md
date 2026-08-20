@@ -8,6 +8,10 @@ The user should never have to prepare the AI before asking for work. No projects
 
 Read Later is Source ingestion, not a separate silo. A current page URL, selected text, dropped PDF, or local document becomes an unread Source. Later, `knowledge_propose_update` runs the validated ingestion plan and marks it processed. Selected text and page URLs are not written to logs or receipts.
 
+## Login fill
+
+Resource notes may store a `credential_ref` Keychain pointer (never the secret). The pointer is bound to http(s) hosts on that note. Native login dialogs and Chromium HTTP basic/digest (browser chrome, not DOM) use `fill_credential`; the launcher collects username/password and shows the destination host or app. HTTP basic/digest **file servers** (listings and downloads) use `fetch_url`: unauthenticated HEAD first, then `fetch_url` again with `credential_ref` so the host can send Digest/Basic — not the browser, and not `curl --user`. Private LAN hosts work only when listed on the note. **Save in Keychain** is off by default and only overwrites a ref that already exists on a vault note. **Submit** on the login card is consent. Values never go to the model, logs, receipts, or the WebView.
+
 ## Knowledge Vault Phase 7
 
 After a successful command that used several computer/file actions and did not already follow a Procedure, Crosspond asks **Save this as a Procedure?** on the existing Allow card. Approving writes a Procedure from the sanitized receipt (not from arbitrary model Markdown) and links mentioned Resources. The next short command retrieves it.
@@ -48,16 +52,24 @@ Polish: a human-readable receipt after each task, recent task history, and first
 
 - **Receipt** — after a task, the launcher keeps the summary in the conversation and lists artifacts with **Show in Finder**. Receipts stay on disk as `receipt.json` (no secrets, calendar notes, command output, or typed text). Changed action lines are not shown in the launcher.
 - **History** — **History** (or ↑ when the input is empty) lists recent conversations from `~/.crosspond/tasks/`, grouped by `conversation_id`. Opening an item shows the same transcript as the live chat (user turns, work steps, commentary, receipt) and the follow-up field continues that thread. **New** still starts a blank session.
-- **Onboarding** — first launch with no provider ready (no Compatible API key, and not signed in with ChatGPT) shows a welcome and Settings. Do not prompt for Accessibility yet. After a key is saved or ChatGPT sign-in succeeds: “Press Option + Space anywhere” (or whatever shortcut is set in Settings). That shortcut and **Open** reveal the command bar; they do not dismiss the window. Settings is tabbed (General / Models / Knowledge / Search / Permissions). The Models tab can keep ChatGPT and several OpenAI Compatible endpoints at once; the launcher chooses the model (and Codex effort).
-- **Mentions** — type `@` (or `＠`) in the compact bar to attach `@vault-query` (search accumulated knowledge), `@vault-save` (ingest), `@vault-later` (unread Source), `@screen` (screenshot the ambient window), `@computer` (screenshot then operate the Mac with UI tools), `@app` (running apps from NSWorkspace), `@files`, `@calendar`, or `@search`. Mentions are optional; ambient context and the Knowledge Brief still run without them. The WebView only sees kinds and app names — not note bodies, paths, or screenshot bytes.
+- **Onboarding** — first launch with no provider ready (no Compatible API key, and not signed in with ChatGPT) shows a welcome and Settings. Do not prompt for Accessibility yet. After a key is saved or ChatGPT sign-in succeeds: “Press Option + Space anywhere” (or whatever shortcut is set in Settings). That shortcut and **Open** reveal the command bar; they do not dismiss the window. Settings is tabbed (General / Models / Knowledge / Search / Browser / Permissions). The Models tab can keep ChatGPT and several OpenAI Compatible endpoints at once; the launcher chooses the model (and Codex effort).
+- **Mentions** — type `@` (or `＠`) in the compact bar to attach `@vault-query` (search accumulated knowledge), `@vault-save` (ingest), `@vault-later` (unread Source), `@screen` (screenshot the ambient window), `@computer` (screenshot then operate the Mac with UI tools), `@browser` (operate the current Chromium tab with `browser_*` tools), `@app` (running apps from NSWorkspace), `@files`, `@calendar`, or `@search`. Mentions are optional; ambient context and the Knowledge Brief still run without them. The WebView only sees kinds and app names — not note bodies, paths, or screenshot bytes.
 
 Demo: first launch → Settings → Option + Space → do work → see the transcript → hide → Option + Space → History → open a past conversation and follow up.
 
 Phase 11 Whole-Mac tools still apply (any app, keyboard/scroll, shell/URL, EventKit, external file reads, web tools, earlier computer use).
 
+## Phase 13 Browser
+
+Chromium pages go through a Crosspond Chrome extension (CDP via `chrome.debugger`), not Accessibility or screenshots. The model calls `browser_snapshot` for a compact a11y outline with refs, then `browser_click` / `browser_fill` / `browser_type` on those refs. Native apps still use cua-driver AX / screenshot tools. HTTP basic/digest **in an open Chromium tab** is browser chrome, not DOM: the extension enables `Fetch.handleAuthRequests` without pausing every request (`patterns: []`), and the model calls `fill_credential` with only `credential_ref` for a host listed on that Resource. Cancel / reject / navigate aborts a paused challenge with `CancelAuth`. Lab file servers and other HTTP listings should use `fetch_url` (HEAD, then Digest/Basic from Keychain) so a browser's saved cookies cannot skip the login. Never `curl --user`.
+
+The extension talks to Crosspond over native messaging (`com.crosspond.chrome`) and a user-only unix socket. Crosspond must be running first so it can copy `crosspond-chrome-host` to `~/.crosspond/bin` and write the native-host manifests. Load the extension unpacked from `extension/chrome` (Settings → Browser shows the path and connection badge). The extension reconnects if the native port drops and Crosspond retries in-flight `browser_*` calls; AX trees are compacted before they cross the 1 MiB Chrome host→extension cap. A new site host needs Allow in Manual and AI, then it is stored in `config.json` `browser_allowed_hosts`. Auto runs without asking and does not add the host. `browser_blocked_hosts` always refuses. Page bodies, cookies, and field values stay out of the WebView, receipts, and logs.
+
+Safari, Firefox, Web Store listing, raw CDP, and an in-app browser are later.
+
 ## Later phases (do not implement yet)
 
-13. Release (signing, notarization, license re-audit)
+14. Release (signing, notarization, license re-audit, Chrome Web Store)
 
 ## Non-goals for MVP
 

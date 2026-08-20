@@ -50,4 +50,15 @@ impl ToolRegistry {
             .map(|tool| tool.approval_prompt(context, input))
             .unwrap_or_else(|| (format!("Run `{name}`"), String::new()))
     }
+
+    pub fn target_host(&self, name: &str, context: &ToolContext, input: &Value) -> Option<String> {
+        self.get(name)
+            .and_then(|tool| tool.target_host(context, input))
+    }
+
+    pub fn abort_http_auth(&self) {
+        if let Some(tool) = self.get("fill_credential") {
+            tool.abort_http_auth();
+        }
+    }
 }

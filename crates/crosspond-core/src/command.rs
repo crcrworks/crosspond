@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::context::ContextCapsule;
 use crate::ids::{ConversationId, TaskId};
 use crate::mention::Mention;
+use crate::secret::SecretString;
 
 /// Identifier for a pending approval prompt.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -28,6 +29,13 @@ pub enum RuntimeCommand {
     StartTask(StartTaskRequest),
     Approve(ApprovalId),
     Reject(ApprovalId),
+    /// Host-collected login for `fill_credential`. `Debug` redacts the values.
+    SubmitCredential {
+        id: ApprovalId,
+        username: SecretString,
+        password: SecretString,
+        save: bool,
+    },
     Cancel(TaskId),
     /// Drop in-memory follow-up history. Sent when the user starts a new conversation (New).
     ResetSession,
@@ -61,5 +69,24 @@ impl StartTaskRequest {
             conversation_id: ConversationId::new(),
             mentions: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn submit_credential_debug_omits_values() {
+        let command = RuntimeCommand::SubmitCredential {
+            id: ApprovalId::new(),
+            username: SecretString::new("labuser"),
+            password: SecretString::new("hunter2"),
+            save: true,
+        };
+        let rendered = format!("{command:?}");
+        assert!(!rendered.contains("labuser"));
+        assert!(!rendered.contains("hunter2"));
+        assert!(rendered.contains("SecretString"));
     }
 }

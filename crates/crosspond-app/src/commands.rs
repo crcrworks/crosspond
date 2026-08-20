@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crosspond_chrome_host::{EXTENSION_ID, resolve_extension_dir};
 use crosspond_core::{
     AppConfig, ApprovalId, CHATGPT_SOURCE, ComputerApprovalMode, ConversationId, ConversationView,
     DEFAULT_CHATGPT_MODEL, DEFAULT_COMPAT_ID, DEFAULT_COMPAT_MODEL, HotkeyView, LauncherHotkey,
@@ -13,6 +14,7 @@ use crosspond_core::{
     parse_vault_path_input, provider_is_ready, refresh_chatgpt_session, selected_provider_is_ready,
 };
 use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
+use crosspond_tools::parse_host_list;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
@@ -59,6 +61,11 @@ pub struct SettingsView {
     pub permissions: PermissionSnapshot,
     pub computer_approval: ComputerApprovalMode,
     pub launcher_hotkey: HotkeyView,
+    pub browser_connected: bool,
+    pub browser_extension_id: String,
+    pub browser_extension_path: String,
+    pub browser_allowed_hosts: Vec<String>,
+    pub browser_blocked_hosts: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -172,6 +179,22 @@ pub fn reject(id: ApprovalId, state: State<AppState>) {
 }
 
 #[tauri::command]
+pub fn submit_credential(
+    id: ApprovalId,
+    username: String,
+    password: String,
+    save: bool,
+    state: State<AppState>,
+) {
+    state.commands.send(RuntimeCommand::SubmitCredential {
+        id,
+        username: SecretString::new(username),
+        password: SecretString::new(password),
+        save,
+    });
+}
+
+#[tauri::command]
 pub fn cancel(state: State<AppState>) {
     if let Some(task_id) = state.lock_inner().current_task {
         state.commands.send(RuntimeCommand::Cancel(task_id));
@@ -241,6 +264,11 @@ fn settings_view(state: &AppState) -> SettingsView {
         .display()
         .to_string();
     let chatgpt_signed_in = crosspond_core::chatgpt_oauth_is_set(&*state.secrets);
+    let browser_extension_path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| resolve_extension_dir(&exe))
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "extension/chrome".into());
     SettingsView {
         openai_compat: loaded
             .openai_compat
@@ -263,6 +291,11 @@ fn settings_view(state: &AppState) -> SettingsView {
         permissions: PermissionSnapshot::current(),
         computer_approval: loaded.computer_approval,
         launcher_hotkey: loaded.launcher_hotkey.view(),
+        browser_connected: state.browser.is_connected(),
+        browser_extension_id: EXTENSION_ID.into(),
+        browser_extension_path,
+        browser_allowed_hosts: loaded.browser_allowed_hosts,
+        browser_blocked_hosts: loaded.browser_blocked_hosts,
     }
 }
 
@@ -287,11 +320,19 @@ fn save_loaded_config(
 #[tauri::command]
 pub fn save_config(
     vault_path: String,
+    browser_allowed_hosts: Option<Vec<String>>,
+    browser_blocked_hosts: Option<Vec<String>>,
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<(), String> {
     let mut config = state.config.load().unwrap_or_default();
     config.vault_path = Some(parse_vault_path_input(&vault_path));
+    if let Some(hosts) = browser_allowed_hosts {
+        config.browser_allowed_hosts = parse_host_list(hosts);
+    }
+    if let Some(hosts) = browser_blocked_hosts {
+        config.browser_blocked_hosts = parse_host_list(hosts);
+    }
     save_loaded_config(&app, &state, config)?;
     state.commands.send(RuntimeCommand::ReloadKnowledge);
     Ok(())

@@ -1,4 +1,6 @@
-use crosspond_tools::PathScope;
+use crosspond_tools::{
+    PathScope, is_browser_tool, is_browser_write_tool, site_is_allowed, site_is_blocked,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7,6 +9,7 @@ pub enum RiskLevel {
     WorkspaceWrite,
     ExternalWrite,
     ComputerAction,
+    BrowserSite,
     Shell,
     Destructive,
 }
@@ -78,6 +81,12 @@ pub fn evaluate_with(
 ) -> PolicyDecision {
     match risk {
         RiskLevel::ReadOnly | RiskLevel::WorkspaceWrite => PolicyDecision::Allow,
+        RiskLevel::BrowserSite => match computer {
+            ComputerApprovalMode::Auto => PolicyDecision::Allow,
+            ComputerApprovalMode::Agent | ComputerApprovalMode::Manual => {
+                PolicyDecision::RequireApproval
+            }
+        },
         RiskLevel::ComputerAction => match computer {
             ComputerApprovalMode::Auto => PolicyDecision::Allow,
             ComputerApprovalMode::Manual => PolicyDecision::RequireApproval,
@@ -118,18 +127,30 @@ pub fn risk_for_tool(name: &str, scope: PathScope, input: &serde_json::Value) ->
         | "knowledge_find_procedure" => RiskLevel::ReadOnly,
         "knowledge_ingest" | "knowledge_propose_update" => RiskLevel::WorkspaceWrite,
         "knowledge_read_later" | "knowledge_archive_source" => RiskLevel::WorkspaceWrite,
-        "open_app" | "focus_app" | "ui_type" | "ui_hotkey" | "ui_scroll" => {
+        "open_app" | "focus_app" | "ui_type" | "ui_hotkey" | "ui_scroll" | "fill_credential" => {
             RiskLevel::ComputerAction
         }
+        "browser_tabs" | "browser_snapshot" | "browser_text" => RiskLevel::ReadOnly,
+        "fetch_url" => {
+            let has_ref = input
+                .get("credential_ref")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty());
+            if has_ref {
+                RiskLevel::ComputerAction
+            } else {
+                RiskLevel::ReadOnly
+            }
+        }
+        name if is_browser_write_tool(name) => RiskLevel::ComputerAction,
         _ => risk_for_tool_scope(name, scope),
     }
 }
 
 fn risk_for_tool_scope(name: &str, scope: PathScope) -> RiskLevel {
     match (name, scope) {
-        ("get_accessibility_snapshot" | "take_screenshot" | "web_search" | "fetch_url", _) => {
-            RiskLevel::ReadOnly
-        }
+        ("get_accessibility_snapshot" | "take_screenshot" | "web_search", _) => RiskLevel::ReadOnly,
         ("read_file" | "list_directory", PathScope::Workspace) => RiskLevel::ReadOnly,
         ("read_file" | "list_directory", PathScope::External) => RiskLevel::ExternalWrite,
         ("write_file" | "create_directory", PathScope::Workspace) => RiskLevel::WorkspaceWrite,
@@ -138,6 +159,37 @@ fn risk_for_tool_scope(name: &str, scope: PathScope) -> RiskLevel {
         ("ui_press" | "ui_set_value" | "ui_click", _) => RiskLevel::ComputerAction,
         _ => RiskLevel::Destructive,
     }
+}
+
+/// First-visit site gate for Chromium tools. The decision is independent of
+/// `computer_approval`; Auto skips the Allow card and must not persist the host.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BrowserHostDecision {
+    Skip,
+    Allowed,
+    Blocked(String),
+    NeedsAllow(String),
+}
+
+pub fn browser_host_decision(
+    tool: &str,
+    host: Option<&str>,
+    allowed: &[String],
+    blocked: &[String],
+) -> BrowserHostDecision {
+    if !is_browser_tool(tool) || tool == "browser_tabs" {
+        return BrowserHostDecision::Skip;
+    }
+    let Some(host) = host.map(str::trim).filter(|value| !value.is_empty()) else {
+        return BrowserHostDecision::Skip;
+    };
+    if site_is_blocked(blocked, host) {
+        return BrowserHostDecision::Blocked(host.to_string());
+    }
+    if site_is_allowed(allowed, host) {
+        return BrowserHostDecision::Allowed;
+    }
+    BrowserHostDecision::NeedsAllow(host.to_string())
 }
 
 #[cfg(test)]
@@ -222,6 +274,14 @@ mod tests {
             )),
             PolicyDecision::RequireApproval
         );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "fill_credential",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::RequireApproval
+        );
     }
 
     #[test]
@@ -265,6 +325,22 @@ mod tests {
                 &empty_input()
             )),
             PolicyDecision::Allow
+        );
+        assert_eq!(
+            risk_for_tool(
+                "fetch_url",
+                PathScope::Workspace,
+                &json!({"url": "https://example.com/", "credential_ref": "lab.fileserver"})
+            ),
+            RiskLevel::ComputerAction
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "fetch_url",
+                PathScope::Workspace,
+                &json!({"url": "https://example.com/", "credential_ref": "lab.fileserver"})
+            )),
+            PolicyDecision::RequireApproval
         );
     }
 
@@ -341,6 +417,10 @@ mod tests {
         );
         assert_eq!(
             risk_for_tool("ui_hotkey", PathScope::Workspace, &empty_input()),
+            RiskLevel::ComputerAction
+        );
+        assert_eq!(
+            risk_for_tool("fill_credential", PathScope::Workspace, &empty_input()),
             RiskLevel::ComputerAction
         );
     }
@@ -458,6 +538,109 @@ mod tests {
         assert_eq!(
             ComputerApprovalMode::Manual.cycle(),
             ComputerApprovalMode::Auto
+        );
+    }
+
+    #[test]
+    fn browser_site_requires_approval_except_auto() {
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::BrowserSite,
+                ComputerApprovalMode::Auto,
+                AgentAsk::Unspecified
+            ),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::BrowserSite,
+                ComputerApprovalMode::Agent,
+                AgentAsk::No
+            ),
+            PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            risk_for_tool("browser_tabs", PathScope::Workspace, &empty_input()),
+            RiskLevel::ReadOnly
+        );
+        assert_eq!(
+            risk_for_tool("browser_snapshot", PathScope::Workspace, &empty_input()),
+            RiskLevel::ReadOnly
+        );
+        assert_eq!(
+            risk_for_tool("browser_click", PathScope::Workspace, &empty_input()),
+            RiskLevel::ComputerAction
+        );
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::ComputerAction,
+                ComputerApprovalMode::Auto,
+                AgentAsk::Unspecified
+            ),
+            PolicyDecision::Allow
+        );
+    }
+
+    #[test]
+    fn browser_host_decision_blocks_and_asks_once() {
+        assert_eq!(
+            browser_host_decision(
+                "browser_tabs",
+                Some("evil.example"),
+                &[],
+                &["evil.example".into()]
+            ),
+            BrowserHostDecision::Skip
+        );
+        assert_eq!(
+            browser_host_decision(
+                "browser_snapshot",
+                Some("evil.example"),
+                &[],
+                &["evil.example".into()]
+            ),
+            BrowserHostDecision::Blocked("evil.example".into())
+        );
+        assert_eq!(
+            browser_host_decision(
+                "browser_click",
+                Some("example.com"),
+                &["example.com".into()],
+                &[]
+            ),
+            BrowserHostDecision::Allowed
+        );
+        assert_eq!(
+            browser_host_decision("browser_snapshot", Some("Gmail.COM"), &[], &[]),
+            BrowserHostDecision::NeedsAllow("Gmail.COM".into())
+        );
+        assert_eq!(
+            browser_host_decision("browser_snapshot", None, &[], &[]),
+            BrowserHostDecision::Skip
+        );
+    }
+
+    #[test]
+    fn auto_still_reports_unknown_hosts_without_persisting_them() {
+        assert_eq!(
+            browser_host_decision("browser_snapshot", Some("note.com"), &[], &[]),
+            BrowserHostDecision::NeedsAllow("note.com".into())
+        );
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::BrowserSite,
+                ComputerApprovalMode::Auto,
+                AgentAsk::Unspecified
+            ),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate_with(
+                RiskLevel::ComputerAction,
+                ComputerApprovalMode::Auto,
+                AgentAsk::Unspecified
+            ),
+            PolicyDecision::Allow
         );
     }
 }

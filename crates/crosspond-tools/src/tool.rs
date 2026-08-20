@@ -26,6 +26,14 @@ pub struct ToolContext {
     pub allow_external: bool,
     /// Search provider API key (Exa for now). `Debug` redacts the value.
     pub search_api_key: Option<String>,
+    /// Host-injected username for `fill_credential`. `Debug` redacts the value.
+    pub fill_username: Option<String>,
+    /// Host-injected password for `fill_credential`. `Debug` redacts the value.
+    pub fill_password: Option<String>,
+    /// http(s) hosts listed on the Resource note for this `credential_ref`.
+    pub credential_hosts: Vec<String>,
+    /// Host or app name shown on Allow / login cards. Never a secret.
+    pub credential_destination: Option<String>,
     /// Read-only Knowledge Vault lookup. Absent when no vault is configured.
     pub knowledge: Option<Arc<dyn KnowledgeBackend>>,
 }
@@ -54,6 +62,10 @@ impl std::fmt::Debug for ToolContext {
                 "search_api_key",
                 &self.search_api_key.as_ref().map(|_| "***"),
             )
+            .field("fill_username", &self.fill_username.as_ref().map(|_| "***"))
+            .field("fill_password", &self.fill_password.as_ref().map(|_| "***"))
+            .field("credential_hosts", &self.credential_hosts)
+            .field("credential_destination", &self.credential_destination)
             .field("knowledge", &self.knowledge.as_ref().map(|_| "set"))
             .finish()
     }
@@ -102,6 +114,14 @@ pub trait Tool: Send + Sync {
     fn approval_prompt(&self, _context: &ToolContext, _input: &Value) -> (String, String) {
         (format!("Run `{}`", self.definition().name), String::new())
     }
+
+    /// Registrable site host for browser tools (no URL path or query).
+    fn target_host(&self, _context: &ToolContext, _input: &Value) -> Option<String> {
+        None
+    }
+
+    /// Drop a paused Chromium HTTP auth challenge without sending credentials.
+    fn abort_http_auth(&self) {}
 }
 
 pub fn truncate_output(text: String) -> String {
