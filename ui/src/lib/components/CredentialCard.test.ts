@@ -22,7 +22,7 @@ describe('CredentialCard', () => {
 		expect(body).toContain('lab.fileserver');
 		expect(body).toContain('Username');
 		expect(body).toContain('Password');
-		expect(body).toContain('Fill');
+		expect(body).toContain('Submit');
 		expect(body).toContain('Cancel');
 		expect(body).not.toContain('Save in Keychain');
 		expect(body).toContain('disabled');

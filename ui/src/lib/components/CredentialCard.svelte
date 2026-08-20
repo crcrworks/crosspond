@@ -104,7 +104,7 @@
 			</div>
 		{/if}
 		<div class="flex flex-row gap-2">
-			<Button label="Fill" variant="primary" type="submit" disabled={!canFill} />
+			<Button label="Submit" variant="primary" type="submit" disabled={!canFill} />
 			<Button label="Cancel" onclick={handleCancel} />
 		</div>
 	</form>
