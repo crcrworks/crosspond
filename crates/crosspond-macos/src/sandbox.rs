@@ -120,7 +120,9 @@ fn scratch_subpath_filters(roots: &[PathBuf]) -> String {
 /// `(allow default)` keeps process/mach working; filesystem reads are deny-then-allow
 /// so user home and other task temps stay out of Auto `run_command`. Clipboard,
 /// Keychain, and Apple Event Mach names are denied after that. Code-signing trust
-/// (`trustd` / `ocspd`) is left allowed so signed binaries can start.
+/// (`trustd` / `ocspd`) is left allowed so signed binaries can start. Clipboard
+/// denies use the `com.apple.pasteboard*` prefix (`com.apple.pasteboard.1` on
+/// current macOS), not only the legacy `com.apple.pboard` name.
 ///
 /// macOS 26 dyld aborts with SIGABRT if it cannot `file-read*` the root inode
 /// (`literal "/"`, not `subpath "/"`) or map executables.
@@ -155,17 +157,25 @@ fn seatbelt_profile(scratch: &Path) -> String {
     (subpath "/dev")
     (subpath "/private/var/db")
     (subpath "/var/db")
+    (subpath "/private/var/select")
     (subpath "/private/etc")
     (subpath "/etc")
 {subpaths})
 (deny appleevent-send)
-(deny mach-lookup (global-name "com.apple.pboard"))
-(deny mach-lookup (global-name "com.apple.pasteboard.pasted"))
-(deny mach-lookup (global-name "com.apple.pasteboard.genp"))
-(deny mach-lookup (global-name "com.apple.securityd"))
-(deny mach-lookup (global-name "com.apple.SecurityServer"))
+(deny mach-lookup (global-name "com.apple.appleeventsd"))
 (deny mach-lookup (global-name "com.apple.coreservices.appleevents"))
 (deny mach-lookup (global-name "com.apple.ae.listener.register"))
+(deny mach-lookup (global-name-prefix "com.apple.pasteboard"))
+(deny mach-lookup (global-name-prefix "com.apple.pboard"))
+(deny mach-lookup (global-name-prefix "com.apple.pbs"))
+(deny mach-lookup (global-name-prefix "com.apple.coreservices.uasharedpasteboard"))
+(deny mach-lookup (global-name-prefix "com.apple.coreservices.uauseractivitypasteboard"))
+(deny mach-lookup (local-name "com.apple.CFPasteboardClient"))
+(deny mach-lookup (xpc-service-name-prefix "com.apple.pasteboard"))
+(deny mach-lookup (xpc-service-name-prefix "com.apple.pbs"))
+(deny mach-lookup (global-name-prefix "com.apple.securityd"))
+(deny mach-lookup (global-name-prefix "com.apple.secd"))
+(deny mach-lookup (global-name "com.apple.SecurityServer"))
 "#
     )
 }
@@ -197,11 +207,11 @@ mod tests {
         assert!(profile.contains("(deny network*)"), "{profile}");
         assert!(profile.contains("(deny appleevent-send)"), "{profile}");
         assert!(
-            profile.contains("(global-name \"com.apple.pboard\")"),
+            profile.contains("(global-name-prefix \"com.apple.pasteboard\")"),
             "{profile}"
         );
         assert!(
-            profile.contains("(global-name \"com.apple.securityd\")"),
+            profile.contains("(global-name-prefix \"com.apple.securityd\")"),
             "{profile}"
         );
         assert!(
