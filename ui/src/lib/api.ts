@@ -10,7 +10,7 @@ import type {
 	SettingsView,
 	StartTaskResult
 } from './types';
-import type { Mention } from './mentions';
+import type { Mention, SlashSkill } from './mentions';
 
 export function bootstrap() {
 	return invoke<Bootstrap>('bootstrap');
@@ -22,6 +22,10 @@ export function startTask(prompt: string, mentions: Mention[] = []) {
 
 export function listMentionApps() {
 	return invoke<string[]>('list_mention_apps');
+}
+
+export function listSlashSkills() {
+	return invoke<SlashSkill[]>('list_slash_skills');
 }
 
 export function approve(id: string) {

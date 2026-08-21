@@ -111,6 +111,7 @@ pub fn run() {
             commands::set_ui_flags,
             commands::sync_launcher_size,
             commands::list_mention_apps,
+            commands::list_slash_skills,
             commands::open_external_url,
         ])
         .setup(move |app| {

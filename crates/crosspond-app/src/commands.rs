@@ -14,7 +14,10 @@ use crosspond_core::{
     parse_vault_path_input, provider_is_ready, refresh_chatgpt_session, selected_provider_is_ready,
 };
 use crosspond_macos::{PermissionKind, PermissionSnapshot, list_running_app_names};
-use crosspond_tools::parse_host_list;
+use crosspond_tools::{
+    SkillPickerItem, default_global_skills_root, default_skills_root, parse_host_list,
+    skill_picker_items,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
@@ -793,6 +796,11 @@ pub fn sync_launcher_size(compact: bool, badge_lines: u32, extra_height: f64, ap
 #[tauri::command]
 pub fn list_mention_apps() -> Vec<String> {
     list_running_app_names()
+}
+
+#[tauri::command]
+pub fn list_slash_skills() -> Vec<SkillPickerItem> {
+    skill_picker_items(&default_skills_root(), &default_global_skills_root())
 }
 
 #[tauri::command]

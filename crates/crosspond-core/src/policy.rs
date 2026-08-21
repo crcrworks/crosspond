@@ -1,5 +1,6 @@
 use crosspond_tools::{
-    PathScope, is_browser_tool, is_browser_write_tool, site_is_allowed, site_is_blocked,
+    PathScope, SafetyVerdict, is_browser_tool, is_browser_write_tool, site_is_allowed,
+    site_is_blocked,
 };
 use serde::{Deserialize, Serialize};
 
@@ -131,6 +132,8 @@ pub fn risk_for_tool(name: &str, scope: PathScope, input: &serde_json::Value) ->
             RiskLevel::ComputerAction
         }
         "browser_tabs" | "browser_snapshot" | "browser_text" => RiskLevel::ReadOnly,
+        "skill_read" | "skill_search" => RiskLevel::ReadOnly,
+        "skill_install" => RiskLevel::ExternalWrite,
         "fetch_url" => {
             let has_ref = input
                 .get("credential_ref")
@@ -190,6 +193,19 @@ pub fn browser_host_decision(
         return BrowserHostDecision::Allowed;
     }
     BrowserHostDecision::NeedsAllow(host.to_string())
+}
+
+/// `skill_install` always asks on warn/unknown, even in Auto. Fail is refused
+/// by the tool itself and does not show Allow. Pass follows ExternalWrite.
+pub fn skill_install_needs_allow(verdict: SafetyVerdict, computer: ComputerApprovalMode) -> bool {
+    match verdict {
+        SafetyVerdict::Fail => false,
+        SafetyVerdict::Warn | SafetyVerdict::Unknown => true,
+        SafetyVerdict::Pass => {
+            evaluate_with(RiskLevel::ExternalWrite, computer, AgentAsk::Unspecified)
+                == PolicyDecision::RequireApproval
+        }
+    }
 }
 
 #[cfg(test)]
@@ -407,6 +423,50 @@ mod tests {
             )),
             PolicyDecision::Allow
         );
+    }
+
+    #[test]
+    fn skill_read_and_search_are_auto_install_follows_safety() {
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "skill_read",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            evaluate(risk_for_tool(
+                "skill_search",
+                PathScope::Workspace,
+                &empty_input()
+            )),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            risk_for_tool("skill_install", PathScope::Workspace, &empty_input()),
+            RiskLevel::ExternalWrite
+        );
+        assert!(skill_install_needs_allow(
+            SafetyVerdict::Warn,
+            ComputerApprovalMode::Auto
+        ));
+        assert!(skill_install_needs_allow(
+            SafetyVerdict::Unknown,
+            ComputerApprovalMode::Auto
+        ));
+        assert!(!skill_install_needs_allow(
+            SafetyVerdict::Fail,
+            ComputerApprovalMode::Auto
+        ));
+        assert!(!skill_install_needs_allow(
+            SafetyVerdict::Pass,
+            ComputerApprovalMode::Auto
+        ));
+        assert!(skill_install_needs_allow(
+            SafetyVerdict::Pass,
+            ComputerApprovalMode::Manual
+        ));
     }
 
     #[test]
