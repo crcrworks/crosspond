@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -8,6 +9,7 @@ use thiserror::Error;
 use crate::knowledge::KnowledgeBackend;
 use crate::sandbox::ShellSandbox;
 use crate::scratch::ScratchSpace;
+use crate::skill_types::{PreparedSkillInstall, SkillEndpoints};
 
 /// Truncate tool output so a directory dump cannot blow the context window.
 pub const MAX_TOOL_OUTPUT_BYTES: usize = 100 * 1024;
@@ -52,6 +54,14 @@ pub struct ToolContext {
     pub cancel: Arc<AtomicBool>,
     /// Host sandbox for `run_command`. Absent means unsandboxed `sh -c`.
     pub shell_sandbox: Option<Arc<dyn ShellSandbox>>,
+    /// Installed skills directory. Defaults to `~/.crosspond/skills`.
+    pub skills_root: Option<PathBuf>,
+    /// Global skills directory. Defaults to `~/.agents/skills`.
+    pub global_skills_root: Option<PathBuf>,
+    /// Test override for skills.sh / GitHub URLs.
+    pub skill_endpoints: Option<SkillEndpoints>,
+    /// Fetched skill waiting to be written after Allow.
+    pub pending_skill_install: Option<Arc<PreparedSkillInstall>>,
 }
 
 impl ToolContext {
@@ -93,6 +103,16 @@ impl std::fmt::Debug for ToolContext {
                     .shell_sandbox
                     .as_ref()
                     .map(|sandbox| sandbox.is_enforcing()),
+            )
+            .field("skills_root", &self.skills_root)
+            .field("global_skills_root", &self.global_skills_root)
+            .field(
+                "skill_endpoints",
+                &self.skill_endpoints.as_ref().map(|_| "set"),
+            )
+            .field(
+                "pending_skill_install",
+                &self.pending_skill_install.as_ref().map(|_| "set"),
             )
             .finish()
     }

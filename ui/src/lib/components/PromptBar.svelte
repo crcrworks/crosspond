@@ -15,16 +15,19 @@
 	import {
 		chipLabel,
 		filterCatalog,
+		filterSlashSkills,
 		mentionFromKind,
 		mentionTrigger,
+		skillTrigger,
 		type Mention,
-		type MentionCatalogItem
+		type MentionCatalogItem,
+		type SlashSkill
 	} from '$lib/mentions';
 	import type { ComputerApproval, ModelGroup, ReasoningEffort, SelectedModel } from '$lib/types';
 	import Chevron from './Chevron.svelte';
 	import Icon from './Icon.svelte';
 
-	type PickerStage = 'kinds' | 'app';
+	type PickerStage = 'kinds' | 'app' | 'skill';
 
 	let {
 		variant = 'seamless',
@@ -44,7 +47,8 @@
 		ongrow,
 		oncompositionstart,
 		oncompositionend,
-		onlistapps
+		onlistapps,
+		onlistskills
 	}: {
 		variant?: 'seamless' | 'docked';
 		value: string;
@@ -64,6 +68,7 @@
 		oncompositionstart: () => void;
 		oncompositionend: () => void;
 		onlistapps: () => Promise<string[]>;
+		onlistskills: () => Promise<SlashSkill[]>;
 	} = $props();
 
 	let root: HTMLDivElement | undefined = $state();
@@ -72,8 +77,11 @@
 	let triggerStart = $state(0);
 	let stageQuery = $state('');
 	let appHits = $state<string[]>([]);
+	let skillHits = $state<SlashSkill[]>([]);
 	let appsLoading = $state(false);
+	let skillsLoading = $state(false);
 	let appsLoadId = 0;
+	let skillsLoadId = 0;
 	let composing = $state(false);
 	let groups = $state<ModelGroup[]>([]);
 	let selected = $state<SelectedModel>({ source: 'default', model: 'gpt-4o-mini' });
@@ -87,7 +95,16 @@
 	const filteredApps = $derived(
 		appHits.filter((name) => name.toLowerCase().includes(stageQuery.trim().toLowerCase()))
 	);
-	const mentionCount = $derived(activeStage === 'kinds' ? kindItems.length : filteredApps.length);
+	const skillItems = $derived(
+		filterSlashSkills(skillHits, activeStage === 'skill' ? stageQuery : '')
+	);
+	const mentionCount = $derived(
+		activeStage === 'kinds'
+			? kindItems.length
+			: activeStage === 'skill'
+				? skillItems.length
+				: filteredApps.length
+	);
 	const chatgptSelected = $derived(selected.source === 'chatgpt');
 	const modelSelectValue = $derived(modelOptionValue(selected.source, selected.model));
 	const showCustom = $derived(pickerOpen && customSource !== null);
@@ -214,11 +231,14 @@
 
 	function closeMentions() {
 		appsLoadId += 1;
+		skillsLoadId += 1;
 		stage = null;
 		mentionOpen = false;
 		stageQuery = '';
 		appHits = [];
+		skillHits = [];
 		appsLoading = false;
+		skillsLoading = false;
 	}
 
 	function openKinds(start: number, query: string) {
@@ -231,13 +251,32 @@
 		mentionOpen = true;
 	}
 
+	function openSkills(start: number, query: string) {
+		const already = stage === 'skill' && mentionOpen;
+		menuOpen = false;
+		closePickers();
+		stage = 'skill';
+		triggerStart = start;
+		stageQuery = query;
+		mentionOpen = true;
+		mentionIndex = 0;
+		if (!already) {
+			void loadSkills();
+		}
+	}
+
 	function syncTriggerFromValue() {
 		if (composing) return;
 		if (activeStage === 'app') return;
 		const cursor = textarea?.selectionStart ?? value.length;
+		const skill = skillTrigger(value, cursor);
+		if (skill) {
+			openSkills(skill.start, skill.query);
+			return;
+		}
 		const trigger = mentionTrigger(value, cursor);
 		if (!trigger) {
-			if (stage === 'kinds') closeMentions();
+			if (stage === 'kinds' || stage === 'skill') closeMentions();
 			return;
 		}
 		openKinds(trigger.start, trigger.query);
@@ -265,6 +304,21 @@
 	function removeMention(index: number) {
 		mentions = mentions.filter((_, item) => item !== index);
 		queueMicrotask(() => textarea?.focus());
+	}
+
+	async function loadSkills() {
+		const id = (skillsLoadId += 1);
+		skillsLoading = true;
+		try {
+			const skills = await onlistskills();
+			if (id !== skillsLoadId || !mentionOpen) return;
+			skillHits = skills;
+		} catch {
+			if (id !== skillsLoadId || !mentionOpen) return;
+			skillHits = [];
+		} finally {
+			if (id === skillsLoadId) skillsLoading = false;
+		}
 	}
 
 	async function loadApps() {
@@ -305,6 +359,11 @@
 		if (activeStage === 'app') {
 			const name = filteredApps[mentionIndex] ?? stageQuery.trim();
 			if (name) addMention({ kind: 'app', name });
+			return;
+		}
+		if (activeStage === 'skill') {
+			const item = skillItems[mentionIndex];
+			if (item) addMention({ kind: 'skill', name: item.name });
 		}
 	}
 
@@ -556,7 +615,7 @@
 		<div
 			class={['prompt-menu', 'mention-menu', docked ? 'up' : 'down']}
 			role="listbox"
-			aria-label="Mentions"
+			aria-label={activeStage === 'skill' ? 'Skills' : 'Mentions'}
 		>
 			{#if activeStage === 'kinds'}
 				{#each kindItems as item, index (item.kind)}
@@ -590,6 +649,23 @@
 				{/each}
 				{#if filteredApps.length === 0}
 					<div class="mention-empty">{appsLoading ? 'Loading apps…' : 'Type an app name'}</div>
+				{/if}
+			{:else if activeStage === 'skill'}
+				{#each skillItems as item, index (item.origin + item.name)}
+					<button
+						type="button"
+						class={['prompt-option', 'mention-option', { active: index === mentionIndex }]}
+						role="option"
+						aria-selected={index === mentionIndex}
+						onpointerenter={() => (mentionIndex = index)}
+						onclick={() => addMention({ kind: 'skill', name: item.name })}
+					>
+						<span class="mention-token">/{item.name}</span>
+						<span class="mention-desc">{item.description}{item.origin === 'global' ? ' · グローバル' : ''}</span>
+					</button>
+				{/each}
+				{#if skillItems.length === 0}
+					<div class="mention-empty">{skillsLoading ? 'Loading skills…' : 'No matching skills'}</div>
 				{/if}
 			{/if}
 		</div>

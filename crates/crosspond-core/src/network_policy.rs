@@ -36,6 +36,14 @@ pub fn security_metadata(name: &str, input: &Value) -> ToolSecurityMetadata {
             egress: ToolEgress::External,
             output_privacy: ToolOutputPrivacy::Public,
         },
+        "skill_search" => ToolSecurityMetadata {
+            egress: ToolEgress::External,
+            output_privacy: ToolOutputPrivacy::Public,
+        },
+        "skill_install" => ToolSecurityMetadata {
+            egress: ToolEgress::External,
+            output_privacy: ToolOutputPrivacy::Private,
+        },
         "fetch_url" => ToolSecurityMetadata {
             egress: ToolEgress::External,
             output_privacy: if has_credential_ref(input) {
@@ -87,7 +95,8 @@ pub fn security_metadata(name: &str, input: &Value) -> ToolSecurityMetadata {
         | "ui_type"
         | "ui_hotkey"
         | "ui_scroll"
-        | "fill_credential" => ToolSecurityMetadata {
+        | "fill_credential"
+        | "skill_read" => ToolSecurityMetadata {
             egress: ToolEgress::None,
             output_privacy: ToolOutputPrivacy::Private,
         },
@@ -158,6 +167,24 @@ mod tests {
         ));
         assert!(output_is_private("browser_tabs", &json!({})));
         assert!(output_is_private("list_directory", &json!({"path": "."})));
+    }
+
+    #[test]
+    fn skill_tools_classify_privacy() {
+        let search = security_metadata("skill_search", &json!({"query": "pdf processing"}));
+        assert_eq!(search.egress, ToolEgress::External);
+        assert_eq!(search.output_privacy, ToolOutputPrivacy::Public);
+
+        let install = security_metadata(
+            "skill_install",
+            &json!({"source": "acme/skills", "name": "pdf-processing"}),
+        );
+        assert_eq!(install.egress, ToolEgress::External);
+        assert_eq!(install.output_privacy, ToolOutputPrivacy::Private);
+
+        let read = security_metadata("skill_read", &json!({"name": "pdf-processing"}));
+        assert_eq!(read.egress, ToolEgress::None);
+        assert_eq!(read.output_privacy, ToolOutputPrivacy::Private);
     }
 
     #[test]

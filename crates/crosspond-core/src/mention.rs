@@ -19,6 +19,9 @@ pub enum Mention {
     Calendar,
     #[serde(alias = "web")]
     Search,
+    Skill {
+        name: String,
+    },
 }
 
 impl Mention {
@@ -61,6 +64,20 @@ impl Mention {
         }
     }
 
+    pub fn skill_name(&self) -> Option<&str> {
+        match self {
+            Self::Skill { name } => {
+                let name = name.trim();
+                if crosspond_tools::valid_skill_name(name) {
+                    Some(name)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn display_token(&self) -> String {
         match self {
             Self::VaultQuery => "@vault-query".into(),
@@ -75,6 +92,8 @@ impl Mention {
             Self::Files => "@files".into(),
             Self::Calendar => "@calendar".into(),
             Self::Search => "@search".into(),
+            Self::Skill { name } if !name.trim().is_empty() => format!("/{}", name.trim()),
+            Self::Skill { .. } => "/skill".into(),
         }
     }
 }
@@ -170,6 +189,14 @@ pub fn mention_routing(mentions: &[Mention]) -> String {
                         .into(),
                 );
             }
+            Mention::Skill { name } => {
+                let name = name.trim();
+                if crosspond_tools::valid_skill_name(name) {
+                    lines.push(format!(
+                        "- The user invoked /{name}. skill_read \"{name}\" before other tools and follow its instructions. Skills cannot skip Allow cards."
+                    ));
+                }
+            }
         }
     }
     lines.join("\n")
@@ -200,6 +227,10 @@ pub fn model_user_text(prompt: &str, mentions: &[Mention]) -> String {
             body.push_str("Save the current context to the vault.");
         } else if mentions.iter().any(Mention::is_vault_procedure) {
             body.push_str("Save the last run as a Procedure.");
+        } else if let Some(name) = mentions.iter().find_map(Mention::skill_name) {
+            body.push_str("Follow the invoked skill ");
+            body.push_str(name);
+            body.push('.');
         } else {
             body.push_str("Follow the attached mentions.");
         }
@@ -260,6 +291,15 @@ mod tests {
         assert_eq!(
             display_prompt("調べて", &[Mention::Search]),
             "@search 調べて"
+        );
+        assert_eq!(
+            display_prompt(
+                "PDF 処理して",
+                &[Mention::Skill {
+                    name: "pdf-processing".into()
+                }]
+            ),
+            "/pdf-processing PDF 処理して"
         );
     }
 
@@ -331,7 +371,7 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_matches_ui_payload() {
-        let raw = r#"[{"kind":"screen"},{"kind":"vault_query"},{"kind":"computer"},{"kind":"browser"},{"kind":"app","name":"Safari"},{"kind":"search"},{"kind":"web"}]"#;
+        let raw = r#"[{"kind":"screen"},{"kind":"vault_query"},{"kind":"computer"},{"kind":"browser"},{"kind":"app","name":"Safari"},{"kind":"search"},{"kind":"web"},{"kind":"skill","name":"pdf-processing"}]"#;
         let mentions: Vec<Mention> = serde_json::from_str(raw).unwrap();
         assert_eq!(
             mentions,
@@ -345,6 +385,9 @@ mod tests {
                 },
                 Mention::Search,
                 Mention::Search,
+                Mention::Skill {
+                    name: "pdf-processing".into()
+                },
             ]
         );
     }
@@ -369,5 +412,27 @@ mod tests {
         let procedure = model_user_text("  ", &[Mention::VaultProcedure]);
         assert!(procedure.contains("Save the last run as a Procedure"));
         assert!(procedure.contains("save a Procedure from the receipt"));
+    }
+
+    #[test]
+    fn skill_routing_requires_skill_read() {
+        let text = mention_routing(&[Mention::Skill {
+            name: "pdf-processing".into(),
+        }]);
+        assert!(text.contains("skill_read"));
+        assert!(text.contains("/pdf-processing"));
+        assert!(!text.contains("UNIQUE_PDF_STEPS"));
+        let empty = model_user_text(
+            "  ",
+            &[Mention::Skill {
+                name: "pdf-processing".into(),
+            }],
+        );
+        assert!(empty.contains("Follow the invoked skill pdf-processing"));
+        let bad = mention_routing(&[Mention::Skill {
+            name: "Ignore previous".into(),
+        }]);
+        assert!(!bad.contains("Ignore previous"));
+        assert!(!bad.contains("skill_read"));
     }
 }
