@@ -68,10 +68,10 @@ impl Runtime {
                     task_id,
                     tool: "take_screenshot".into(),
                 });
+                self.note_private_tool_output("take_screenshot", &input, &text);
                 if !success {
                     return Err(text);
                 }
-                self.note_private_tool_output("take_screenshot", &input, &text);
                 let image = image.ok_or_else(|| "screenshot was empty".to_string())?;
                 Ok(ImagePart {
                     media_type: image.media_type,

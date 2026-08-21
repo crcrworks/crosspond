@@ -119,7 +119,7 @@ impl Runtime {
         }
     }
 
-    fn tainted_egress_prompt(
+    pub(crate) fn tainted_egress_prompt(
         &self,
         name: &str,
         context: &ToolContext,
@@ -142,6 +142,23 @@ impl Runtime {
                     url,
                 )
             }
+            "skill_install" => {
+                let source = input
+                    .get("source")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("GitHub")
+                    .trim();
+                (
+                    format!("Allow private task data to be sent to {host}?"),
+                    format!(
+                        "This contacts GitHub for {source}. Private task data stays out of Settings, receipts, and logs."
+                    ),
+                )
+            }
+            "skill_search" => (
+                format!("Allow private task data to be sent to {host}?"),
+                "This queries the public skills directory. Private task data stays out of Settings, receipts, and logs.".into(),
+            ),
             _ => self.tools.approval_prompt(name, context, input),
         }
     }

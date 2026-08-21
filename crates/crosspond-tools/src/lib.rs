@@ -57,9 +57,9 @@ pub use skill_types::{PreparedSkillInstall, SkillEndpoints, SkillFile};
 pub use skills::{
     InspectedSkill, InstalledSkill, SkillManifest, SkillOrigin, SkillPickerItem,
     default_global_skills_root, default_skills_root, inspect_installed_skill, inspect_named_skill,
-    inspect_skill, parse_skill_md, prepare_skill_install, register_skill_tools,
-    render_skill_catalog, scan_skill_roots, scan_skills_root, skill_picker_items, valid_skill_name,
-    write_prepared_skill,
+    inspect_skill, parse_skill_install_source, parse_skill_md, prepare_skill_install,
+    register_skill_tools, render_skill_catalog, scan_skill_roots, scan_skills_root,
+    skill_picker_items, valid_skill_name, write_prepared_skill,
 };
 pub use ssrf::{
     SsrfResolver, filter_resolved_addrs, is_blocked_ip, validate_fetch_url,

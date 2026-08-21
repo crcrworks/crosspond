@@ -401,6 +401,11 @@ pub fn write_prepared_skill(
     ))
 }
 
+/// Local `owner/repo` (or GitHub URL) parse. Must not touch the network.
+pub fn parse_skill_install_source(source: &str) -> Result<String, ToolError> {
+    Ok(parse_github_source(source)?.source())
+}
+
 pub fn prepare_skill_install(
     endpoints: &SkillEndpoints,
     source: &str,
@@ -1468,6 +1473,10 @@ impl Tool for SkillSearch {
             image: None,
         })
     }
+
+    fn target_host(&self, _context: &ToolContext, _input: &Value) -> Option<String> {
+        Some("github.com".into())
+    }
 }
 
 struct SkillInstall;
@@ -1526,6 +1535,10 @@ impl Tool for SkillInstall {
         let name = optional_string(input, "name").unwrap_or_else(|| "skill".into());
         let source = optional_string(input, "source").unwrap_or_else(|| "GitHub".into());
         (format!("Install skill {name} from {source}"), String::new())
+    }
+
+    fn target_host(&self, _context: &ToolContext, _input: &Value) -> Option<String> {
+        Some("github.com".into())
     }
 }
 
@@ -2357,6 +2370,20 @@ Use fetch_url for public documents, then summarize.\n"
         assert_eq!(parsed.repo, "skills");
         assert_eq!(parsed.git_ref.as_deref(), Some("main"));
         assert_eq!(parsed.path.as_deref(), Some("skills/pdf-processing"));
+    }
+
+    #[test]
+    fn parse_skill_install_source_is_local_only() {
+        assert_eq!(
+            parse_skill_install_source("trusted/pdf-kit").unwrap(),
+            "trusted/pdf-kit"
+        );
+        assert_eq!(
+            parse_skill_install_source("https://github.com/acme/skills").unwrap(),
+            "acme/skills"
+        );
+        assert!(parse_skill_install_source("https://evil.example/repo").is_err());
+        assert!(parse_skill_install_source("").is_err());
     }
 
     #[test]

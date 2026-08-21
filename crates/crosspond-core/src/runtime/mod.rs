@@ -18,7 +18,8 @@ use crosspond_tools::{
     ApprovalBody, KnowledgeBackend, ScratchReason, ScratchSpace, ShellSandbox, SkillEndpoints,
     ToolContext, ToolRegistry, default_global_skills_root, default_skills_root,
     filesystem_registry, host_from_url, http_hosts_from_note, normalize_host,
-    prepare_skill_install, render_skill_catalog, scan_skill_roots, site_is_allowed,
+    parse_skill_install_source, prepare_skill_install, render_skill_catalog, scan_skill_roots,
+    site_is_allowed,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -846,9 +847,7 @@ impl Runtime {
                                 success,
                             } => (text, created, image, success),
                         };
-                        if success {
-                            self.note_private_tool_output(&call.name, &input, &text);
-                        }
+                        self.note_private_tool_output(&call.name, &input, &text);
                         let duration_ms = started.elapsed().as_millis() as u64;
                         append_event_log(
                             &task_dir,
@@ -1260,6 +1259,8 @@ impl Runtime {
         remember_private_value(&mut self.private_values, text);
     }
 
+    /// Custom preparation (credentials, skill fetch) must not perform external
+    /// IO or skip tainted-egress. Network happens only after this returns Allowed.
     async fn prepare_tool_call(
         &mut self,
         task_id: TaskId,
@@ -1270,7 +1271,7 @@ impl Runtime {
     ) -> ApprovalOutcome {
         if call.name == "skill_install" {
             return self
-                .prepare_skill_install_call(task_id, task_dir, input, context)
+                .prepare_skill_install_call(task_id, task_dir, call, input, context)
                 .await;
         }
         if tool_call_needs_credentials(&call.name, input) {
@@ -1286,20 +1287,41 @@ impl Runtime {
         &mut self,
         task_id: TaskId,
         task_dir: &Path,
+        call: &ToolCall,
         input: &serde_json::Value,
         context: &mut ToolContext,
     ) -> ApprovalOutcome {
-        let endpoints = context.skill_endpoints.clone().unwrap_or_default();
-        let root = context
-            .skills_root
-            .clone()
-            .unwrap_or_else(default_skills_root);
         let source = input
             .get("source")
             .and_then(Value::as_str)
             .unwrap_or("")
             .trim()
             .to_string();
+        if let Err(err) = parse_skill_install_source(&source) {
+            return ApprovalOutcome::Rejected(err.to_string());
+        }
+        if self.private_context {
+            let (title, description) = self.tainted_egress_prompt(&call.name, context, input);
+            match self
+                .prompt_tool_approval(
+                    task_id,
+                    task_dir,
+                    &call.name,
+                    title,
+                    description,
+                    ApprovalBody::Prose,
+                )
+                .await
+            {
+                ApprovalOutcome::Allowed => {}
+                other => return other,
+            }
+        }
+        let endpoints = context.skill_endpoints.clone().unwrap_or_default();
+        let root = context
+            .skills_root
+            .clone()
+            .unwrap_or_else(default_skills_root);
         let name = input
             .get("name")
             .and_then(Value::as_str)
@@ -1332,7 +1354,7 @@ impl Runtime {
         if fail {
             return ApprovalOutcome::Allowed;
         }
-        if needs_allow || self.private_context {
+        if needs_allow {
             return self
                 .prompt_tool_approval(
                     task_id,
@@ -1459,7 +1481,8 @@ impl Runtime {
                 }
                 context.fill_username = Some(username);
                 context.fill_password = Some(password);
-                ApprovalOutcome::Allowed
+                self.await_approval_if_needed(task_id, task_dir, call, input, context)
+                    .await
             }
             CredentialWait::Rejected => {
                 append_event_log(
@@ -2022,6 +2045,7 @@ mod tests {
         computer_registry, register_shell_tools, register_web_tools, unsandboxed_shell_command,
     };
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn echo_builder() -> ProviderBuilder {
         Arc::new(|_, _| Arc::new(EchoProvider::new(Duration::from_millis(80))))
@@ -4740,6 +4764,58 @@ mod tests {
         }
     }
 
+    struct CountingTool {
+        name: String,
+        hits: Arc<AtomicUsize>,
+        text: String,
+    }
+
+    impl crosspond_tools::Tool for CountingTool {
+        fn definition(&self) -> crosspond_tools::ToolDefinition {
+            crosspond_tools::ToolDefinition {
+                name: self.name.clone(),
+                description: "counting test tool".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn execute(
+            &self,
+            _context: &ToolContext,
+            _input: serde_json::Value,
+        ) -> Result<crosspond_tools::ToolResult, ToolError> {
+            self.hits.fetch_add(1, Ordering::SeqCst);
+            Ok(crosspond_tools::ToolResult {
+                text: self.text.clone(),
+                created_file: None,
+                image: None,
+            })
+        }
+    }
+
+    struct FailingPrivateTool {
+        name: String,
+        message: String,
+    }
+
+    impl crosspond_tools::Tool for FailingPrivateTool {
+        fn definition(&self) -> crosspond_tools::ToolDefinition {
+            crosspond_tools::ToolDefinition {
+                name: self.name.clone(),
+                description: "failing private test tool".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn execute(
+            &self,
+            _context: &ToolContext,
+            _input: serde_json::Value,
+        ) -> Result<crosspond_tools::ToolResult, ToolError> {
+            Err(ToolError::Failed(self.message.clone()))
+        }
+    }
+
     fn fetch_url_arguments(credential_ref: &str) -> String {
         serde_json::json!({
             "url": "https://files.example.invalid/inner/lab-share/",
@@ -4868,6 +4944,170 @@ mod tests {
         .unwrap();
         assert_no_secret_leak(&receipt);
         assert!(receipt.contains("Fetched a URL"));
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn fresh_credentials_still_require_tainted_egress_allow() {
+        let seen = Arc::new(Mutex::new(None));
+        let tools = fetch_url_test_registry(Arc::clone(&seen));
+        let secrets = seeded_secrets();
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let (mut runtime, tmp) =
+            test_runtime(fetch_url_provider("lab.fileserver"), secrets.clone(), tools);
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let task_id = TaskId::new();
+        let mut request = StartTaskRequest::new(task_id, "list the lab files with curl");
+        request.context.selected_text = Some("classified lab protocol 7".into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let login = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::CredentialRequired { .. })
+        })
+        .await;
+        let AgentEvent::CredentialRequired { approval_id, .. } = login else {
+            panic!("expected credential prompt");
+        };
+        assert!(seen.lock().expect("lock").is_none());
+        command_tx
+            .send(RuntimeCommand::SubmitCredential {
+                id: approval_id,
+                username: SecretString::new("labuser"),
+                password: SecretString::new("hunter2"),
+                save: false,
+            })
+            .unwrap();
+        let egress = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match egress {
+            AgentEvent::ApprovalRequired {
+                approval_id, title, ..
+            } => {
+                assert!(
+                    title.contains("files.example.invalid")
+                        || title.contains("private task data")
+                        || title.contains("Fetch"),
+                    "{title}"
+                );
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(seen.lock().expect("lock").is_none());
+        let events = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert_no_secret_leak(&events);
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn vault_read_then_fresh_credentials_require_tainted_egress() {
+        let seen = Arc::new(Mutex::new(None));
+        let mut tools = filesystem_registry();
+        tools.register(Arc::new(RecordingFetchUrl {
+            seen: Arc::clone(&seen),
+        }));
+        let secrets = seeded_secrets();
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let note_id = indexed
+            .search("Lab File Server", 8)
+            .unwrap()
+            .into_iter()
+            .find(|hit| hit.title == "Lab File Server")
+            .expect("file server note")
+            .id;
+        let (mut runtime, tmp) = test_runtime(
+            sequential_provider(
+                vec![
+                    (
+                        "knowledge_read".into(),
+                        serde_json::json!({ "id": note_id }).to_string(),
+                    ),
+                    ("fetch_url".into(), fetch_url_arguments("lab.fileserver")),
+                ],
+                "listed",
+            ),
+            secrets,
+            tools,
+        );
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "read the vault then fetch",
+            )))
+            .unwrap();
+        let login = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::CredentialRequired { .. })
+        })
+        .await;
+        let AgentEvent::CredentialRequired { approval_id, .. } = login else {
+            panic!("expected credential prompt");
+        };
+        assert!(seen.lock().expect("lock").is_none());
+        command_tx
+            .send(RuntimeCommand::SubmitCredential {
+                id: approval_id,
+                username: SecretString::new("labuser"),
+                password: SecretString::new("hunter2"),
+                save: false,
+            })
+            .unwrap();
+        let egress = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match egress {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(seen.lock().expect("lock").is_none());
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;
@@ -5315,6 +5555,131 @@ mod tests {
                 break;
             }
         }
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn private_tool_failure_taints_later_web_search() {
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(FailingPrivateTool {
+            name: "read_file".into(),
+            message: "/Users/alice/SecretProject/notes.md not found".into(),
+        }));
+        register_web_tools(&mut tools);
+        let (runtime, _tmp) = test_runtime(
+            sequential_provider(
+                vec![
+                    (
+                        "read_file".into(),
+                        serde_json::json!({"path": "notes.md"}).to_string(),
+                    ),
+                    (
+                        "web_search".into(),
+                        serde_json::json!({"query": "weather tomorrow"}).to_string(),
+                    ),
+                ],
+                "searched",
+            ),
+            seeded_secrets(),
+            tools,
+        );
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "read then search",
+            )))
+            .unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired {
+                approval_id,
+                description,
+                ..
+            } => {
+                assert!(description.contains("weather tomorrow"), "{description}");
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn public_tool_failure_does_not_taint_later_fetch() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(FailingPrivateTool {
+            name: "web_search".into(),
+            message: "exa unavailable".into(),
+        }));
+        tools.register(Arc::new(CountingTool {
+            name: "fetch_url".into(),
+            hits: Arc::clone(&hits),
+            text: "ok".into(),
+        }));
+        let (runtime, _tmp) = test_runtime(
+            sequential_provider(
+                vec![
+                    (
+                        "web_search".into(),
+                        serde_json::json!({"query": "rust 1.96"}).to_string(),
+                    ),
+                    (
+                        "fetch_url".into(),
+                        serde_json::json!({"url": "https://example.com/"}).to_string(),
+                    ),
+                ],
+                "done",
+            ),
+            seeded_secrets(),
+            tools,
+        );
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "search then fetch",
+            )))
+            .unwrap();
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "public search failure must not taint fetch_url"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
         drop(command_tx);
         join.await.unwrap();
     }
@@ -7126,8 +7491,15 @@ mod tests {
 
     struct SkillHttpMock {
         addr: String,
+        hits: Arc<AtomicUsize>,
         #[allow(dead_code)]
         handle: std::thread::JoinHandle<()>,
+    }
+
+    impl SkillHttpMock {
+        fn hit_count(&self) -> usize {
+            self.hits.load(Ordering::SeqCst)
+        }
     }
 
     fn start_skill_http_mock() -> SkillHttpMock {
@@ -7136,8 +7508,11 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let thread_hits = Arc::clone(&hits);
         let handle = std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
+                thread_hits.fetch_add(1, Ordering::SeqCst);
                 let mut stream = stream;
                 let mut buf = Vec::new();
                 let mut tmp = [0u8; 1024];
@@ -7168,10 +7543,25 @@ mod tests {
                 );
             }
         });
-        SkillHttpMock { addr, handle }
+        SkillHttpMock { addr, hits, handle }
     }
 
     fn skill_http_mock_handler(path: &str) -> (u16, &'static str, String) {
+        if path.starts_with("/api/search") {
+            return (
+                200,
+                "application/json",
+                json!({
+                    "skills": [{
+                        "id": "trusted/pdf-kit/pdf-kit",
+                        "name": "pdf-kit",
+                        "source": "trusted/pdf-kit",
+                        "installs": 40
+                    }]
+                })
+                .to_string(),
+            );
+        }
         if path.contains("/repos/acme/skills/git/trees/") {
             return (
                 200,
@@ -7872,11 +8262,19 @@ mod tests {
             matches!(event, AgentEvent::ApprovalRequired { .. })
         })
         .await;
+        assert_eq!(
+            server.hit_count(),
+            0,
+            "tainted skill_install must not fetch before Allow"
+        );
         match required {
             AgentEvent::ApprovalRequired {
                 approval_id, title, ..
             } => {
-                assert!(title.contains("pdf-kit"), "{title}");
+                assert!(
+                    title.contains("github.com") || title.contains("private task data"),
+                    "{title}"
+                );
                 command_tx
                     .send(RuntimeCommand::Approve(approval_id))
                     .unwrap();
@@ -7887,10 +8285,206 @@ mod tests {
             matches!(event, AgentEvent::TaskCompleted { .. })
         })
         .await;
+        assert!(server.hit_count() > 0);
         assert!(skills_root.join("pdf-kit").join("SKILL.md").exists());
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn tainted_skill_install_reject_makes_zero_http_requests() {
+        let server = start_skill_http_mock();
+        let build: ProviderBuilder = Arc::new(|_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "skill_install",
+                json!({"source": "trusted/pdf-kit", "name": "pdf-kit"}).to_string(),
+                "installed",
+            ))
+        });
+        let (mut runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        runtime.skill_endpoints = SkillEndpoints::for_local_mock(&server.addr);
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let skills_root = runtime.skills_root.clone();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let mut request = StartTaskRequest::new(TaskId::new(), "install pdf-kit");
+        request.context.selected_text = Some("classified lab protocol 7".into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        assert_eq!(server.hit_count(), 0);
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert_eq!(server.hit_count(), 0);
+        assert!(!skills_root.join("pdf-kit").exists());
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn tainted_skill_search_reject_makes_zero_http_requests() {
+        let server = start_skill_http_mock();
+        let build: ProviderBuilder = Arc::new(|_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "skill_search",
+                json!({"query": "pdf"}).to_string(),
+                "searched",
+            ))
+        });
+        let (mut runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        runtime.skill_endpoints = SkillEndpoints::for_local_mock(&server.addr);
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let mut request = StartTaskRequest::new(TaskId::new(), "find a pdf skill");
+        request.context.selected_text = Some("classified lab protocol 7".into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        assert_eq!(server.hit_count(), 0);
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert_eq!(server.hit_count(), 0);
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn tainted_skill_install_still_refuses_malicious_svg_after_egress_allow() {
+        let server = start_skill_http_mock();
+        let build: ProviderBuilder = Arc::new(|_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "skill_install",
+                json!({"source": "evil/svg-kit", "name": "svg-kit"}).to_string(),
+                "could not install",
+            ))
+        });
+        let (mut runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        runtime.skill_endpoints = SkillEndpoints::for_local_mock(&server.addr);
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let skills_root = runtime.skills_root.clone();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let mut request = StartTaskRequest::new(TaskId::new(), "install svg-kit");
+        request.context.selected_text = Some("classified lab protocol 7".into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Approve(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(server.hit_count() > 0);
+        assert!(!skills_root.join("svg-kit").exists());
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn unknown_egress_tool_waits_for_allow_when_tainted() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(CountingTool {
+            name: "future_exfil".into(),
+            hits: Arc::clone(&hits),
+            text: "leaked".into(),
+        }));
+        let build: ProviderBuilder = Arc::new(|_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "future_exfil",
+                json!({}).to_string(),
+                "done",
+            ))
+        });
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), tools);
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let mut request = StartTaskRequest::new(TaskId::new(), "exfil");
+        request.context.selected_text = Some("classified lab protocol 7".into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        drop(command_tx);
+        join.await.unwrap();
     }
 
     #[tokio::test]

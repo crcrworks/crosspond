@@ -30,6 +30,9 @@ fn has_credential_ref(input: &Value) -> bool {
 }
 
 /// Fail-closed: unknown tools are treated as private local data that may leave the machine.
+///
+/// Evaluate this before any tool side effect. Custom `prepare_*` paths must not
+/// perform external IO until policy has allowed `egress`.
 pub fn security_metadata(name: &str, input: &Value) -> ToolSecurityMetadata {
     match name {
         "web_search" => ToolSecurityMetadata {
