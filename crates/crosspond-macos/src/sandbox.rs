@@ -38,10 +38,12 @@ fn scheme_path(path: &Path) -> String {
         .replace('\n', " ")
 }
 
-/// Auto-safe Seatbelt: scratch read/write, system binaries/libraries, no network.
+/// Auto-safe Seatbelt: scratch read/write, system binaries/libraries, no network,
+/// and no clipboard / Keychain / Apple Events.
 ///
 /// `(allow default)` keeps process/mach working; filesystem reads are deny-then-allow
-/// so user home and other task temps stay out of Auto `run_command`.
+/// so user home and other task temps stay out of Auto `run_command`. Named Mach
+/// services that leak user data are denied after that.
 fn seatbelt_profile(scratch: &Path) -> String {
     let root = scheme_path(scratch);
     let work = scheme_path(&scratch.join("work"));
@@ -71,6 +73,16 @@ fn seatbelt_profile(scratch: &Path) -> String {
     (subpath "{root}")
     (subpath "{work}")
 )
+(deny appleevent-send)
+(deny mach-lookup (global-name "com.apple.pboard"))
+(deny mach-lookup (global-name "com.apple.pasteboard.pasted"))
+(deny mach-lookup (global-name "com.apple.pasteboard.genp"))
+(deny mach-lookup (global-name "com.apple.securityd"))
+(deny mach-lookup (global-name "com.apple.SecurityServer"))
+(deny mach-lookup (global-name "com.apple.trustd"))
+(deny mach-lookup (global-name "com.apple.ocspd"))
+(deny mach-lookup (global-name "com.apple.coreservices.appleevents"))
+(deny mach-lookup (global-name "com.apple.ae.listener.register"))
 "#
     )
 }
@@ -96,6 +108,15 @@ mod tests {
         assert!(profile.contains("(deny file-read*)"), "{profile}");
         assert!(profile.contains("(deny file-write*)"), "{profile}");
         assert!(profile.contains("(deny network*)"), "{profile}");
+        assert!(profile.contains("(deny appleevent-send)"), "{profile}");
+        assert!(
+            profile.contains("(global-name \"com.apple.pboard\")"),
+            "{profile}"
+        );
+        assert!(
+            profile.contains("(global-name \"com.apple.securityd\")"),
+            "{profile}"
+        );
         assert!(
             profile.contains("(subpath \"/tmp/crosspond-scratch-profile\")"),
             "{profile}"
@@ -220,6 +241,89 @@ mod tests {
         ]
         .join("\n");
         assert!(!net.status.success(), "network must be denied: {net_text}");
+
+        let write_out = sandbox
+            .prepare_command(
+                &format!("printf leaked > '{}'", secret_dir.join("out.txt").display()),
+                &scratch,
+            )
+            .output()
+            .expect("sandbox-exec");
+        assert!(
+            !write_out.status.success() || !secret_dir.join("out.txt").exists(),
+            "write outside scratch must fail"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sandbox_output(command: &str, scratch: &Path) -> (bool, String) {
+        let output = MacOsShellSandbox
+            .prepare_command(command, scratch)
+            .output()
+            .expect("sandbox-exec");
+        let text = [
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ]
+        .join("\n");
+        (output.status.success(), text)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_blocks_clipboard_and_apple_events() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("crosspond-sb-ipc-{stamp}"));
+        let scratch = root.join("scratch");
+        std::fs::create_dir_all(scratch.join("work")).unwrap();
+
+        let secret = format!("CROSSPOND-CLIP-{stamp}");
+        let _ = Command::new("/usr/bin/pbcopy")
+            .current_dir(&scratch)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(stdin) = child.stdin.as_mut() {
+                    stdin.write_all(secret.as_bytes())?;
+                }
+                child.wait()
+            });
+
+        let (paste_ok, paste_text) = sandbox_output("/usr/bin/pbpaste", &scratch);
+        assert!(
+            !paste_text.contains(&secret),
+            "sandboxed pbpaste leaked clipboard: {paste_text}"
+        );
+        assert!(
+            !paste_ok || paste_text.trim().is_empty(),
+            "pbpaste must not return user clipboard: {paste_text}"
+        );
+
+        let (ae_ok, ae_text) = sandbox_output(
+            r#"/usr/bin/osascript -e 'tell application "Finder" to get POSIX path of (path to home folder)'"#,
+            &scratch,
+        );
+        assert!(
+            !ae_text.contains("/Users/"),
+            "sandboxed osascript leaked home: {ae_text}"
+        );
+        assert!(!ae_ok, "Apple Events must be denied: {ae_text}");
+
+        let (sec_ok, sec_text) = sandbox_output(
+            "/usr/bin/security find-generic-password -s com.crosspond.app.test -a missing",
+            &scratch,
+        );
+        assert!(!sec_ok, "Keychain lookup must be denied: {sec_text}");
+        assert!(
+            !sec_text.to_ascii_lowercase().contains("password"),
+            "security must not echo secrets: {sec_text}"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

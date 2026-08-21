@@ -8,7 +8,8 @@ pub trait ShellSandbox: Send + Sync {
     /// True when Auto may run `run_command` without an Allow card.
     ///
     /// Must mean the child cannot read user files outside scratch, cannot write
-    /// outside scratch, and cannot use the network. Network+write-only is not enough.
+    /// outside scratch, cannot use the network, and cannot reach clipboard,
+    /// Keychain, or Apple Events. Network+write-only is not enough.
     fn is_enforcing(&self) -> bool;
 
     /// Build the process that will run `shell_command` with cwd `scratch`.
