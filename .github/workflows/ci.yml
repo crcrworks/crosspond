@@ -69,7 +69,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: cargo test (Seatbelt)
-        run: cargo test -p crosspond-macos --all-targets
+        run: cargo test -p crosspond-macos --all-targets -- --test-threads=1
 
   ui:
     name: UI check, test, build
