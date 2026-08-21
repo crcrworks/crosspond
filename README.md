@@ -41,7 +41,7 @@ npm --prefix ui run check
 npm --prefix ui test
 ```
 
-Pull requests and pushes to `main` run `.github/workflows/ci.yml` (fmt, portable clippy/test, UI check/test/build, `cargo audit`, `npm audit --audit-level=high`). On Linux, clippy/test skip `crosspond-macos` stubs. `gitleaks` is advisory.
+Pull requests and pushes to `main` run `.github/workflows/ci.yml` (fmt, portable clippy/test, macOS Seatbelt tests, UI check/test/build, `cargo audit`, `npm audit --audit-level=high`). On Linux, clippy/test skip `crosspond-macos` stubs. `gitleaks` is advisory.
 
 ## Release
 
