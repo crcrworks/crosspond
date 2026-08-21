@@ -1,7 +1,10 @@
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crosspond_tools::{ShellSandbox, unsandboxed_shell_command};
+use crosspond_tools::ShellSandbox;
+#[cfg(not(target_os = "macos"))]
+use crosspond_tools::unsandboxed_shell_command;
 
 pub struct MacOsShellSandbox;
 
@@ -38,15 +41,90 @@ fn scheme_path(path: &Path) -> String {
         .replace('\n', " ")
 }
 
+fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+/// Seatbelt matches the kernel path. Scratch often lives under a symlink
+/// (`/var` → `/private/var`, `/tmp` → `/private/tmp`) or the Data firmlink
+/// (`/Users` → `/System/Volumes/Data/Users`). Allow both spellings.
+fn scratch_path_aliases(scratch: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    push_unique(&mut paths, scratch.to_path_buf());
+    if let Ok(canon) = scratch.canonicalize() {
+        push_unique(&mut paths, canon);
+    }
+    const PAIRS: &[(&str, &str)] = &[
+        ("/tmp", "/private/tmp"),
+        ("/var", "/private/var"),
+        ("/etc", "/private/etc"),
+        ("/Users", "/System/Volumes/Data/Users"),
+    ];
+    let seed = paths.clone();
+    for path in seed {
+        let text = path.to_string_lossy();
+        for (from, to) in PAIRS {
+            for (prefix, mapped) in [(from, to), (to, from)] {
+                if let Some(rest) = text.strip_prefix(prefix)
+                    && (rest.is_empty() || rest.starts_with('/'))
+                {
+                    push_unique(&mut paths, PathBuf::from(format!("{mapped}{rest}")));
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn ancestor_metadata_rules(roots: &[PathBuf]) -> String {
+    let mut ancestors = BTreeSet::new();
+    for root in roots {
+        let mut current = root.clone();
+        loop {
+            let Some(parent) = current.parent() else {
+                break;
+            };
+            if parent.as_os_str().is_empty() {
+                break;
+            }
+            ancestors.insert(scheme_path(parent));
+            if parent == Path::new("/") {
+                break;
+            }
+            current = parent.to_path_buf();
+        }
+    }
+    ancestors
+        .iter()
+        .map(|path| format!("(allow file-read-metadata (literal \"{path}\"))\n"))
+        .collect()
+}
+
+fn scratch_subpath_filters(roots: &[PathBuf]) -> String {
+    let mut out = String::new();
+    for root in roots {
+        let root_s = scheme_path(root);
+        let work_s = scheme_path(&root.join("work"));
+        out.push_str(&format!(
+            "    (subpath \"{root_s}\")\n    (subpath \"{work_s}\")\n"
+        ));
+    }
+    out
+}
+
 /// Auto-safe Seatbelt: scratch read/write, system binaries/libraries, no network,
 /// and no clipboard / Keychain / Apple Events.
 ///
 /// `(allow default)` keeps process/mach working; filesystem reads are deny-then-allow
-/// so user home and other task temps stay out of Auto `run_command`. Named Mach
-/// services that leak user data are denied after that.
+/// so user home and other task temps stay out of Auto `run_command`. Clipboard,
+/// Keychain, and Apple Event Mach names are denied after that. Code-signing trust
+/// (`trustd` / `ocspd`) is left allowed so signed binaries can start.
 fn seatbelt_profile(scratch: &Path) -> String {
-    let root = scheme_path(scratch);
-    let work = scheme_path(&scratch.join("work"));
+    let roots = scratch_path_aliases(scratch);
+    let subpaths = scratch_subpath_filters(&roots);
+    let metadata = ancestor_metadata_rules(&roots);
     format!(
         r#"(version 1)
 (allow default)
@@ -56,10 +134,10 @@ fn seatbelt_profile(scratch: &Path) -> String {
 (deny network-bind)
 (deny file-write*)
 (allow file-write-data (literal "/dev/null"))
-(allow file-write* (subpath "{root}") (subpath "{work}"))
+(allow file-write*
+{subpaths})
 (deny file-read*)
-(allow file-read-metadata (literal "/"))
-(allow file-read*
+{metadata}(allow file-read*
     (subpath "/usr")
     (subpath "/bin")
     (subpath "/sbin")
@@ -70,17 +148,13 @@ fn seatbelt_profile(scratch: &Path) -> String {
     (subpath "/private/var/db/timezone")
     (subpath "/private/etc")
     (subpath "/etc")
-    (subpath "{root}")
-    (subpath "{work}")
-)
+{subpaths})
 (deny appleevent-send)
 (deny mach-lookup (global-name "com.apple.pboard"))
 (deny mach-lookup (global-name "com.apple.pasteboard.pasted"))
 (deny mach-lookup (global-name "com.apple.pasteboard.genp"))
 (deny mach-lookup (global-name "com.apple.securityd"))
 (deny mach-lookup (global-name "com.apple.SecurityServer"))
-(deny mach-lookup (global-name "com.apple.trustd"))
-(deny mach-lookup (global-name "com.apple.ocspd"))
 (deny mach-lookup (global-name "com.apple.coreservices.appleevents"))
 (deny mach-lookup (global-name "com.apple.ae.listener.register"))
 "#
@@ -91,6 +165,10 @@ fn seatbelt_profile(scratch: &Path) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    fn has_exact_subpath(profile: &str, path: &str) -> bool {
+        profile.contains(&format!("(subpath \"{path}\")"))
+    }
 
     #[test]
     fn profile_confines_reads_to_system_and_scratch() {
@@ -118,30 +196,93 @@ mod tests {
             "{profile}"
         );
         assert!(
-            profile.contains("(subpath \"/tmp/crosspond-scratch-profile\")"),
+            !profile.contains("com.apple.trustd"),
+            "denying trustd prevents signed binaries from starting:\n{profile}"
+        );
+        assert!(
+            !profile.contains("com.apple.ocspd"),
+            "denying ocspd can prevent process launch:\n{profile}"
+        );
+        assert!(
+            has_exact_subpath(&profile, "/tmp/crosspond-scratch-profile"),
             "{profile}"
         );
         assert!(
-            profile.contains("(subpath \"/tmp/crosspond-scratch-profile/work\")"),
+            has_exact_subpath(&profile, "/tmp/crosspond-scratch-profile/work"),
+            "{profile}"
+        );
+        assert!(
+            has_exact_subpath(&profile, "/private/tmp/crosspond-scratch-profile"),
+            "scratch under /tmp must also allow the /private/tmp path:\n{profile}"
+        );
+        assert!(
+            profile.contains("(allow file-read-metadata (literal \"/tmp\"))"),
+            "{profile}"
+        );
+        assert!(
+            profile.contains("(allow file-read-metadata (literal \"/\"))"),
             "{profile}"
         );
         for system in ["/usr", "/bin", "/sbin", "/System", "/Library", "/dev"] {
             assert!(
-                profile.contains(&format!("(subpath \"{system}\")")),
+                has_exact_subpath(&profile, system),
                 "missing {system} in {profile}"
             );
         }
         assert!(
-            !profile.contains("(subpath \"/Users\")"),
+            !has_exact_subpath(&profile, "/Users"),
             "must not allow all of /Users:\n{profile}"
         );
         assert!(
-            !profile.contains("(subpath \"/private/var/folders\")"),
+            !has_exact_subpath(&profile, "/private/var/folders"),
             "must not allow all process temps:\n{profile}"
         );
         assert!(
-            !profile.contains("(subpath \"/private/tmp\")"),
+            !has_exact_subpath(&profile, "/private/tmp"),
             "writes/reads must not include shared /tmp:\n{profile}"
+        );
+    }
+
+    #[test]
+    fn profile_allows_macos_symlink_and_firmlink_aliases() {
+        let var_scratch = Path::new("/var/folders/zz/tmp/crosspond-scratch");
+        let var_profile = seatbelt_profile(var_scratch);
+        assert!(
+            has_exact_subpath(&var_profile, "/var/folders/zz/tmp/crosspond-scratch"),
+            "{var_profile}"
+        );
+        assert!(
+            has_exact_subpath(
+                &var_profile,
+                "/private/var/folders/zz/tmp/crosspond-scratch"
+            ),
+            "{var_profile}"
+        );
+        assert!(
+            var_profile.contains("(allow file-read-metadata (literal \"/private/var/folders\"))"),
+            "{var_profile}"
+        );
+        assert!(
+            !has_exact_subpath(&var_profile, "/private/var/folders"),
+            "must not allow all of /private/var/folders:\n{var_profile}"
+        );
+
+        let home_scratch = Path::new("/Users/me/.crosspond/scratch/task");
+        let home_profile = seatbelt_profile(home_scratch);
+        assert!(
+            has_exact_subpath(&home_profile, "/Users/me/.crosspond/scratch/task"),
+            "{home_profile}"
+        );
+        assert!(
+            has_exact_subpath(
+                &home_profile,
+                "/System/Volumes/Data/Users/me/.crosspond/scratch/task"
+            ),
+            "{home_profile}"
+        );
+        assert!(
+            !has_exact_subpath(&home_profile, "/Users"),
+            "must not allow all of /Users:\n{home_profile}"
         );
     }
 
@@ -155,6 +296,16 @@ mod tests {
         {
             assert!(MacOsShellSandbox.is_enforcing());
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn describe_output(output: &std::process::Output) -> String {
+        format!(
+            "status={} stdout={:?} stderr={:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
     }
 
     #[cfg(target_os = "macos")]
@@ -172,11 +323,27 @@ mod tests {
         std::fs::create_dir_all(&secret_dir).unwrap();
         let secret = secret_dir.join("id_rsa");
         std::fs::write(&secret, "FAKE-SSH-PRIVATE-KEY").unwrap();
-        std::fs::write(scratch.join("inside.txt"), "scratch-ok").unwrap();
+        let inside_file = scratch.join("inside.txt");
+        std::fs::write(&inside_file, "scratch-ok").unwrap();
 
         let sandbox = MacOsShellSandbox;
+        let echo = sandbox
+            .prepare_command("/bin/echo seatbelt-bin", &scratch)
+            .output()
+            .expect("sandbox-exec");
+        assert!(
+            echo.status.success(),
+            "system binary must run under the profile: {}",
+            describe_output(&echo)
+        );
+        assert!(
+            String::from_utf8_lossy(&echo.stdout).contains("seatbelt-bin"),
+            "echo stdout missing: {}",
+            describe_output(&echo)
+        );
+
         let outside = sandbox
-            .prepare_command(&format!("cat '{}'", secret.display()), &scratch)
+            .prepare_command(&format!("/bin/cat '{}'", secret.display()), &scratch)
             .output()
             .expect("sandbox-exec");
         let outside_text = [
@@ -193,31 +360,37 @@ mod tests {
             "read outside scratch must fail: {outside_text}"
         );
 
-        let inside = sandbox
-            .prepare_command("cat inside.txt", &scratch)
+        let inside_abs = sandbox
+            .prepare_command(&format!("/bin/cat '{}'", inside_file.display()), &scratch)
             .output()
             .expect("sandbox-exec");
         assert!(
-            inside.status.success(),
-            "scratch read failed: {}",
-            String::from_utf8_lossy(&inside.stderr)
+            inside_abs.status.success(),
+            "scratch read (absolute) failed: {}",
+            describe_output(&inside_abs)
         );
-        assert_eq!(String::from_utf8_lossy(&inside.stdout).trim(), "scratch-ok");
+        assert_eq!(
+            String::from_utf8_lossy(&inside_abs.stdout).trim(),
+            "scratch-ok"
+        );
 
-        let echo = sandbox
-            .prepare_command("/bin/echo seatbelt-bin", &scratch)
+        let inside_rel = sandbox
+            .prepare_command("/bin/cat inside.txt", &scratch)
             .output()
             .expect("sandbox-exec");
         assert!(
-            echo.status.success(),
-            "system binary failed: {}",
-            String::from_utf8_lossy(&echo.stderr)
+            inside_rel.status.success(),
+            "scratch read (relative) failed: {}",
+            describe_output(&inside_rel)
         );
-        assert!(String::from_utf8_lossy(&echo.stdout).contains("seatbelt-bin"));
+        assert_eq!(
+            String::from_utf8_lossy(&inside_rel.stdout).trim(),
+            "scratch-ok"
+        );
 
         let write_ok = sandbox
             .prepare_command(
-                "printf written > work/out.txt && cat work/out.txt",
+                "printf written > work/out.txt && /bin/cat work/out.txt",
                 &scratch,
             )
             .output()
@@ -225,7 +398,7 @@ mod tests {
         assert!(
             write_ok.status.success(),
             "scratch write failed: {}",
-            String::from_utf8_lossy(&write_ok.stderr)
+            describe_output(&write_ok)
         );
 
         let net = sandbox
@@ -281,6 +454,16 @@ mod tests {
         let root = std::env::temp_dir().join(format!("crosspond-sb-ipc-{stamp}"));
         let scratch = root.join("scratch");
         std::fs::create_dir_all(scratch.join("work")).unwrap();
+
+        let (echo_ok, echo_text) = sandbox_output("/bin/echo seatbelt-alive", &scratch);
+        assert!(
+            echo_ok,
+            "benign command must run under IPC denies: {echo_text}"
+        );
+        assert!(
+            echo_text.contains("seatbelt-alive"),
+            "echo stdout missing: {echo_text}"
+        );
 
         let secret = format!("CROSSPOND-CLIP-{stamp}");
         let _ = Command::new("/usr/bin/pbcopy")
