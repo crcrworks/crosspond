@@ -71,7 +71,6 @@ impl Runtime {
                     {
                         ApprovalOutcome::Allowed => {
                             persist_allowed_browser_host(self.config.as_ref(), &host);
-                            return ApprovalOutcome::Allowed;
                         }
                         other => return other,
                     }
@@ -102,7 +101,11 @@ impl Runtime {
             }
             return ApprovalOutcome::Allowed;
         }
-        let (title, description) = self.tools.approval_prompt(&call.name, context, input);
+        let (title, description) = if tainted_egress {
+            self.tainted_egress_prompt(&call.name, context, input)
+        } else {
+            self.tools.approval_prompt(&call.name, context, input)
+        };
         let body = self.tools.approval_body(&call.name);
         match self
             .prompt_tool_approval(task_id, task_dir, &call.name, title, description, body)
@@ -113,6 +116,33 @@ impl Runtime {
                 ApprovalOutcome::Allowed
             }
             other => other,
+        }
+    }
+
+    fn tainted_egress_prompt(
+        &self,
+        name: &str,
+        context: &ToolContext,
+        input: &serde_json::Value,
+    ) -> (String, String) {
+        let host = self
+            .tools
+            .target_host(name, context, input)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "this site".into());
+        match name {
+            "browser_fill" | "browser_type" => (
+                format!("Allow private task data to be sent to {host}?"),
+                "Private task data will be typed into this site. Typed values stay out of Settings, receipts, and logs.".into(),
+            ),
+            "browser_navigate" | "browser_new_tab" => {
+                let (_, url) = self.tools.approval_prompt(name, context, input);
+                (
+                    format!("Allow private task data to be sent to {host}?"),
+                    url,
+                )
+            }
+            _ => self.tools.approval_prompt(name, context, input),
         }
     }
 

@@ -58,12 +58,14 @@ Option+Space
         │                        browser_select / browser_navigate /
         │                        browser_new_tab
         │                        unknown site host → Allow in Manual/AI (Auto skips
-        │                          and does not persist the host)
+        │                          and does not persist the host); site Allow does
+        │                          not skip tainted-egress for the same call
         │                        then ComputerAction policy for writes
         │                      web_search / fetch_url (auto when the task is not
-        │                        tainted; Exa key for search; fetch_url +
-        │                        credential_ref is ComputerAction, host must match
-        │                        the Resource note; DNS is pinned to checked IPs)
+        │                        tainted; any fetch_url is egress; Exa key for
+        │                        search; fetch_url + credential_ref is also
+        │                        ComputerAction, host must match the Resource
+        │                        note; DNS is pinned to checked IPs)
         │                      calendar_events (auto; EventKit / Calendar TCC)
         │                      ui_type / ui_hotkey / ui_scroll
         │                      ui_press / ui_set_value / ui_click
@@ -76,7 +78,7 @@ Option+Space
         │                        Auto (and Agent + ask_user false) skip the card
         │                      run_command / open_url (non-http)
         │                        Always Allow unless Auto + enforcing Seatbelt
-        │                        (scratch writes, no network)
+        │                        (scratch read/write, no network)
         │                      write ~/.crosspond/tasks/<task-id>/
         │                        (task.json with conversation_id,
         │                         UI-safe events.jsonl, sanitized session.json,

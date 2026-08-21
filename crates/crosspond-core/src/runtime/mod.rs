@@ -32,7 +32,7 @@ use crate::event::AgentEvent;
 use crate::history::history_title;
 use crate::ids::{ConversationId, TaskId};
 use crate::mention::{self, Mention};
-use crate::network_policy::{is_private_source_tool, remember_private_value};
+use crate::network_policy::{output_is_private, remember_private_value};
 use crate::policy::ComputerApprovalMode;
 use crate::receipt::{
     Receipt, append_event_log, receipt_action_line, tool_ui_summary, write_receipt, write_task_meta,
@@ -73,7 +73,7 @@ fn persist_allowed_browser_host(store: &dyn ConfigStore, host: &str) {
 fn computer_approval_prompt(mode: ComputerApprovalMode) -> &'static str {
     match mode {
         ComputerApprovalMode::Auto => {
-            "Computer actions and public web search run without asking. Unsandboxed shell commands, non-http URLs, and sending private task data to the network still require Allow. Unknown hosts are not added to Allowed Sites; blocked hosts are still refused. After the host sandboxes the shell, scratch-only commands with no network may run without asking."
+            "Computer actions and public web search run without asking. Unsandboxed shell commands, non-http URLs, and sending private task data to the network still require Allow. Unknown hosts are not added to Allowed Sites; blocked hosts are still refused. After the host sandboxes the shell (scratch read/write, no network), those commands may run without asking."
         }
         ComputerApprovalMode::Agent => {
             "For computer actions, set ask_user true when the action is irreversible, submits a form, sends a message, logs in, purchases, deletes, or you are unsure. Set ask_user false for routine navigation the user clearly requested. Omit ask_user only if you want the user asked. Shell, external files, and non-http URLs still require Allow."
@@ -828,7 +828,7 @@ impl Runtime {
                             } => (text, created, image, success),
                         };
                         if success {
-                            self.note_private_tool_output(&call.name, &text);
+                            self.note_private_tool_output(&call.name, &input, &text);
                         }
                         let duration_ms = started.elapsed().as_millis() as u64;
                         append_event_log(
@@ -1197,6 +1197,27 @@ impl Runtime {
             self.private_context = true;
             remember_private_value(&mut self.private_values, url);
         }
+        if let Some(title) = context
+            .focused_window
+            .as_ref()
+            .and_then(|window| window.title.as_ref())
+            && !title.trim().is_empty()
+        {
+            self.private_context = true;
+            remember_private_value(&mut self.private_values, title);
+        }
+        if let Some(app) = &context.frontmost_app
+            && !app.name.trim().is_empty()
+        {
+            self.private_context = true;
+            remember_private_value(&mut self.private_values, &app.name);
+        }
+        if let Some(app) = &context.frontmost_app
+            && !app.bundle_id.trim().is_empty()
+        {
+            self.private_context = true;
+            remember_private_value(&mut self.private_values, &app.bundle_id);
+        }
         if !context.selected_files.is_empty() || !context.attachments.is_empty() {
             self.private_context = true;
             for path in context
@@ -1209,8 +1230,8 @@ impl Runtime {
         }
     }
 
-    fn note_private_tool_output(&mut self, name: &str, text: &str) {
-        if !is_private_source_tool(name) {
+    fn note_private_tool_output(&mut self, name: &str, input: &Value, text: &str) {
+        if !output_is_private(name, input) {
             return;
         }
         self.private_context = true;
@@ -1895,7 +1916,7 @@ mod tests {
     use crate::command::StartTaskRequest;
     use crate::config::AppConfig;
     use crate::config::memory::MemoryConfigStore;
-    use crate::context::ContextCapsule;
+    use crate::context::{AppContext, ContextCapsule, WindowContext};
     use crate::ids::{ConversationId, TaskId};
     use crate::mention::Mention;
     use crate::policy::ComputerApprovalMode;
@@ -3952,6 +3973,62 @@ mod tests {
         }
     }
 
+    struct SequentialToolsThenDoneProvider {
+        calls: Vec<(String, String)>,
+        done: String,
+        turn: Mutex<u8>,
+    }
+
+    impl SequentialToolsThenDoneProvider {
+        fn new(calls: Vec<(String, String)>, done: &str) -> Self {
+            Self {
+                calls,
+                done: done.into(),
+                turn: Mutex::new(0),
+            }
+        }
+    }
+
+    impl ModelProvider for SequentialToolsThenDoneProvider {
+        fn stream(
+            &self,
+            _request: ModelRequest,
+            events: UnboundedSender<ModelEvent>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ModelError>> + Send>>
+        {
+            let mut turn = self.turn.lock().expect("lock");
+            *turn += 1;
+            let turn = *turn as usize;
+            let calls = self.calls.clone();
+            let done = self.done.clone();
+            Box::pin(async move {
+                if turn >= 1 && turn <= calls.len() {
+                    let (name, arguments) = calls[turn - 1].clone();
+                    let _ = events.send(ModelEvent::ToolCall(ToolCall {
+                        id: format!("call_seq_{turn}"),
+                        name,
+                        arguments,
+                    }));
+                } else {
+                    let _ = events.send(ModelEvent::TextDelta(done));
+                }
+                Ok(())
+            })
+        }
+
+        fn test_connection(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ModelError>> + Send>>
+        {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn sequential_provider(calls: Vec<(String, String)>, done: &str) -> ProviderBuilder {
+        let done = done.to_string();
+        Arc::new(move |_, _| Arc::new(SequentialToolsThenDoneProvider::new(calls.clone(), &done)))
+    }
+
     fn fill_credential_arguments(credential_ref: &str) -> String {
         serde_json::json!({
             "credential_ref": credential_ref,
@@ -4527,6 +4604,26 @@ mod tests {
         registry
     }
 
+    fn fetch_and_web_registry(seen: Arc<Mutex<Option<(String, String)>>>) -> ToolRegistry {
+        let mut registry = ToolRegistry::new();
+        register_web_tools(&mut registry);
+        registry.register(Arc::new(RecordingFetchUrl { seen }));
+        registry
+    }
+
+    fn seed_lab_login(secrets: &MemorySecretStore) {
+        secrets
+            .set(
+                &SecretKey::credential("lab.fileserver").unwrap(),
+                &CredentialBundle {
+                    username: "labuser".into(),
+                    password: "hunter2".into(),
+                }
+                .encode(),
+            )
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn fetch_url_with_credential_ref_prompts_for_login() {
         let seen = Arc::new(Mutex::new(None));
@@ -5089,6 +5186,637 @@ mod tests {
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;
+    }
+
+    #[tokio::test]
+    async fn run_command_output_taints_later_web_search() {
+        let mut tools = shell_and_fs_registry();
+        register_web_tools(&mut tools);
+        let (runtime, _tmp) = test_runtime(
+            sequential_provider(
+                vec![
+                    (
+                        "run_command".into(),
+                        serde_json::json!({"command": "printf 'shell-secret-output\\n'"})
+                            .to_string(),
+                    ),
+                    (
+                        "web_search".into(),
+                        serde_json::json!({"query": "weather tomorrow"}).to_string(),
+                    ),
+                ],
+                "searched",
+            ),
+            seeded_secrets(),
+            tools,
+        );
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "run then search",
+            )))
+            .unwrap();
+        let first = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match first {
+            AgentEvent::ApprovalRequired {
+                approval_id,
+                description,
+                ..
+            } => {
+                assert!(description.contains("printf"), "{description}");
+                command_tx
+                    .send(RuntimeCommand::Approve(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        let second = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match second {
+            AgentEvent::ApprovalRequired {
+                approval_id,
+                description,
+                ..
+            } => {
+                assert!(description.contains("weather tomorrow"), "{description}");
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn selected_text_requires_allow_for_authenticated_fetch() {
+        let seen = Arc::new(Mutex::new(None));
+        let tools = fetch_url_test_registry(Arc::clone(&seen));
+        let secrets = seeded_secrets();
+        seed_lab_login(&secrets);
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let (mut runtime, tmp) = test_runtime(fetch_url_provider("lab.fileserver"), secrets, tools);
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let mut request = StartTaskRequest::new(TaskId::new(), "fetch the lab files");
+        request.context.selected_text = Some("classified lab protocol 7".into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(seen.lock().expect("lock").is_none());
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn vault_read_requires_allow_for_authenticated_fetch() {
+        let seen = Arc::new(Mutex::new(None));
+        let mut tools = filesystem_registry();
+        register_web_tools(&mut tools);
+        tools.register(Arc::new(RecordingFetchUrl {
+            seen: Arc::clone(&seen),
+        }));
+        let secrets = seeded_secrets();
+        seed_lab_login(&secrets);
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let note_id = indexed
+            .search("Lab File Server", 8)
+            .unwrap()
+            .into_iter()
+            .find(|hit| hit.title == "Lab File Server")
+            .expect("file server note")
+            .id;
+        let (mut runtime, tmp) = test_runtime(
+            sequential_provider(
+                vec![
+                    (
+                        "knowledge_read".into(),
+                        serde_json::json!({ "id": note_id }).to_string(),
+                    ),
+                    ("fetch_url".into(), fetch_url_arguments("lab.fileserver")),
+                ],
+                "listed",
+            ),
+            secrets,
+            tools,
+        );
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "read the vault then fetch",
+            )))
+            .unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired {
+                approval_id, title, ..
+            } => {
+                assert!(
+                    title.contains("files.example.invalid") || title.contains("Fetch"),
+                    "{title}"
+                );
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert!(seen.lock().expect("lock").is_none());
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn browser_snapshot_requires_allow_for_authenticated_fetch() {
+        let seen = Arc::new(Mutex::new(None));
+        let snapshots = Arc::new(Mutex::new(0));
+        let mut tools =
+            test_browser_registry(Arc::new(TestBrowser::note_com(Arc::clone(&snapshots))));
+        tools.register(Arc::new(RecordingFetchUrl {
+            seen: Arc::clone(&seen),
+        }));
+        let secrets = seeded_secrets();
+        seed_lab_login(&secrets);
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let (mut runtime, tmp) = test_runtime(
+            sequential_provider(
+                vec![
+                    ("browser_snapshot".into(), "{}".into()),
+                    ("fetch_url".into(), fetch_url_arguments("lab.fileserver")),
+                ],
+                "listed",
+            ),
+            secrets,
+            tools,
+        );
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "read the page then fetch",
+            )))
+            .unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert_eq!(*snapshots.lock().expect("snapshots"), 1);
+        assert!(seen.lock().expect("lock").is_none());
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn authenticated_fetch_taints_later_web_search() {
+        let seen = Arc::new(Mutex::new(None));
+        let tools = fetch_and_web_registry(Arc::clone(&seen));
+        let secrets = seeded_secrets();
+        seed_lab_login(&secrets);
+        let (indexed, vault, sqlite) = lab_indexed_vault();
+        let (mut runtime, tmp) = test_runtime(
+            sequential_provider(
+                vec![
+                    ("fetch_url".into(), fetch_url_arguments("lab.fileserver")),
+                    (
+                        "web_search".into(),
+                        serde_json::json!({"query": "public weather"}).to_string(),
+                    ),
+                ],
+                "searched",
+            ),
+            secrets,
+            tools,
+        );
+        runtime.knowledge = Some(Arc::new(indexed));
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "fetch then search",
+            )))
+            .unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired {
+                approval_id,
+                description,
+                ..
+            } => {
+                assert!(description.contains("public weather"), "{description}");
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert_eq!(
+            *seen.lock().expect("lock"),
+            Some(("labuser".into(), "hunter2".into()))
+        );
+        drop(command_tx);
+        join.await.unwrap();
+        let _ = tmp;
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(sqlite);
+    }
+
+    #[tokio::test]
+    async fn first_visit_navigate_still_requires_tainted_egress_allow() {
+        let snapshots = Arc::new(Mutex::new(0));
+        let tools = test_browser_registry(Arc::new(TestBrowser::note_com(Arc::clone(&snapshots))));
+        let (runtime, _tmp) = test_runtime(
+            sequential_provider(
+                vec![(
+                    "browser_navigate".into(),
+                    serde_json::json!({
+                        "action": "goto",
+                        "url": "https://note.com/exfil"
+                    })
+                    .to_string(),
+                )],
+                "opened",
+            ),
+            seeded_secrets(),
+            tools,
+        );
+        let config = Arc::clone(&runtime.config);
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let mut request = StartTaskRequest::new(TaskId::new(), "open the page");
+        request.context.selected_text = Some("classified lab protocol 7".into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let site = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match site {
+            AgentEvent::ApprovalRequired {
+                approval_id, title, ..
+            } => {
+                assert!(title.contains("note.com"), "{title}");
+                assert!(!title.contains("private task data"), "{title}");
+                command_tx
+                    .send(RuntimeCommand::Approve(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        let egress = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match egress {
+            AgentEvent::ApprovalRequired {
+                approval_id,
+                title,
+                description,
+                ..
+            } => {
+                assert!(title.contains("private task data"), "{title}");
+                assert!(
+                    description.contains("https://note.com/exfil"),
+                    "{description}"
+                );
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        assert_eq!(
+            config.load().unwrap().browser_allowed_hosts,
+            vec!["note.com".to_string()]
+        );
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn first_visit_fill_still_requires_tainted_egress_allow() {
+        let snapshots = Arc::new(Mutex::new(0));
+        let tools = test_browser_registry(Arc::new(TestBrowser::note_com(Arc::clone(&snapshots))));
+        let typed = "classified lab protocol 7";
+        let (runtime, _tmp) = test_runtime(
+            sequential_provider(
+                vec![(
+                    "browser_fill".into(),
+                    serde_json::json!({
+                        "ref": "a1f3-e2",
+                        "text": typed
+                    })
+                    .to_string(),
+                )],
+                "filled",
+            ),
+            seeded_secrets(),
+            tools,
+        );
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let mut request = StartTaskRequest::new(TaskId::new(), "fill the form");
+        request.context.selected_text = Some(typed.into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let site = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match site {
+            AgentEvent::ApprovalRequired {
+                approval_id, title, ..
+            } => {
+                assert!(title.contains("note.com"), "{title}");
+                command_tx
+                    .send(RuntimeCommand::Approve(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        let egress = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match egress {
+            AgentEvent::ApprovalRequired {
+                approval_id,
+                title,
+                description,
+                ..
+            } => {
+                assert!(title.contains("private task data"), "{title}");
+                assert!(title.contains("note.com"), "{title}");
+                assert!(!description.contains(typed), "{description}");
+                assert!(!title.contains(typed), "{title}");
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn browser_tabs_taints_later_web_search() {
+        let snapshots = Arc::new(Mutex::new(0));
+        let mut tools =
+            test_browser_registry(Arc::new(TestBrowser::note_com(Arc::clone(&snapshots))));
+        register_web_tools(&mut tools);
+        let (runtime, _tmp) = test_runtime(
+            sequential_provider(
+                vec![
+                    ("browser_tabs".into(), "{}".into()),
+                    (
+                        "web_search".into(),
+                        serde_json::json!({"query": "weather tomorrow"}).to_string(),
+                    ),
+                ],
+                "searched",
+            ),
+            seeded_secrets(),
+            tools,
+        );
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                TaskId::new(),
+                "list tabs then search",
+            )))
+            .unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired {
+                approval_id,
+                description,
+                ..
+            } => {
+                assert!(description.contains("weather tomorrow"), "{description}");
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn focused_window_title_requires_allow_for_web_search() {
+        let arguments = serde_json::json!({ "query": "weather tomorrow" }).to_string();
+        let build: ProviderBuilder = Arc::new(move |_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "web_search",
+                arguments.clone(),
+                "searched",
+            ))
+        });
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), web_search_registry());
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let mut request = StartTaskRequest::new(TaskId::new(), "search the weather");
+        request.context.focused_window = Some(WindowContext {
+            title: Some("Project X Acquisition — Confidential".into()),
+        });
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn frontmost_app_requires_allow_for_web_search() {
+        let arguments = serde_json::json!({ "query": "weather tomorrow" }).to_string();
+        let build: ProviderBuilder = Arc::new(move |_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "web_search",
+                arguments.clone(),
+                "searched",
+            ))
+        });
+        let (runtime, _tmp) = test_runtime(build, seeded_secrets(), web_search_registry());
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let mut request = StartTaskRequest::new(TaskId::new(), "search the weather");
+        request.context.frontmost_app = Some(AppContext {
+            name: "Mail".into(),
+            bundle_id: "com.apple.mail".into(),
+            pid: 42,
+        });
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        drop(command_tx);
+        join.await.unwrap();
     }
 
     #[tokio::test]

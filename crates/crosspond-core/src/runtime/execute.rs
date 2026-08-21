@@ -42,7 +42,7 @@ impl Runtime {
         });
         let context = self.tool_context();
         let exec = self
-            .execute_tool(task_id, "take_screenshot".into(), context, input)
+            .execute_tool(task_id, "take_screenshot".into(), context, input.clone())
             .await;
         match exec {
             ToolExec::Cancelled { reset } => Err(if reset {
@@ -71,7 +71,7 @@ impl Runtime {
                 if !success {
                     return Err(text);
                 }
-                self.note_private_tool_output("take_screenshot", &text);
+                self.note_private_tool_output("take_screenshot", &input, &text);
                 let image = image.ok_or_else(|| "screenshot was empty".to_string())?;
                 Ok(ImagePart {
                     media_type: image.media_type,

@@ -48,7 +48,7 @@ pub use path::{
 pub use registry::ToolRegistry;
 pub use sandbox::{ShellSandbox, UnsandboxedShell, unsandboxed_shell, unsandboxed_shell_command};
 pub use scratch::{ScratchError, ScratchReason, ScratchSpace};
-pub use shell::{command_embeds_credentials, register_shell_tools};
+pub use shell::{MAX_SHELL_OUTPUT_BYTES, command_embeds_credentials, register_shell_tools};
 pub use ssrf::{
     SsrfResolver, filter_resolved_addrs, is_blocked_ip, validate_fetch_url,
     validate_fetch_url_for_hosts,
