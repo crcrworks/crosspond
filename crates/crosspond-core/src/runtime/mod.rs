@@ -804,7 +804,7 @@ impl Runtime {
                         }
                         let started = Instant::now();
                         let exec = self
-                            .execute_tool(task_id, call.name.clone(), context, input)
+                            .execute_tool(task_id, call.name.clone(), context, input.clone())
                             .await;
                         let (text, created, image, success) = match exec {
                             ToolExec::Cancelled { reset } => {
