@@ -121,6 +121,9 @@ fn scratch_subpath_filters(roots: &[PathBuf]) -> String {
 /// so user home and other task temps stay out of Auto `run_command`. Clipboard,
 /// Keychain, and Apple Event Mach names are denied after that. Code-signing trust
 /// (`trustd` / `ocspd`) is left allowed so signed binaries can start.
+///
+/// macOS 26 dyld aborts with SIGABRT if it cannot `file-read*` the root inode
+/// (`literal "/"`, not `subpath "/"`) or map executables.
 fn seatbelt_profile(scratch: &Path) -> String {
     let roots = scratch_path_aliases(scratch);
     let subpaths = scratch_subpath_filters(&roots);
@@ -133,10 +136,16 @@ fn seatbelt_profile(scratch: &Path) -> String {
 (deny network-outbound)
 (deny network-bind)
 (deny file-write*)
-(allow file-write-data (literal "/dev/null"))
+(allow file-write-data
+    (literal "/dev/null")
+    (literal "/dev/dtracehelper")
+)
 (allow file-write*
 {subpaths})
 (deny file-read*)
+(allow file-read* (literal "/"))
+(allow file-read-metadata (vnode-type DIRECTORY))
+(allow file-map-executable)
 {metadata}(allow file-read*
     (subpath "/usr")
     (subpath "/bin")
@@ -144,8 +153,8 @@ fn seatbelt_profile(scratch: &Path) -> String {
     (subpath "/System")
     (subpath "/Library")
     (subpath "/dev")
-    (subpath "/private/var/db/dyld")
-    (subpath "/private/var/db/timezone")
+    (subpath "/private/var/db")
+    (subpath "/var/db")
     (subpath "/private/etc")
     (subpath "/etc")
 {subpaths})
@@ -217,6 +226,19 @@ mod tests {
         );
         assert!(
             profile.contains("(allow file-read-metadata (literal \"/tmp\"))"),
+            "{profile}"
+        );
+        assert!(
+            profile.contains("(allow file-read* (literal \"/\"))"),
+            "macOS 26 dyld needs the root inode, not subpath /:\n{profile}"
+        );
+        assert!(
+            !has_exact_subpath(&profile, "/"),
+            "must not allow the whole filesystem via subpath /:\n{profile}"
+        );
+        assert!(profile.contains("(allow file-map-executable)"), "{profile}");
+        assert!(
+            profile.contains("(allow file-read-metadata (vnode-type DIRECTORY))"),
             "{profile}"
         );
         assert!(
