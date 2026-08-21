@@ -549,6 +549,58 @@ select.prompt-mode.picker-select:focus {
 	color: var(--text);
 }
 
+.chat-update {
+	display: flex;
+	flex-shrink: 0;
+	align-items: flex-end;
+	gap: 4px;
+	margin-bottom: 3px;
+	padding-right: 4px;
+}
+
+.chat-update-label {
+	padding: 0;
+	border: 0;
+	background: transparent;
+	font: inherit;
+	font-size: 12px;
+	line-height: 22px;
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+button.chat-update-label {
+	cursor: pointer;
+}
+
+button.chat-update-label:hover {
+	color: var(--text);
+}
+
+.chat-update-dismiss {
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	font: inherit;
+	font-size: 14px;
+	line-height: 1;
+	color: var(--muted);
+	cursor: pointer;
+}
+
+.chat-update-dismiss:hover,
+.chat-update-dismiss:focus-visible {
+	background: var(--tone-muted-bg);
+	outline: none;
+}
+
 .pill {
 	display: inline-flex;
 	align-items: center;

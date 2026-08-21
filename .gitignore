@@ -11,4 +11,6 @@ ui/node_modules/
 ui/build/
 ui/.svelte-kit/
 crates/crosspond-app/gen/
+crates/crosspond-app/binaries/crosspond-chrome-host-*
+*.key
 

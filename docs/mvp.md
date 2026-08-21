@@ -14,7 +14,7 @@ Resource notes may store a `credential_ref` Keychain pointer (never the secret).
 
 ## Knowledge Vault Phase 7
 
-After a successful command that used several computer/file actions and did not already follow a Procedure, Crosspond asks **Save this as a Procedure?** on the existing Allow card. Approving writes a Procedure from the sanitized receipt (not from arbitrary model Markdown) and links mentioned Resources. The next short command retrieves it.
+After `@vault-procedure` (on the command, or alone after a successful run), Crosspond asks **Save this as a Procedure?** on the existing Allow card. It does not auto-prompt after every guided success. Approving writes a Procedure from the sanitized receipt (not from arbitrary model Markdown) and links mentioned Resources. The next short command retrieves it.
 
 ## Knowledge Vault Phase 6
 
@@ -53,7 +53,7 @@ Polish: a human-readable receipt after each task, recent task history, and first
 - **Receipt** — after a task, the launcher keeps the summary in the conversation and lists artifacts with **Show in Finder**. Receipts stay on disk as `receipt.json` (no secrets, calendar notes, command output, or typed text). Changed action lines are not shown in the launcher.
 - **History** — **History** (or ↑ when the input is empty) lists recent conversations from `~/.crosspond/tasks/`, grouped by `conversation_id`. Opening an item shows the same transcript as the live chat (user turns, work steps, commentary, receipt) and the follow-up field continues that thread. **New** still starts a blank session.
 - **Onboarding** — first launch with no provider ready (no Compatible API key, and not signed in with ChatGPT) shows a welcome and Settings. Do not prompt for Accessibility yet. After a key is saved or ChatGPT sign-in succeeds: “Press Option + Space anywhere” (or whatever shortcut is set in Settings). That shortcut and **Open** reveal the command bar; they do not dismiss the window. Settings is tabbed (General / Models / Knowledge / Search / Browser / Permissions). The Models tab can keep ChatGPT and several OpenAI Compatible endpoints at once; the launcher chooses the model (and Codex effort).
-- **Mentions** — type `@` (or `＠`) in the compact bar to attach `@vault-query` (search accumulated knowledge), `@vault-save` (ingest), `@vault-later` (unread Source), `@screen` (screenshot the ambient window), `@computer` (screenshot then operate the Mac with UI tools), `@browser` (operate the current Chromium tab with `browser_*` tools), `@app` (running apps from NSWorkspace), `@files`, `@calendar`, or `@search`. Type `/` (or `／`) to attach an installed skill by name (`/pdf-processing`), same chip flow as `@`. Mentions are optional; ambient context and the Knowledge Brief still run without them. The WebView only sees kinds, app names, and skill names/descriptions — not note bodies, paths, screenshot bytes, or SKILL.md.
+- **Mentions** — type `@` (or `＠`) in the compact bar to attach `@vault-query` (search accumulated knowledge), `@vault-save` (ingest), `@vault-later` (unread Source), `@vault-procedure` (save a Procedure from the last successful receipt), `@screen` (screenshot the ambient window), `@computer` (screenshot then operate the Mac with UI tools), `@browser` (operate the current Chromium tab with `browser_*` tools), `@app` (running apps from NSWorkspace), `@files`, `@calendar`, or `@search`. Type `/` (or `／`) to attach an installed skill by name (`/pdf-processing`), same chip flow as `@`. Mentions are optional; ambient context and the Knowledge Brief still run without them. The WebView only sees kinds, app names, and skill names/descriptions — not note bodies, paths, screenshot bytes, or SKILL.md.
 
 Demo: first launch → Settings → Option + Space → do work → see the transcript → hide → Option + Space → History → open a past conversation and follow up.
 
@@ -73,9 +73,13 @@ Installed skills live in `~/.crosspond/skills/<name>/SKILL.md`. Global skills al
 
 The host scans SKILL.md and other text **before** the model sees search hits and **before** anything is written, including text files whose names look like images (`assets/instructions.png`). Real binary images under `assets/` are skipped. Search returns name / source / installs / `safety` / finding labels — never bodies. `fail` is always refused (including Auto): no Allow card, nothing on disk, error categories only. `warn` and `unknown` always show Allow, including Auto. `pass` follows the usual ExternalWrite policy. A public audit, when available, is auxiliary and never overrides a local `fail`. Heuristics are incomplete; Allow stays.
 
+## Phase 14 (distribution)
+
+GitHub Releases ship an Apple Silicon `.dmg`. `/prepare-release` then `/release` drive Release Please: a version PR, user-facing `PUBLIC_CHANGELOG.md`, then a signed and notarized updater bundle (`latest.json` + `.app.tar.gz`). The GitHub Release stays draft until the macOS build, Developer ID signature, DMG notarization and stapling, and artifact checks succeed. The launcher shows **Update available** on the header when a newer public Release exists (dismissible for the process). Signing secrets live on the GitHub Environment `release`; only repository admins can run those workflows. The Chrome extension is still loaded unpacked from the app bundle path in Settings.
+
 ## Later phases (do not implement yet)
 
-14. Release (signing, notarization, license re-audit, Chrome Web Store)
+15. Chrome Web Store, Intel/universal Mac builds, lockfile license re-audit
 
 ## Non-goals for MVP
 

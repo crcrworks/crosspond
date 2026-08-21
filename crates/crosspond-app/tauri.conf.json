@@ -5,13 +5,13 @@
   "identifier": "com.crosspond.app",
   "build": {
     "beforeDevCommand": {
-      "script": "cargo build -p crosspond-chrome-host --manifest-path ../Cargo.toml && npm run dev",
-      "cwd": "../../ui"
+      "script": "bash scripts/stage-chrome-host.sh && npm --prefix ui run dev",
+      "cwd": "../.."
     },
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": {
-      "script": "cargo build -p crosspond-chrome-host --release --manifest-path ../Cargo.toml && npm run build",
-      "cwd": "../../ui"
+      "script": "bash scripts/stage-chrome-host.sh --release && npm --prefix ui run build",
+      "cwd": "../.."
     },
     "frontendDist": "../../ui/build"
   },
@@ -45,7 +45,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": "app",
+    "targets": ["app", "dmg"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -53,9 +54,23 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../../extension/chrome": "chrome-extension",
+      "../../LICENSE-MIT": "licenses/LICENSE-MIT",
+      "../../LICENSE-APACHE": "licenses/LICENSE-APACHE"
+    },
+    "externalBin": ["binaries/crosspond-chrome-host"],
     "macOS": {
       "minimumSystemVersion": "14.0",
       "infoPlist": "../../resources/macos/Info.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyNUYxMTdCOTE4NzIwMDQKUldRRUlJZVJleEZmNHI2ZjNJVFMwUHJQMmoxNEtTTG1zamN3VXg0MVFDNS9yYis4WERKM0F6eGwK",
+      "endpoints": [
+        "https://github.com/crcrworks/crosspond/releases/latest/download/latest.json"
+      ]
     }
   }
 }

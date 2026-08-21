@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { HistoryItem } from '$lib/types';
+	import type { UpdateNotice } from '$lib/updater';
 	import Icon from './Icon.svelte';
 
 	let {
@@ -9,7 +10,10 @@
 		selectedId,
 		onnew,
 		onlive,
-		onselect
+		onselect,
+		updateNotice = 'hidden',
+		onupdate,
+		ondismissupdate
 	}: {
 		liveTitle: string | null;
 		liveActive: boolean;
@@ -18,6 +22,9 @@
 		onnew: () => void;
 		onlive: () => void;
 		onselect: (id: string) => void;
+		updateNotice?: UpdateNotice;
+		onupdate?: () => void;
+		ondismissupdate?: () => void;
 	} = $props();
 </script>
 
@@ -41,4 +48,23 @@
 			</button>
 		{/each}
 	</div>
+	{#if updateNotice !== 'hidden'}
+		<div class="chat-update" data-tauri-drag-region="false">
+			{#if updateNotice === 'installing'}
+				<span class="chat-update-label">Updating…</span>
+			{:else}
+				<button type="button" class="chat-update-label" onclick={onupdate}>
+					Update available
+				</button>
+				<button
+					type="button"
+					class="chat-update-dismiss"
+					aria-label="Dismiss update"
+					onclick={ondismissupdate}
+				>
+					×
+				</button>
+			{/if}
+		</div>
+	{/if}
 </div>
