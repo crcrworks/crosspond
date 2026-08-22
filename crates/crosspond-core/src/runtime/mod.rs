@@ -17,7 +17,7 @@ use crosspond_model::{
 use crosspond_tools::{
     ApprovalBody, KnowledgeBackend, ScratchReason, ScratchSpace, ShellSandbox, SkillEndpoints,
     ToolContext, ToolRegistry, default_global_skills_root, default_skills_root,
-    filesystem_registry, host_from_url, http_hosts_from_note, normalize_host,
+    filesystem_registry, fill_uses_ax_nodes, host_from_url, http_hosts_from_note, normalize_host,
     parse_skill_install_source, prepare_skill_install, render_skill_catalog, scan_skill_roots,
     site_is_allowed,
 };
@@ -1269,6 +1269,9 @@ impl Runtime {
         input: &serde_json::Value,
         context: &mut ToolContext,
     ) -> ApprovalOutcome {
+        if tool_call_needs_credentials(&call.name, input) {
+            let _ = self.bind_credential_metadata(call, input, context);
+        }
         self.record_derived_capabilities(task_dir, call, context, input);
         if call.name == "skill_install" {
             return self
@@ -1388,6 +1391,26 @@ impl Runtime {
         outcome
     }
 
+    fn bind_credential_metadata(
+        &self,
+        call: &ToolCall,
+        input: &serde_json::Value,
+        context: &mut ToolContext,
+    ) -> Result<String, String> {
+        let credential_ref = input
+            .get("credential_ref")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "credential_ref is required".to_string())
+            .and_then(|value| parse_credential_ref(value).map_err(|err| err.to_string()))?;
+        let hosts = self.credential_hosts_for(&credential_ref);
+        context.credential_hosts = hosts.clone();
+        let destination = self.credential_destination_for(call, input, context, &hosts)?;
+        context.credential_destination = Some(destination);
+        Ok(credential_ref)
+    }
+
     async fn bind_and_collect_credentials(
         &mut self,
         task_id: TaskId,
@@ -1396,23 +1419,10 @@ impl Runtime {
         input: &serde_json::Value,
         context: &mut ToolContext,
     ) -> ApprovalOutcome {
-        let credential_ref = match input
-            .get("credential_ref")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "credential_ref is required".to_string())
-            .and_then(|value| parse_credential_ref(value).map_err(|err| err.to_string()))
-        {
+        let credential_ref = match self.bind_credential_metadata(call, input, context) {
             Ok(value) => value,
             Err(message) => return ApprovalOutcome::Rejected(message),
         };
-        let hosts = self.credential_hosts_for(&credential_ref);
-        context.credential_hosts = hosts.clone();
-        match self.credential_destination_for(call, input, context, &hosts) {
-            Ok(destination) => context.credential_destination = Some(destination),
-            Err(message) => return ApprovalOutcome::Rejected(message),
-        }
         let destination = context
             .credential_destination
             .as_deref()
@@ -1545,13 +1555,18 @@ impl Runtime {
             };
             return bind_http_host(hosts, &host);
         }
-        Ok(context
-            .frontmost_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("this app")
-            .to_string())
+        Ok(self
+            .tools
+            .live_target_app(&call.name)
+            .or_else(|| {
+                context
+                    .frontmost_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "this app".into()))
     }
 
     fn load_credential_bundle(&self, credential_ref: &str) -> Option<CredentialBundle> {
@@ -1898,17 +1913,6 @@ fn tool_call_needs_credentials(name: &str, input: &Value) -> bool {
             .is_some_and(|value| !value.is_empty()),
         _ => false,
     }
-}
-
-fn fill_uses_ax_nodes(input: &Value) -> bool {
-    ["username_node_id", "password_node_id"]
-        .iter()
-        .any(|key| match input.get(*key) {
-            None | Some(Value::Null) => false,
-            Some(Value::String(value)) => !value.trim().is_empty(),
-            Some(Value::Number(_)) => true,
-            _ => true,
-        })
 }
 
 fn bind_http_host(hosts: &[String], host: &str) -> Result<String, String> {
@@ -4560,6 +4564,10 @@ mod tests {
         )
         .unwrap();
         assert_no_secret_leak(&events);
+        assert!(events.contains("capability_derived"));
+        assert!(events.contains("files.example.invalid"));
+        assert!(events.contains("operate_site"));
+        assert!(events.contains("credential_use"));
         let session = std::fs::read_to_string(
             tmp.0
                 .join("tasks")
@@ -4602,9 +4610,10 @@ mod tests {
             .unwrap();
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
+        let task_id = TaskId::new();
         command_tx
             .send(RuntimeCommand::StartTask(StartTaskRequest::new(
-                TaskId::new(),
+                task_id,
                 "open the lab files",
             )))
             .unwrap();
@@ -4642,6 +4651,18 @@ mod tests {
             }
         }
         assert_eq!(*continues.lock().expect("lock"), 1);
+        let events = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        let derived_at = events.find("capability_derived").expect("derived");
+        let required_at = events.find("credential_required").expect("required");
+        assert!(derived_at < required_at);
+        assert!(events.contains("files.example.invalid"));
+        assert!(events.contains("operate_site"));
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;

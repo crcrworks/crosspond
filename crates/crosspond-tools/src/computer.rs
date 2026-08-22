@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use crate::ax_outline::truncate_ax_text;
 use crate::browser::{BrowserBackend, DisconnectedBrowser, site_is_allowed};
-use crate::capability::{CapabilityDomain, CapabilityRequest, SystemCapability};
+use crate::capability::{BrowserCapability, CapabilityDomain, CapabilityRequest, SystemCapability};
 use crate::registry::ToolRegistry;
 use crate::tool::{
     Tool, ToolContext, ToolDefinition, ToolError, ToolImage, ToolResult, truncate_output,
@@ -29,6 +29,10 @@ pub trait AccessibilityBackend: Send + Sync {
     fn focused_is_secure(&self) -> bool {
         false
     }
+    /// App from the latest stored AX snapshot. In-memory only.
+    fn live_target_app(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Running and installed Mac apps. Implemented in `crosspond-macos`.
@@ -52,6 +56,10 @@ pub trait InputBackend: Send + Sync {
         x: Option<u32>,
         y: Option<u32>,
     ) -> Result<String, ToolError>;
+    /// App from the latest stored snapshot/screenshot. In-memory only.
+    fn live_target_app(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Window screenshot and image-coordinate click. Implemented in `crosspond-macos`.
@@ -60,6 +68,10 @@ pub trait ScreenshotBackend: Send + Sync {
     fn click(&self, x: u32, y: u32) -> Result<String, ToolError>;
     /// Re-capture the window last used for screenshot/click, not the ambient app.
     fn recapture(&self) -> Result<Screenshot, ToolError>;
+    /// App from the latest stored screenshot. In-memory only.
+    fn live_target_app(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Captured window image for the model.
@@ -357,6 +369,32 @@ fn system_for_app(
     CapabilityRequest::system(make(requested_or_frontmost_app(context, input)))
 }
 
+fn system_for_live_target(
+    live: Option<String>,
+    make: impl FnOnce(Option<String>) -> SystemCapability,
+) -> CapabilityRequest {
+    match live
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+    {
+        Some(app) => CapabilityRequest::system(make(Some(app))),
+        None => CapabilityRequest::unresolved(CapabilityDomain::System),
+    }
+}
+
+/// True when `fill_credential` will write Accessibility nodes instead of
+/// continuing Chromium HTTP auth.
+pub fn fill_uses_ax_nodes(input: &Value) -> bool {
+    ["username_node_id", "password_node_id"]
+        .iter()
+        .any(|key| match input.get(*key) {
+            None | Some(Value::Null) => false,
+            Some(Value::String(value)) => !value.trim().is_empty(),
+            Some(Value::Number(_)) => true,
+            _ => true,
+        })
+}
+
 fn app_identity_capability(
     input: &Value,
     make: impl FnOnce(String) -> SystemCapability,
@@ -498,10 +536,14 @@ impl Tool for UiPress {
         })
     }
 
-    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
-        system_for_app(context, input, |app| SystemCapability::AccessibilityWrite {
-            app,
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        system_for_live_target(self.backend.live_target_app(), |app| {
+            SystemCapability::AccessibilityWrite { app }
         })
+    }
+
+    fn live_target_app(&self) -> Option<String> {
+        self.backend.live_target_app()
     }
 }
 
@@ -564,10 +606,14 @@ impl Tool for UiSetValue {
         })
     }
 
-    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
-        system_for_app(context, input, |app| SystemCapability::AccessibilityWrite {
-            app,
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        system_for_live_target(self.backend.live_target_app(), |app| {
+            SystemCapability::AccessibilityWrite { app }
         })
+    }
+
+    fn live_target_app(&self) -> Option<String> {
+        self.backend.live_target_app()
     }
 }
 
@@ -721,10 +767,49 @@ impl Tool for FillCredential {
         })
     }
 
-    fn capability_request(&self, context: &ToolContext, _input: &Value) -> CapabilityRequest {
-        CapabilityRequest::system(SystemCapability::CredentialUse {
-            destination: context.credential_destination.clone(),
-        })
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        if fill_uses_ax_nodes(input) {
+            let live = self.ax.live_target_app();
+            let destination = context
+                .credential_destination
+                .clone()
+                .or_else(|| live.clone());
+            let mut request =
+                CapabilityRequest::system(SystemCapability::CredentialUse { destination });
+            match live
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty())
+            {
+                Some(app) => {
+                    request =
+                        request.add_system(SystemCapability::AccessibilityWrite { app: Some(app) });
+                }
+                None => request = request.add_unresolved(CapabilityDomain::System),
+            }
+            request
+        } else {
+            let pending_host = self.browser.pending_http_auth().and_then(|challenge| {
+                let host = challenge.host.trim();
+                (!host.is_empty()).then(|| host.to_string())
+            });
+            let destination = context
+                .credential_destination
+                .clone()
+                .or_else(|| pending_host.clone());
+            let mut request =
+                CapabilityRequest::system(SystemCapability::CredentialUse { destination });
+            match pending_host {
+                Some(host) => {
+                    request = request.add_browser(BrowserCapability::OperateSite { host });
+                }
+                None => request = request.add_unresolved(CapabilityDomain::Browser),
+            }
+            request
+        }
+    }
+
+    fn live_target_app(&self) -> Option<String> {
+        self.ax.live_target_app()
     }
 }
 
@@ -851,8 +936,14 @@ impl Tool for UiClick {
         })
     }
 
-    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
-        system_for_app(context, input, |app| SystemCapability::InputEvents { app })
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        system_for_live_target(self.backend.live_target_app(), |app| {
+            SystemCapability::InputEvents { app }
+        })
+    }
+
+    fn live_target_app(&self) -> Option<String> {
+        self.backend.live_target_app()
     }
 }
 
@@ -1049,8 +1140,19 @@ impl Tool for UiType {
         })
     }
 
-    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
-        system_for_app(context, input, |app| SystemCapability::InputEvents { app })
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        system_for_live_target(
+            self.backend
+                .live_target_app()
+                .or_else(|| self.ax.live_target_app()),
+            |app| SystemCapability::InputEvents { app },
+        )
+    }
+
+    fn live_target_app(&self) -> Option<String> {
+        self.backend
+            .live_target_app()
+            .or_else(|| self.ax.live_target_app())
     }
 }
 
@@ -1095,8 +1197,14 @@ impl Tool for UiHotkey {
         })
     }
 
-    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
-        system_for_app(context, input, |app| SystemCapability::InputEvents { app })
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        system_for_live_target(self.backend.live_target_app(), |app| {
+            SystemCapability::InputEvents { app }
+        })
+    }
+
+    fn live_target_app(&self) -> Option<String> {
+        self.backend.live_target_app()
     }
 }
 
@@ -1176,8 +1284,14 @@ impl Tool for UiScroll {
         })
     }
 
-    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
-        system_for_app(context, input, |app| SystemCapability::InputEvents { app })
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        system_for_live_target(self.backend.live_target_app(), |app| {
+            SystemCapability::InputEvents { app }
+        })
+    }
+
+    fn live_target_app(&self) -> Option<String> {
+        self.backend.live_target_app()
     }
 }
 

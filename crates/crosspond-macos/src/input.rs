@@ -70,4 +70,15 @@ impl InputBackend for MacOsInput {
             self.host.scroll(direction, amount, by, node_id, x, y)
         }
     }
+
+    fn live_target_app(&self) -> Option<String> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.host.live_target_app()
+        }
+    }
 }

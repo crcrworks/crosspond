@@ -463,7 +463,8 @@ impl Tool for FetchUrl {
         let Some(origin) = network_origin_from_url(raw) else {
             return CapabilityRequest::unresolved(CapabilityDomain::Network);
         };
-        let mut request = CapabilityRequest::network(NetworkCapability::Connect(origin));
+        let mut request = CapabilityRequest::network(NetworkCapability::Connect(origin))
+            .add_unresolved(CapabilityDomain::Network);
         if optional_string(input, "credential_ref").is_some() {
             request = request.add_system(SystemCapability::CredentialUse {
                 destination: context.credential_destination.clone(),

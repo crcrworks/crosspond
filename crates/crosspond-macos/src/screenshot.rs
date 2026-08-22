@@ -64,4 +64,15 @@ impl ScreenshotBackend for MacOsScreenshot {
             self.host.capture_live()
         }
     }
+
+    fn live_target_app(&self) -> Option<String> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.host.live_target_app()
+        }
+    }
 }

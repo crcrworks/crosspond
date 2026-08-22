@@ -44,8 +44,8 @@ pub use capability::{
 pub use computer::{
     AccessibilityBackend, AppBackend, InputBackend, Screenshot, ScreenshotBackend,
     computer_and_screenshot_registry, computer_and_screenshot_registry_with_browser,
-    computer_registry, register_app_tools, register_computer_tools, register_input_tools,
-    register_screenshot_tools,
+    computer_registry, fill_uses_ax_nodes, register_app_tools, register_computer_tools,
+    register_input_tools, register_screenshot_tools,
 };
 pub use fs_tools::filesystem_registry;
 pub use knowledge::{

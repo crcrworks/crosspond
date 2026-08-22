@@ -9,8 +9,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::capability::{
-    BrowserCapability, CapabilityDomain, CapabilityRequest, FilesystemCapability,
-    ProcessCapability, network_origin_from_url,
+    CapabilityDomain, CapabilityRequest, FilesystemCapability, ProcessCapability, SystemCapability,
 };
 use crate::registry::ToolRegistry;
 use crate::sandbox::{ShellSandbox, unsandboxed_shell_command};
@@ -541,13 +540,22 @@ impl Tool for OpenUrl {
     }
 
     fn capability_request(&self, _context: &ToolContext, input: &Value) -> CapabilityRequest {
-        let Some(url) = input.get("url").and_then(Value::as_str) else {
-            return CapabilityRequest::unresolved(CapabilityDomain::Browser);
+        let Some(raw) = input.get("url").and_then(Value::as_str) else {
+            return CapabilityRequest::unresolved(CapabilityDomain::System);
         };
-        match network_origin_from_url(url) {
-            Some(origin) => CapabilityRequest::browser(BrowserCapability::OpenExternalUrl(origin)),
-            None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
+        let Ok(url) = reqwest::Url::parse(raw.trim()) else {
+            return CapabilityRequest::unresolved(CapabilityDomain::System);
+        };
+        let scheme = url.scheme().trim().to_ascii_lowercase();
+        if scheme.is_empty() {
+            return CapabilityRequest::unresolved(CapabilityDomain::System);
         }
+        let host = url
+            .host_str()
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .map(|host| host.trim_end_matches('.').to_ascii_lowercase());
+        CapabilityRequest::system(SystemCapability::OpenUrl { scheme, host })
     }
 }
 

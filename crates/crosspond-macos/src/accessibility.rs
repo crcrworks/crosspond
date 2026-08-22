@@ -115,4 +115,15 @@ impl AccessibilityBackend for MacOsAccessibility {
             self.host.focused_is_secure()
         }
     }
+
+    fn live_target_app(&self) -> Option<String> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.host.live_target_app()
+        }
+    }
 }

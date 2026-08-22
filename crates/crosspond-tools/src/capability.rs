@@ -7,6 +7,10 @@
 //! Empty vectors mean "known to require nothing in that domain". Unknown
 //! tools must use [`CapabilityRequest::unresolved_all`] instead of
 //! [`CapabilityRequest::default`].
+//!
+//! A request may name a host-resolved path or live snapshot identity. That is
+//! still a request, not a grant. Prefer [`CapabilityRequest::unresolved`] over
+//! a guessed concrete target. Phase 2 may split a resolved view later.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -68,20 +72,38 @@ pub enum BrowserCapability {
     ReadSite { host: String },
     OperateSite { host: String },
     NavigateTo(NetworkOrigin),
-    OpenExternalUrl(NetworkOrigin),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SystemCapability {
-    ScreenCapture { app: Option<String> },
-    AccessibilityRead { app: Option<String> },
-    AccessibilityWrite { app: Option<String> },
-    InputEvents { app: Option<String> },
+    ScreenCapture {
+        app: Option<String>,
+    },
+    AccessibilityRead {
+        app: Option<String>,
+    },
+    AccessibilityWrite {
+        app: Option<String>,
+    },
+    InputEvents {
+        app: Option<String>,
+    },
     AppList,
-    AppLaunch { app: String },
-    AppFocus { app: String },
+    AppLaunch {
+        app: String,
+    },
+    AppFocus {
+        app: String,
+    },
+    /// Launch the OS default handler for a URL (`open`). Not a browser grant.
+    OpenUrl {
+        scheme: String,
+        host: Option<String>,
+    },
     CalendarRead,
-    CredentialUse { destination: Option<String> },
+    CredentialUse {
+        destination: Option<String>,
+    },
     KnowledgeRead,
     KnowledgeWrite,
 }
@@ -178,6 +200,11 @@ impl CapabilityRequest {
 
     pub fn add_network(mut self, capability: NetworkCapability) -> Self {
         self.network.push(capability);
+        self
+    }
+
+    pub fn add_browser(mut self, capability: BrowserCapability) -> Self {
+        self.browser.push(capability);
         self
     }
 
@@ -309,7 +336,6 @@ fn browser_audit(capability: &BrowserCapability) -> Value {
         BrowserCapability::ReadSite { host } => json!({ "kind": "read_site", "host": host }),
         BrowserCapability::OperateSite { host } => json!({ "kind": "operate_site", "host": host }),
         BrowserCapability::NavigateTo(origin) => origin_audit("navigate_to", origin),
-        BrowserCapability::OpenExternalUrl(origin) => origin_audit("open_external_url", origin),
     }
 }
 
@@ -326,6 +352,9 @@ fn system_audit(capability: &SystemCapability) -> Value {
         SystemCapability::AppList => json!({ "kind": "app_list" }),
         SystemCapability::AppLaunch { app } => json!({ "kind": "app_launch", "app": app }),
         SystemCapability::AppFocus { app } => json!({ "kind": "app_focus", "app": app }),
+        SystemCapability::OpenUrl { scheme, host } => {
+            json!({ "kind": "open_url", "scheme": scheme, "host": host })
+        }
         SystemCapability::CalendarRead => json!({ "kind": "calendar_read" }),
         SystemCapability::CredentialUse { destination } => {
             json!({ "kind": "credential_use", "destination": destination })
@@ -449,6 +478,77 @@ mod tests {
         }
     }
 
+    struct LiveAx {
+        app: &'static str,
+    }
+    impl AccessibilityBackend for LiveAx {
+        fn snapshot(&self, _: Option<i32>, _: Option<&str>) -> Result<String, ToolError> {
+            Ok(String::new())
+        }
+        fn press(&self, _: &str) -> Result<String, ToolError> {
+            Ok(String::new())
+        }
+        fn set_value(&self, _: &str, _: &str) -> Result<String, ToolError> {
+            Ok(String::new())
+        }
+        fn describe_node(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn live_target_app(&self) -> Option<String> {
+            Some(self.app.into())
+        }
+    }
+
+    struct LiveShot {
+        app: &'static str,
+    }
+    impl ScreenshotBackend for LiveShot {
+        fn capture(&self, _: Option<i32>, _: Option<&str>) -> Result<Screenshot, ToolError> {
+            Ok(Screenshot {
+                bytes: Vec::new(),
+                media_type: "image/png".into(),
+                width: 1,
+                height: 1,
+                app_name: self.app.into(),
+            })
+        }
+        fn click(&self, _: u32, _: u32) -> Result<String, ToolError> {
+            Ok(String::new())
+        }
+        fn recapture(&self) -> Result<Screenshot, ToolError> {
+            self.capture(None, None)
+        }
+        fn live_target_app(&self) -> Option<String> {
+            Some(self.app.into())
+        }
+    }
+
+    struct LiveInput {
+        app: &'static str,
+    }
+    impl InputBackend for LiveInput {
+        fn type_text(&self, _: &str, _: Option<&str>) -> Result<String, ToolError> {
+            Ok(String::new())
+        }
+        fn hotkey(&self, _: &[String]) -> Result<String, ToolError> {
+            Ok(String::new())
+        }
+        fn scroll(
+            &self,
+            _: &str,
+            _: u32,
+            _: &str,
+            _: Option<&str>,
+            _: Option<u32>,
+            _: Option<u32>,
+        ) -> Result<String, ToolError> {
+            Ok(String::new())
+        }
+        fn live_target_app(&self) -> Option<String> {
+            Some(self.app.into())
+        }
+    }
+
     fn computer_registry() -> ToolRegistry {
         computer_and_screenshot_registry_with_browser(
             Arc::new(StubAx),
@@ -468,6 +568,28 @@ mod tests {
             Arc::new(StubInput),
             Arc::new(crate::calendar::MockCalendar),
             Arc::new(crate::browser::DisconnectedBrowser),
+        )
+    }
+
+    fn computer_registry_live(app: &'static str) -> ToolRegistry {
+        computer_and_screenshot_registry_with_browser(
+            Arc::new(LiveAx { app }),
+            Arc::new(LiveShot { app }),
+            Arc::new(StubApps),
+            Arc::new(LiveInput { app }),
+            Arc::new(crate::calendar::MockCalendar),
+            Arc::new(crate::browser::tests::MockBrowser::connected_page()),
+        )
+    }
+
+    fn computer_registry_http_auth() -> ToolRegistry {
+        computer_and_screenshot_registry_with_browser(
+            Arc::new(StubAx),
+            Arc::new(StubShot),
+            Arc::new(StubApps),
+            Arc::new(StubInput),
+            Arc::new(crate::calendar::MockCalendar),
+            Arc::new(crate::browser::tests::MockBrowser::with_digest_auth()),
         )
     }
 
@@ -684,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn open_url_http_is_external_browser_origin() {
+    fn open_url_is_system_handler_not_browser() {
         let mut registry = ToolRegistry::new();
         register_shell_tools(&mut registry);
         let request = registry.capability_request(
@@ -692,21 +814,26 @@ mod tests {
             &ToolContext::new(),
             &json!({"url": "https://example.com/path"}),
         );
-        match &request.browser[..] {
-            [BrowserCapability::OpenExternalUrl(origin)] => {
-                assert_eq!(origin.host, "example.com");
-                assert_eq!(origin.scheme, NetworkScheme::Https);
+        match &request.system[..] {
+            [SystemCapability::OpenUrl { scheme, host }] => {
+                assert_eq!(scheme, "https");
+                assert_eq!(host.as_deref(), Some("example.com"));
             }
             other => panic!("{other:?}"),
         }
+        assert!(request.browser.is_empty());
         assert!(request.unresolved.is_empty());
         let mailto = registry.capability_request(
             "open_url",
             &ToolContext::new(),
             &json!({"url": "mailto:a@b.com"}),
         );
-        assert!(mailto.unresolved.contains(&CapabilityDomain::Browser));
+        assert!(matches!(
+            mailto.system.as_slice(),
+            [SystemCapability::OpenUrl { scheme, host }] if scheme == "mailto" && host.is_none()
+        ));
         assert!(mailto.browser.is_empty());
+        assert!(mailto.unresolved.is_empty());
     }
 
     #[test]
@@ -725,6 +852,7 @@ mod tests {
                 port: None,
             })]
         );
+        assert!(request.unresolved.contains(&CapabilityDomain::Network));
         assert!(request.system.is_empty());
 
         let mut context = ToolContext::new();
@@ -745,6 +873,7 @@ mod tests {
                 destination: Some(dest)
             } if dest == "files.example.invalid"
         )));
+        assert!(authed.unresolved.contains(&CapabilityDomain::Network));
         let audit = authed.audit_value("fetch_url").to_string();
         assert!(!audit.contains("hunter2"));
         assert!(!audit.contains("ngc"));
@@ -918,6 +1047,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+        assert!(request.unresolved.contains(&CapabilityDomain::Browser));
         let new_tab = registry.capability_request(
             "browser_new_tab",
             &ToolContext::new(),
@@ -927,6 +1057,24 @@ mod tests {
             new_tab.browser.as_slice(),
             [BrowserCapability::NavigateTo(origin)] if origin.host == "notes.example.com"
         ));
+        assert!(new_tab.unresolved.contains(&CapabilityDomain::Browser));
+        let back = registry.capability_request(
+            "browser_navigate",
+            &ToolContext::new(),
+            &json!({"action": "back"}),
+        );
+        assert!(back.unresolved.contains(&CapabilityDomain::Browser));
+        assert!(back.browser.is_empty());
+        let reload = registry.capability_request(
+            "browser_navigate",
+            &ToolContext::new(),
+            &json!({"action": "reload"}),
+        );
+        assert!(matches!(
+            reload.browser.as_slice(),
+            [BrowserCapability::OperateSite { host }] if host == "example.com"
+        ));
+        assert!(reload.unresolved.is_empty());
     }
 
     #[test]
@@ -946,10 +1094,8 @@ mod tests {
         ));
         let typed =
             registry.capability_request("ui_type", &context, &json!({"text": "typed-ui-secret"}));
-        assert!(matches!(
-            typed.system.as_slice(),
-            [SystemCapability::InputEvents { app: Some(app) }] if app == "Safari"
-        ));
+        assert!(typed.unresolved.contains(&CapabilityDomain::System));
+        assert!(typed.system.is_empty());
         assert!(
             !typed
                 .audit_value("ui_type")
@@ -957,15 +1103,11 @@ mod tests {
                 .contains("typed-ui-secret")
         );
         let press = registry.capability_request("ui_press", &context, &json!({"node_id": 4}));
-        assert!(matches!(
-            press.system.as_slice(),
-            [SystemCapability::AccessibilityWrite { app: Some(app) }] if app == "Safari"
-        ));
+        assert!(press.unresolved.contains(&CapabilityDomain::System));
+        assert!(press.system.is_empty());
         let click = registry.capability_request("ui_click", &context, &json!({"x": 10, "y": 10}));
-        assert!(matches!(
-            click.system.as_slice(),
-            [SystemCapability::InputEvents { .. }]
-        ));
+        assert!(click.unresolved.contains(&CapabilityDomain::System));
+        assert!(click.system.is_empty());
         context.credential_destination = Some("vpn.example".into());
         context.fill_username = Some("labuser".into());
         context.fill_password = Some("hunter2".into());
@@ -974,12 +1116,13 @@ mod tests {
             &context,
             &json!({"credential_ref": "lab"}),
         );
-        assert_eq!(
-            fill.system,
-            vec![SystemCapability::CredentialUse {
-                destination: Some("vpn.example".into())
-            }]
-        );
+        assert!(fill.system.iter().any(|cap| matches!(
+            cap,
+            SystemCapability::CredentialUse {
+                destination: Some(dest)
+            } if dest == "vpn.example"
+        )));
+        assert!(fill.unresolved.contains(&CapabilityDomain::Browser));
         let audit = fill.audit_value("fill_credential").to_string();
         assert!(!audit.contains("hunter2"));
         assert!(!audit.contains("labuser"));
@@ -1009,5 +1152,104 @@ mod tests {
                 .system,
             vec![SystemCapability::CalendarRead]
         );
+    }
+
+    #[test]
+    fn ui_tools_use_live_snapshot_app_not_frontmost() {
+        let registry = computer_registry_live("Notes");
+        let mut context = ToolContext::new();
+        context.frontmost_name = Some("Safari".into());
+        let press = registry.capability_request("ui_press", &context, &json!({"node_id": 4}));
+        assert!(matches!(
+            press.system.as_slice(),
+            [SystemCapability::AccessibilityWrite { app: Some(app) }] if app == "Notes"
+        ));
+        assert!(press.unresolved.is_empty());
+        let typed =
+            registry.capability_request("ui_type", &context, &json!({"text": "typed-ui-secret"}));
+        assert!(matches!(
+            typed.system.as_slice(),
+            [SystemCapability::InputEvents { app: Some(app) }] if app == "Notes"
+        ));
+        let click = registry.capability_request("ui_click", &context, &json!({"x": 10, "y": 10}));
+        assert!(matches!(
+            click.system.as_slice(),
+            [SystemCapability::InputEvents { app: Some(app) }] if app == "Notes"
+        ));
+        let fill = registry.capability_request(
+            "fill_credential",
+            &context,
+            &json!({
+                "credential_ref": "lab",
+                "username_node_id": 2,
+                "password_node_id": 9
+            }),
+        );
+        assert!(fill.system.iter().any(|cap| matches!(
+            cap,
+            SystemCapability::CredentialUse {
+                destination: Some(dest)
+            } if dest == "Notes"
+        )));
+        assert!(fill.system.iter().any(|cap| matches!(
+            cap,
+            SystemCapability::AccessibilityWrite { app: Some(app) } if app == "Notes"
+        )));
+        assert!(!fill.unresolved.contains(&CapabilityDomain::System));
+        assert!(
+            !fill
+                .audit_value("fill_credential")
+                .to_string()
+                .contains("typed-ui-secret")
+        );
+    }
+
+    #[test]
+    fn fill_credential_http_adds_browser_site_operation() {
+        let registry = computer_registry_http_auth();
+        let fill = registry.capability_request(
+            "fill_credential",
+            &ToolContext::new(),
+            &json!({"credential_ref": "lab"}),
+        );
+        assert!(fill.system.iter().any(|cap| matches!(
+            cap,
+            SystemCapability::CredentialUse {
+                destination: Some(dest)
+            } if dest == "files.example.invalid"
+        )));
+        assert!(matches!(
+            fill.browser.as_slice(),
+            [BrowserCapability::OperateSite { host }] if host == "files.example.invalid"
+        ));
+        assert!(!fill.unresolved.contains(&CapabilityDomain::Browser));
+    }
+
+    #[test]
+    fn fill_credential_native_without_live_target_is_unresolved() {
+        let registry = computer_registry();
+        let mut context = ToolContext::new();
+        context.credential_destination = Some("this app".into());
+        context.frontmost_name = Some("Safari".into());
+        let fill = registry.capability_request(
+            "fill_credential",
+            &context,
+            &json!({
+                "credential_ref": "lab",
+                "username_node_id": 2,
+                "password_node_id": 9
+            }),
+        );
+        assert!(fill.system.iter().any(|cap| matches!(
+            cap,
+            SystemCapability::CredentialUse {
+                destination: Some(dest)
+            } if dest == "this app"
+        )));
+        assert!(fill.unresolved.contains(&CapabilityDomain::System));
+        assert!(!fill.system.iter().any(|cap| matches!(
+            cap,
+            SystemCapability::AccessibilityWrite { app: Some(app) } if app == "Safari"
+        )));
     }
 }

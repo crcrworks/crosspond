@@ -26,6 +26,10 @@ pub trait BrowserTransport: Send + Sync {
 pub trait BrowserBackend: Send + Sync {
     fn connected(&self) -> bool;
     fn current_host(&self) -> Option<String>;
+    /// In-memory session host only. Capability derivation must not call transport.
+    fn cached_host(&self) -> Option<String> {
+        self.current_host()
+    }
     fn tabs(&self) -> Result<String, ToolError>;
     fn snapshot(&self) -> Result<String, ToolError>;
     fn text(&self) -> Result<String, ToolError>;
@@ -380,7 +384,7 @@ fn ok_text(text: String) -> ToolResult {
 
 fn current_host(backend: &dyn BrowserBackend) -> Option<String> {
     backend
-        .current_host()
+        .cached_host()
         .map(|host| host.trim().to_string())
         .filter(|host| !host.is_empty())
 }
@@ -400,14 +404,28 @@ fn operate_site(backend: &dyn BrowserBackend) -> CapabilityRequest {
 }
 
 fn navigate_capability(backend: &dyn BrowserBackend, input: &Value) -> CapabilityRequest {
-    if let Some(url) = optional_string(input, "url") {
-        return match network_origin_from_url(&url) {
-            Some(origin) => CapabilityRequest::browser(BrowserCapability::NavigateTo(origin)),
+    match optional_string(input, "action").as_deref() {
+        Some("goto") => match optional_string(input, "url")
+            .as_deref()
+            .and_then(network_origin_from_url)
+        {
+            Some(origin) => CapabilityRequest::browser(BrowserCapability::NavigateTo(origin))
+                .add_unresolved(CapabilityDomain::Browser),
             None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
-        };
+        },
+        Some("reload") => operate_site(backend),
+        Some("back") | Some("forward") => CapabilityRequest::unresolved(CapabilityDomain::Browser),
+        _ => CapabilityRequest::unresolved(CapabilityDomain::Browser),
     }
-    match current_host(backend) {
-        Some(host) => CapabilityRequest::browser(BrowserCapability::OperateSite { host }),
+}
+
+fn navigate_to_url(input: &Value) -> CapabilityRequest {
+    match optional_string(input, "url")
+        .as_deref()
+        .and_then(network_origin_from_url)
+    {
+        Some(origin) => CapabilityRequest::browser(BrowserCapability::NavigateTo(origin))
+            .add_unresolved(CapabilityDomain::Browser),
         None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
     }
 }
@@ -884,13 +902,7 @@ impl Tool for BrowserNewTab {
     }
 
     fn capability_request(&self, _context: &ToolContext, input: &Value) -> CapabilityRequest {
-        match optional_string(input, "url") {
-            Some(url) => match network_origin_from_url(&url) {
-                Some(origin) => CapabilityRequest::browser(BrowserCapability::NavigateTo(origin)),
-                None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
-            },
-            None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
-        }
+        navigate_to_url(input)
     }
 }
 

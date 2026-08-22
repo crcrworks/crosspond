@@ -18,6 +18,8 @@ use super::{ApprovalOutcome, ApprovalWait, Runtime, persist_allowed_browser_host
 
 impl Runtime {
     /// Observation only. Must not change risk, taint, sandbox, or Allow decisions.
+    /// Credential destination/mode are bound before this so the audit names the
+    /// resolved target without reading secrets.
     pub(crate) fn record_derived_capabilities(
         &self,
         task_dir: &Path,

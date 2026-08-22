@@ -572,6 +572,14 @@ impl CuaHost {
         Ok(text)
     }
 
+    pub(crate) fn live_target_app(&self) -> Option<String> {
+        let live = self.inner.live.lock().ok()?;
+        live.as_ref()
+            .map(|state| state.app_name.trim())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+    }
+
     fn live_state(&self) -> Result<LiveState, ToolError> {
         let live = self
             .inner

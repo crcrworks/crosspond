@@ -68,6 +68,10 @@ impl ToolRegistry {
             .unwrap_or_else(CapabilityRequest::unresolved_all)
     }
 
+    pub fn live_target_app(&self, name: &str) -> Option<String> {
+        self.get(name).and_then(|tool| tool.live_target_app())
+    }
+
     pub fn approval_body(&self, name: &str) -> ApprovalBody {
         self.get(name)
             .map(|tool| tool.approval_body())
