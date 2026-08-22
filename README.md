@@ -41,7 +41,7 @@ npm --prefix ui run check
 npm --prefix ui test
 ```
 
-Pull requests and pushes to `main` run `.github/workflows/ci.yml` (fmt, portable clippy/test, macOS Seatbelt tests, UI check/test/build, `cargo audit`, `npm audit --audit-level=high`). On Linux, clippy/test skip `crosspond-macos` stubs. `gitleaks` is advisory.
+Pull requests and pushes to `main` run `.github/workflows/ci.yml`. Rust `cargo fmt` is a fail-fast job: clippy, portable nextest, and macOS Seatbelt tests start only after it passes. UI check/test/build, `cargo audit`, and `npm audit --audit-level=high` run in parallel with format. On Linux, clippy/test skip `crosspond-macos` stubs and the Tauri host. `gitleaks` is advisory. PRs do not build a Tauri installer.
 
 ## Release
 
