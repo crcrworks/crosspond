@@ -275,9 +275,8 @@ impl BrowserBackend for ExtensionBrowser {
     }
 
     fn current_host(&self) -> Option<String> {
-        let url = self.session().url.clone();
-        if !url.is_empty() {
-            return host_from_url(&url);
+        if let Some(host) = self.cached_host() {
+            return Some(host);
         }
         if !self.transport.is_connected() {
             return None;
@@ -285,6 +284,14 @@ impl BrowserBackend for ExtensionBrowser {
         let listed = self.request(json!({ "op": "list_tabs" })).ok()?;
         let tab = pick_active_tab(&listed)?;
         host_from_url(&string_field(&tab, "url"))
+    }
+
+    fn cached_host(&self) -> Option<String> {
+        let url = self.session().url.clone();
+        if url.is_empty() {
+            return None;
+        }
+        host_from_url(&url)
     }
 
     fn tabs(&self) -> Result<String, ToolError> {

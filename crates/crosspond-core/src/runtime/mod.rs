@@ -17,7 +17,7 @@ use crosspond_model::{
 use crosspond_tools::{
     ApprovalBody, KnowledgeBackend, ScratchReason, ScratchSpace, ShellSandbox, SkillEndpoints,
     ToolContext, ToolRegistry, default_global_skills_root, default_skills_root,
-    filesystem_registry, host_from_url, http_hosts_from_note, normalize_host,
+    filesystem_registry, fill_uses_ax_nodes, host_from_url, http_hosts_from_note, normalize_host,
     parse_skill_install_source, prepare_skill_install, render_skill_catalog, scan_skill_roots,
     site_is_allowed,
 };
@@ -1269,6 +1269,10 @@ impl Runtime {
         input: &serde_json::Value,
         context: &mut ToolContext,
     ) -> ApprovalOutcome {
+        if tool_call_needs_credentials(&call.name, input) {
+            let _ = self.bind_credential_metadata(call, input, context);
+        }
+        self.record_derived_capabilities(task_dir, call, context, input);
         if call.name == "skill_install" {
             return self
                 .prepare_skill_install_call(task_id, task_dir, call, input, context)
@@ -1387,6 +1391,26 @@ impl Runtime {
         outcome
     }
 
+    fn bind_credential_metadata(
+        &self,
+        call: &ToolCall,
+        input: &serde_json::Value,
+        context: &mut ToolContext,
+    ) -> Result<String, String> {
+        let credential_ref = input
+            .get("credential_ref")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "credential_ref is required".to_string())
+            .and_then(|value| parse_credential_ref(value).map_err(|err| err.to_string()))?;
+        let hosts = self.credential_hosts_for(&credential_ref);
+        context.credential_hosts = hosts.clone();
+        let destination = self.credential_destination_for(call, input, context, &hosts)?;
+        context.credential_destination = Some(destination);
+        Ok(credential_ref)
+    }
+
     async fn bind_and_collect_credentials(
         &mut self,
         task_id: TaskId,
@@ -1395,23 +1419,10 @@ impl Runtime {
         input: &serde_json::Value,
         context: &mut ToolContext,
     ) -> ApprovalOutcome {
-        let credential_ref = match input
-            .get("credential_ref")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "credential_ref is required".to_string())
-            .and_then(|value| parse_credential_ref(value).map_err(|err| err.to_string()))
-        {
+        let credential_ref = match self.bind_credential_metadata(call, input, context) {
             Ok(value) => value,
             Err(message) => return ApprovalOutcome::Rejected(message),
         };
-        let hosts = self.credential_hosts_for(&credential_ref);
-        context.credential_hosts = hosts.clone();
-        match self.credential_destination_for(call, input, context, &hosts) {
-            Ok(destination) => context.credential_destination = Some(destination),
-            Err(message) => return ApprovalOutcome::Rejected(message),
-        }
         let destination = context
             .credential_destination
             .as_deref()
@@ -1544,13 +1555,18 @@ impl Runtime {
             };
             return bind_http_host(hosts, &host);
         }
-        Ok(context
-            .frontmost_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("this app")
-            .to_string())
+        Ok(self
+            .tools
+            .live_target_app(&call.name)
+            .or_else(|| {
+                context
+                    .frontmost_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "this app".into()))
     }
 
     fn load_credential_bundle(&self, credential_ref: &str) -> Option<CredentialBundle> {
@@ -1899,17 +1915,6 @@ fn tool_call_needs_credentials(name: &str, input: &Value) -> bool {
     }
 }
 
-fn fill_uses_ax_nodes(input: &Value) -> bool {
-    ["username_node_id", "password_node_id"]
-        .iter()
-        .any(|key| match input.get(*key) {
-            None | Some(Value::Null) => false,
-            Some(Value::String(value)) => !value.trim().is_empty(),
-            Some(Value::Number(_)) => true,
-            _ => true,
-        })
-}
-
 fn bind_http_host(hosts: &[String], host: &str) -> Result<String, String> {
     if hosts.is_empty() {
         return Err(
@@ -2034,14 +2039,14 @@ mod tests {
     use crate::context::{AppContext, ContextCapsule, WindowContext};
     use crate::ids::{ConversationId, TaskId};
     use crate::mention::Mention;
-    use crate::policy::ComputerApprovalMode;
+    use crate::policy::{ComputerApprovalMode, risk_for_tool};
     use crate::scratch::FsScratchSpaceManager;
     use crate::secret::memory::MemorySecretStore;
     use crate::secret::{CredentialBundle, SecretKey, SecretString};
     use crosspond_tools::{
         AccessibilityBackend, AppBackend, BrowserBackend, CalendarBackend, HttpAuthChallenge,
-        InputBackend, Screenshot, ScreenshotBackend, ShellSandbox, SkillEndpoints, ToolError,
-        computer_and_screenshot_registry, computer_and_screenshot_registry_with_browser,
+        InputBackend, PathScope, Screenshot, ScreenshotBackend, ShellSandbox, SkillEndpoints,
+        ToolError, computer_and_screenshot_registry, computer_and_screenshot_registry_with_browser,
         computer_registry, register_shell_tools, register_web_tools, unsandboxed_shell_command,
     };
     use serde_json::json;
@@ -4559,6 +4564,10 @@ mod tests {
         )
         .unwrap();
         assert_no_secret_leak(&events);
+        assert!(events.contains("capability_derived"));
+        assert!(events.contains("files.example.invalid"));
+        assert!(events.contains("operate_site"));
+        assert!(events.contains("credential_use"));
         let session = std::fs::read_to_string(
             tmp.0
                 .join("tasks")
@@ -4601,9 +4610,10 @@ mod tests {
             .unwrap();
         let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
         let join = tokio::spawn(run_loop(runtime));
+        let task_id = TaskId::new();
         command_tx
             .send(RuntimeCommand::StartTask(StartTaskRequest::new(
-                TaskId::new(),
+                task_id,
                 "open the lab files",
             )))
             .unwrap();
@@ -4641,6 +4651,18 @@ mod tests {
             }
         }
         assert_eq!(*continues.lock().expect("lock"), 1);
+        let events = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        let derived_at = events.find("capability_derived").expect("derived");
+        let required_at = events.find("credential_required").expect("required");
+        assert!(derived_at < required_at);
+        assert!(events.contains("files.example.invalid"));
+        assert!(events.contains("operate_site"));
         drop(command_tx);
         join.await.unwrap();
         let _ = tmp;
@@ -5555,6 +5577,210 @@ mod tests {
                 break;
             }
         }
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[test]
+    fn deriving_capabilities_does_not_change_risk_or_taint_or_allow_external() {
+        let mut registry = ToolRegistry::new();
+        register_web_tools(&mut registry);
+        let input = json!({
+            "url": "https://api.example.com/v1",
+            "credential_ref": "lab"
+        });
+        let before_risk = risk_for_tool("fetch_url", PathScope::Workspace, &input);
+        let before_meta = crate::network_policy::security_metadata("fetch_url", &input);
+        let mut context = ToolContext::new();
+        context.allow_external = false;
+        context.credential_destination = Some("api.example.com".into());
+        let caps = registry.capability_request("fetch_url", &context, &input);
+        assert!(!caps.network.is_empty());
+        assert_eq!(
+            risk_for_tool("fetch_url", PathScope::Workspace, &input),
+            before_risk
+        );
+        assert_eq!(
+            crate::network_policy::security_metadata("fetch_url", &input),
+            before_meta
+        );
+        assert!(!context.allow_external);
+        let unknown = registry.capability_request("future_exfil", &context, &json!({}));
+        assert!(unknown.is_unresolved_all());
+        assert_eq!(
+            crate::network_policy::security_metadata("future_exfil", &json!({})).egress,
+            crate::network_policy::ToolEgress::External
+        );
+    }
+
+    #[tokio::test]
+    async fn capability_derived_is_logged_without_payloads() {
+        let secret = "SECRET_WRITE_PAYLOAD_hunter2";
+        let arguments = serde_json::json!({
+            "path": "output/hello.txt",
+            "content": secret,
+        })
+        .to_string();
+        let build: ProviderBuilder = Arc::new(move |_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "write_file",
+                arguments.clone(),
+                "Wrote output/hello.txt",
+            ))
+        });
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), filesystem_registry());
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let task_id = TaskId::new();
+        command_tx
+            .send(RuntimeCommand::StartTask(StartTaskRequest::new(
+                task_id,
+                "write a file",
+            )))
+            .unwrap();
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "scratch write must not prompt"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        let events = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert!(events.contains("capability_derived"));
+        assert!(events.contains("write_file"));
+        assert!(!events.contains(secret));
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn capability_log_does_not_skip_tainted_web_search() {
+        let query = "classified lab protocol 7";
+        let arguments = serde_json::json!({ "query": query }).to_string();
+        let build: ProviderBuilder = Arc::new(move |_, _| {
+            Arc::new(NamedToolThenDoneProvider::new(
+                "web_search",
+                arguments.clone(),
+                "searched",
+            ))
+        });
+        let (runtime, tmp) = test_runtime(build, seeded_secrets(), web_search_registry());
+        runtime
+            .config
+            .save(&AppConfig {
+                computer_approval: ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let task_id = TaskId::new();
+        let mut request = StartTaskRequest::new(task_id, "search the weather");
+        request.context.selected_text = Some("private selected text body".into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        let required = drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::ApprovalRequired { .. })
+        })
+        .await;
+        match required {
+            AgentEvent::ApprovalRequired { approval_id, .. } => {
+                command_tx
+                    .send(RuntimeCommand::Reject(approval_id))
+                    .unwrap();
+            }
+            other => panic!("{other:?}"),
+        }
+        drain_until(&mut event_rx, |event| {
+            matches!(event, AgentEvent::TaskCompleted { .. })
+        })
+        .await;
+        let events = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert!(events.contains("capability_derived"));
+        assert!(events.contains("api.exa.ai"));
+        assert!(!events.contains("private selected text body"));
+        drop(command_tx);
+        join.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auto_sandboxed_shell_still_runs_when_task_is_tainted() {
+        let marker = std::env::temp_dir().join(format!(
+            "crosspond-auto-sandboxed-tainted-{}.txt",
+            uuid::Uuid::new_v4()
+        ));
+        let arguments = serde_json::json!({
+            "command": format!("printf 'tainted-ok\\n' > '{}'", marker.display()),
+        })
+        .to_string();
+        let build: ProviderBuilder = {
+            let arguments = arguments.clone();
+            Arc::new(move |_, _| {
+                Arc::new(NamedToolThenDoneProvider::new(
+                    "run_command",
+                    arguments.clone(),
+                    "Ran the command",
+                ))
+            })
+        };
+        let (mut runtime, tmp) = test_runtime(build, seeded_secrets(), shell_and_fs_registry());
+        runtime.shell_sandbox = Some(Arc::new(EnforcingSandbox));
+        runtime
+            .config
+            .save(&crate::config::AppConfig {
+                computer_approval: crate::policy::ComputerApprovalMode::Auto,
+                ..Default::default()
+            })
+            .unwrap();
+        let (runtime, command_tx, mut event_rx) = bind_channels(runtime);
+        let join = tokio::spawn(run_loop(runtime));
+        let task_id = TaskId::new();
+        let mut request = StartTaskRequest::new(task_id, "run a command");
+        request.context.selected_text = Some("classified lab protocol 7".into());
+        command_tx.send(RuntimeCommand::StartTask(request)).unwrap();
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            assert!(
+                !matches!(event, AgentEvent::ApprovalRequired { .. }),
+                "sandboxed auto shell must not prompt even when the task is tainted"
+            );
+            if matches!(event, AgentEvent::TaskCompleted { .. }) {
+                break;
+            }
+        }
+        let written = std::fs::read_to_string(&marker);
+        let _ = std::fs::remove_file(&marker);
+        assert_eq!(written.unwrap(), "tainted-ok\n");
+        let events = std::fs::read_to_string(
+            tmp.0
+                .join("tasks")
+                .join(task_id.to_string())
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert!(events.contains("capability_derived"));
+        assert!(!events.contains("classified lab protocol 7"));
         drop(command_tx);
         join.await.unwrap();
     }

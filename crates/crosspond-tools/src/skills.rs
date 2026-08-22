@@ -11,6 +11,9 @@ use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::capability::{
+    CapabilityDomain, CapabilityRequest, FilesystemCapability, connect_origins,
+};
 use crate::registry::ToolRegistry;
 use crate::skill_safety::{SafetyReport, SafetyVerdict, scan_skill_files};
 use crate::skill_types::{PreparedSkillInstall, SkillEndpoints, SkillFile};
@@ -347,6 +350,63 @@ pub fn global_skills_root_from(context: &ToolContext) -> PathBuf {
         .global_skills_root
         .clone()
         .unwrap_or_else(default_global_skills_root)
+}
+
+fn skill_read_capability(context: &ToolContext, input: &Value) -> CapabilityRequest {
+    let Some(name) = optional_string(input, "name") else {
+        return CapabilityRequest::unresolved(CapabilityDomain::Filesystem);
+    };
+    if !valid_skill_name(&name) {
+        return CapabilityRequest::unresolved(CapabilityDomain::Filesystem);
+    }
+    let local = skills_root_from(context);
+    let global = global_skills_root_from(context);
+    let path = if skill_dir_exists(&local, &name) {
+        local.join(&name)
+    } else if skill_dir_exists(&global, &name) {
+        global.join(&name)
+    } else {
+        return CapabilityRequest::unresolved(CapabilityDomain::Filesystem);
+    };
+    CapabilityRequest::filesystem(FilesystemCapability::ReadTree(path))
+}
+
+fn skill_search_capability(context: &ToolContext) -> CapabilityRequest {
+    let endpoints = SkillEndpoints::from_context(context);
+    skill_network_capability(&endpoints, true)
+}
+
+fn skill_install_capability(context: &ToolContext, input: &Value) -> CapabilityRequest {
+    let endpoints = SkillEndpoints::from_context(context);
+    let mut request = skill_network_capability(&endpoints, false);
+    let root = skills_root_from(context);
+    let dest = optional_string(input, "name")
+        .filter(|name| valid_skill_name(name))
+        .map(|name| root.join(name))
+        .unwrap_or(root);
+    request = request.add_filesystem(FilesystemCapability::WriteTree(dest));
+    request
+}
+
+fn skill_network_capability(endpoints: &SkillEndpoints, include_search: bool) -> CapabilityRequest {
+    let mut urls = Vec::new();
+    if include_search {
+        urls.push(endpoints.search_url.clone());
+    }
+    urls.push(endpoints.github_api_url.clone());
+    urls.push(endpoints.github_raw_url.clone());
+    if let Some(audit) = &endpoints.audit_url {
+        urls.push(audit.clone());
+    }
+    let network = connect_origins(urls.iter().map(String::as_str));
+    if network.is_empty() {
+        CapabilityRequest::unresolved(CapabilityDomain::Network)
+    } else {
+        CapabilityRequest {
+            network,
+            ..CapabilityRequest::default()
+        }
+    }
 }
 
 pub fn write_prepared_skill(
@@ -1362,6 +1422,10 @@ impl Tool for SkillRead {
             image: None,
         })
     }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        skill_read_capability(context, input)
+    }
 }
 
 fn looks_like_non_text(bytes: &[u8]) -> bool {
@@ -1477,6 +1541,10 @@ impl Tool for SkillSearch {
     fn target_host(&self, _context: &ToolContext, _input: &Value) -> Option<String> {
         Some("github.com".into())
     }
+
+    fn capability_request(&self, context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        skill_search_capability(context)
+    }
 }
 
 struct SkillInstall;
@@ -1539,6 +1607,10 @@ impl Tool for SkillInstall {
 
     fn target_host(&self, _context: &ToolContext, _input: &Value) -> Option<String> {
         Some("github.com".into())
+    }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        skill_install_capability(context, input)
     }
 }
 

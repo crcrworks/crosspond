@@ -198,6 +198,22 @@ mod tests {
     }
 
     #[test]
+    fn network_capability_does_not_permit_private_egress() {
+        // Connect origins are independent of taint: authenticated fetch stays
+        // external egress with private output even when the destination is known.
+        let meta = security_metadata(
+            "fetch_url",
+            &json!({"url": "https://api.example.com/", "credential_ref": "lab"}),
+        );
+        assert_eq!(meta.egress, ToolEgress::External);
+        assert_eq!(meta.output_privacy, ToolOutputPrivacy::Private);
+        assert!(is_egress_tool(
+            "fetch_url",
+            &json!({"url": "https://api.example.com/"})
+        ));
+    }
+
+    #[test]
     fn skips_tiny_private_values() {
         let mut values = Vec::new();
         remember_private_value(&mut values, "ab");

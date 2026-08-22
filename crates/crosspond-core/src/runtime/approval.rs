@@ -17,6 +17,20 @@ use crate::receipt::append_event_log;
 use super::{ApprovalOutcome, ApprovalWait, Runtime, persist_allowed_browser_host};
 
 impl Runtime {
+    /// Observation only. Must not change risk, taint, sandbox, or Allow decisions.
+    /// Credential destination/mode are bound before this so the audit names the
+    /// resolved target without reading secrets.
+    pub(crate) fn record_derived_capabilities(
+        &self,
+        task_dir: &Path,
+        call: &ToolCall,
+        context: &ToolContext,
+        input: &serde_json::Value,
+    ) {
+        let capabilities = self.tools.capability_request(&call.name, context, input);
+        append_event_log(task_dir, capabilities.audit_value(&call.name));
+    }
+
     pub(crate) async fn await_approval_if_needed(
         &mut self,
         task_id: TaskId,
@@ -82,16 +96,20 @@ impl Runtime {
         }
         let risk = risk_for_tool(&call.name, scope, input);
         let auto = computer_approval == ComputerApprovalMode::Auto;
+        let tainted_egress = self.private_context && is_egress_tool(&call.name, input);
+        // Sandbox / future capability grants must never skip private-context
+        // egress evaluation. `run_command` is not classified as egress today,
+        // so this Auto fast path stays observationally identical.
         if auto
             && call.name == "run_command"
             && self
                 .shell_sandbox
                 .as_ref()
                 .is_some_and(|sandbox| sandbox.is_enforcing())
+            && !tainted_egress
         {
             return ApprovalOutcome::Allowed;
         }
-        let tainted_egress = self.private_context && is_egress_tool(&call.name, input);
         let needs_approval = tainted_egress
             || evaluate_with(risk, computer_approval, AgentAsk::from_tool_input(input))
                 == PolicyDecision::RequireApproval;

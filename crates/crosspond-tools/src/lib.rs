@@ -8,6 +8,7 @@ mod browser;
 mod browser_cdp;
 mod browser_snapshot;
 mod calendar;
+mod capability;
 mod computer;
 mod fs_tools;
 mod knowledge;
@@ -35,11 +36,16 @@ pub use browser::{
 };
 pub use browser_cdp::ExtensionBrowser;
 pub use calendar::{CalendarBackend, register_calendar_tools};
+pub use capability::{
+    BrowserCapability, CapabilityDomain, CapabilityRequest, FilesystemCapability,
+    NetworkCapability, NetworkOrigin, NetworkScheme, ProcessCapability, SystemCapability,
+    connect_origins, network_origin_from_parsed, network_origin_from_url,
+};
 pub use computer::{
     AccessibilityBackend, AppBackend, InputBackend, Screenshot, ScreenshotBackend,
     computer_and_screenshot_registry, computer_and_screenshot_registry_with_browser,
-    computer_registry, register_app_tools, register_computer_tools, register_input_tools,
-    register_screenshot_tools,
+    computer_registry, fill_uses_ax_nodes, register_app_tools, register_computer_tools,
+    register_input_tools, register_screenshot_tools,
 };
 pub use fs_tools::filesystem_registry;
 pub use knowledge::{

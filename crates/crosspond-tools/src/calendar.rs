@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use crate::capability::{CapabilityRequest, SystemCapability};
 use crate::registry::ToolRegistry;
 use crate::tool::{Tool, ToolContext, ToolDefinition, ToolError, ToolResult, truncate_output};
 
@@ -174,6 +175,10 @@ impl Tool for CalendarEvents {
             created_file: None,
             image: None,
         })
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        CapabilityRequest::system(SystemCapability::CalendarRead)
     }
 }
 

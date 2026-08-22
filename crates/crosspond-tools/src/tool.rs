@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::capability::CapabilityRequest;
 use crate::knowledge::KnowledgeBackend;
 use crate::sandbox::ShellSandbox;
 use crate::scratch::ScratchSpace;
@@ -168,6 +169,26 @@ pub trait Tool: Send + Sync {
 
     /// Registrable site host for browser tools (no URL path or query).
     fn target_host(&self, _context: &ToolContext, _input: &Value) -> Option<String> {
+        None
+    }
+
+    /// Host-owned resource boundary for this call.
+    ///
+    /// Must not retrieve secrets, mutate state, or perform network I/O.
+    /// Host-local metadata is allowed so the request can name the resolved
+    /// resource: path `exists`/`canonicalize`, skill-directory lookup, and
+    /// in-memory snapshot or browser-session cache. A cache miss must stay
+    /// unresolved rather than probing the OS or extension transport.
+    ///
+    /// The default is fail-closed. Empty domains mean "known none"; unknown
+    /// tools must not use [`CapabilityRequest::default`].
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        CapabilityRequest::unresolved_all()
+    }
+
+    /// App identity from the latest AX snapshot or screenshot (`LiveState`).
+    /// In-memory only; do not probe the frontmost app.
+    fn live_target_app(&self) -> Option<String> {
         None
     }
 

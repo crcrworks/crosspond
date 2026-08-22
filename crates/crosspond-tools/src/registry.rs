@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::capability::CapabilityRequest;
 use crate::tool::{ApprovalBody, Tool, ToolContext, ToolDefinition, ToolError, ToolResult};
 
 #[derive(Default)]
@@ -54,6 +55,21 @@ impl ToolRegistry {
     pub fn target_host(&self, name: &str, context: &ToolContext, input: &Value) -> Option<String> {
         self.get(name)
             .and_then(|tool| tool.target_host(context, input))
+    }
+
+    pub fn capability_request(
+        &self,
+        name: &str,
+        context: &ToolContext,
+        input: &Value,
+    ) -> CapabilityRequest {
+        self.get(name)
+            .map(|tool| tool.capability_request(context, input))
+            .unwrap_or_else(CapabilityRequest::unresolved_all)
+    }
+
+    pub fn live_target_app(&self, name: &str) -> Option<String> {
+        self.get(name).and_then(|tool| tool.live_target_app())
     }
 
     pub fn approval_body(&self, name: &str) -> ApprovalBody {

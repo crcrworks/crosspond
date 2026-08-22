@@ -4,6 +4,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::MAX_LIST_ENTRIES;
+use crate::capability::{CapabilityDomain, CapabilityRequest, FilesystemCapability};
 use crate::path::{PathScope, resolve_requested};
 use crate::registry::ToolRegistry;
 use crate::tool::{
@@ -51,6 +52,21 @@ fn deny_external(scope: PathScope, allow_external: bool) -> Result<(), ToolError
 
 fn scratch_root(context: &ToolContext) -> Option<&Path> {
     context.scratch.as_ref().map(|space| space.root.as_path())
+}
+
+fn path_capability(
+    context: &ToolContext,
+    input: &Value,
+    default_path: Option<&str>,
+    make: impl FnOnce(std::path::PathBuf) -> FilesystemCapability,
+) -> CapabilityRequest {
+    let requested = optional_string(input, "path")
+        .or_else(|| default_path.map(str::to_string))
+        .unwrap_or_default();
+    match resolve_requested(scratch_root(context), &requested) {
+        Ok(resolved) => CapabilityRequest::filesystem(make(resolved.path)),
+        Err(_) => CapabilityRequest::unresolved(CapabilityDomain::Filesystem),
+    }
 }
 
 struct ReadFile;
@@ -105,6 +121,10 @@ impl Tool for ReadFile {
             "Read a file outside the scratch space".into(),
             path.to_string(),
         )
+    }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        path_capability(context, input, None, FilesystemCapability::ReadFile)
     }
 }
 
@@ -171,6 +191,15 @@ impl Tool for ListDirectory {
             path.to_string(),
         )
     }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        path_capability(
+            context,
+            input,
+            Some("."),
+            FilesystemCapability::ReadDirectory,
+        )
+    }
 }
 
 struct WriteFile;
@@ -230,6 +259,10 @@ impl Tool for WriteFile {
             path.to_string(),
         )
     }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        path_capability(context, input, None, FilesystemCapability::WriteFile)
+    }
 }
 
 struct CreateDirectory;
@@ -277,6 +310,10 @@ impl Tool for CreateDirectory {
             "Create a directory outside the scratch space".into(),
             path.to_string(),
         )
+    }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        path_capability(context, input, None, FilesystemCapability::CreateDirectory)
     }
 }
 

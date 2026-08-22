@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use crate::capability::{
+    CapabilityDomain, CapabilityRequest, FilesystemCapability, ProcessCapability, SystemCapability,
+};
 use crate::registry::ToolRegistry;
 use crate::sandbox::{ShellSandbox, unsandboxed_shell_command};
 use crate::ssrf::validate_fetch_url;
@@ -460,6 +463,21 @@ impl Tool for RunCommand {
             image: None,
         })
     }
+
+    fn capability_request(&self, context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        let Some(root) = context.scratch.as_ref().map(|space| space.root.clone()) else {
+            return CapabilityRequest::unresolved(CapabilityDomain::Process)
+                .add_unresolved(CapabilityDomain::Filesystem)
+                .add_unresolved(CapabilityDomain::Network)
+                .add_unresolved(CapabilityDomain::System);
+        };
+        CapabilityRequest::process(ProcessCapability::Shell { cwd: root.clone() })
+            .add_filesystem(FilesystemCapability::ReadTree(root.clone()))
+            .add_filesystem(FilesystemCapability::WriteTree(root))
+            .add_unresolved(CapabilityDomain::Filesystem)
+            .add_unresolved(CapabilityDomain::Network)
+            .add_unresolved(CapabilityDomain::System)
+    }
 }
 
 struct OpenUrl;
@@ -519,6 +537,25 @@ impl Tool for OpenUrl {
             created_file: None,
             image: None,
         })
+    }
+
+    fn capability_request(&self, _context: &ToolContext, input: &Value) -> CapabilityRequest {
+        let Some(raw) = input.get("url").and_then(Value::as_str) else {
+            return CapabilityRequest::unresolved(CapabilityDomain::System);
+        };
+        let Ok(url) = reqwest::Url::parse(raw.trim()) else {
+            return CapabilityRequest::unresolved(CapabilityDomain::System);
+        };
+        let scheme = url.scheme().trim().to_ascii_lowercase();
+        if scheme.is_empty() {
+            return CapabilityRequest::unresolved(CapabilityDomain::System);
+        }
+        let host = url
+            .host_str()
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .map(|host| host.trim_end_matches('.').to_ascii_lowercase());
+        CapabilityRequest::system(SystemCapability::OpenUrl { scheme, host })
     }
 }
 
