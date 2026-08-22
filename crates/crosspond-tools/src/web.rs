@@ -12,6 +12,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::browser::{host_from_url, normalize_host};
+use crate::capability::{
+    CapabilityDomain, CapabilityRequest, NetworkCapability, SystemCapability,
+    network_origin_from_url,
+};
 use crate::registry::ToolRegistry;
 use crate::ssrf::{
     SsrfResolver, max_redirects, validate_fetch_url, validate_fetch_url_for_hosts, validate_url,
@@ -191,6 +195,13 @@ impl Tool for WebSearch {
 
     fn approval_body(&self) -> ApprovalBody {
         ApprovalBody::Command
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        match network_origin_from_url(EXA_SEARCH_URL) {
+            Some(origin) => CapabilityRequest::network(NetworkCapability::Connect(origin)),
+            None => CapabilityRequest::unresolved(CapabilityDomain::Network),
+        }
     }
 }
 
@@ -443,6 +454,22 @@ impl Tool for FetchUrl {
             .get("url")
             .and_then(Value::as_str)
             .and_then(host_from_url)
+    }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        let Some(raw) = input.get("url").and_then(Value::as_str) else {
+            return CapabilityRequest::unresolved(CapabilityDomain::Network);
+        };
+        let Some(origin) = network_origin_from_url(raw) else {
+            return CapabilityRequest::unresolved(CapabilityDomain::Network);
+        };
+        let mut request = CapabilityRequest::network(NetworkCapability::Connect(origin));
+        if optional_string(input, "credential_ref").is_some() {
+            request = request.add_system(SystemCapability::CredentialUse {
+                destination: context.credential_destination.clone(),
+            });
+        }
+        request
     }
 }
 

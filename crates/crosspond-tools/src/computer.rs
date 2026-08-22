@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 
 use crate::ax_outline::truncate_ax_text;
 use crate::browser::{BrowserBackend, DisconnectedBrowser, site_is_allowed};
+use crate::capability::{CapabilityDomain, CapabilityRequest, SystemCapability};
 use crate::registry::ToolRegistry;
 use crate::tool::{
     Tool, ToolContext, ToolDefinition, ToolError, ToolImage, ToolResult, truncate_output,
@@ -337,6 +338,38 @@ fn app_clause(context: &ToolContext) -> String {
     }
 }
 
+fn requested_or_frontmost_app(context: &ToolContext, input: &Value) -> Option<String> {
+    optional_app(input).or_else(|| {
+        context
+            .frontmost_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn system_for_app(
+    context: &ToolContext,
+    input: &Value,
+    make: impl FnOnce(Option<String>) -> SystemCapability,
+) -> CapabilityRequest {
+    CapabilityRequest::system(make(requested_or_frontmost_app(context, input)))
+}
+
+fn app_identity_capability(
+    input: &Value,
+    make: impl FnOnce(String) -> SystemCapability,
+) -> CapabilityRequest {
+    match parse_app_identifiers(input) {
+        Ok((name, bundle_id)) => CapabilityRequest::system(make(app_display_name(
+            name.as_deref(),
+            bundle_id.as_deref(),
+        ))),
+        Err(_) => CapabilityRequest::unresolved(CapabilityDomain::System),
+    }
+}
+
 fn parse_scroll_direction(input: &Value) -> Result<String, ToolError> {
     let direction = input
         .get("direction")
@@ -415,6 +448,12 @@ impl Tool for GetAccessibilitySnapshot {
             image: None,
         })
     }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        system_for_app(context, input, |app| SystemCapability::AccessibilityRead {
+            app,
+        })
+    }
 }
 
 struct UiPress {
@@ -456,6 +495,12 @@ impl Tool for UiPress {
             text: truncate_output(text),
             created_file: None,
             image: None,
+        })
+    }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        system_for_app(context, input, |app| SystemCapability::AccessibilityWrite {
+            app,
         })
     }
 }
@@ -516,6 +561,12 @@ impl Tool for UiSetValue {
             text: truncate_output(text),
             created_file: None,
             image: None,
+        })
+    }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        system_for_app(context, input, |app| SystemCapability::AccessibilityWrite {
+            app,
         })
     }
 }
@@ -669,6 +720,12 @@ impl Tool for FillCredential {
             image: None,
         })
     }
+
+    fn capability_request(&self, context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        CapabilityRequest::system(SystemCapability::CredentialUse {
+            destination: context.credential_destination.clone(),
+        })
+    }
 }
 
 struct TakeScreenshot {
@@ -710,6 +767,12 @@ impl Tool for TakeScreenshot {
                 width: shot.width,
                 height: shot.height,
             }),
+        })
+    }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        system_for_app(context, input, |app| SystemCapability::ScreenCapture {
+            app,
         })
     }
 }
@@ -787,6 +850,10 @@ impl Tool for UiClick {
             image,
         })
     }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        system_for_app(context, input, |app| SystemCapability::InputEvents { app })
+    }
 }
 
 struct ListApps {
@@ -813,6 +880,10 @@ impl Tool for ListApps {
             created_file: None,
             image: None,
         })
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        CapabilityRequest::system(SystemCapability::AppList)
     }
 }
 
@@ -860,6 +931,10 @@ impl Tool for OpenApp {
             image: None,
         })
     }
+
+    fn capability_request(&self, _context: &ToolContext, input: &Value) -> CapabilityRequest {
+        app_identity_capability(input, |app| SystemCapability::AppLaunch { app })
+    }
 }
 
 struct FocusApp {
@@ -904,6 +979,10 @@ impl Tool for FocusApp {
             created_file: None,
             image: None,
         })
+    }
+
+    fn capability_request(&self, _context: &ToolContext, input: &Value) -> CapabilityRequest {
+        app_identity_capability(input, |app| SystemCapability::AppFocus { app })
     }
 }
 
@@ -969,6 +1048,10 @@ impl Tool for UiType {
             image: None,
         })
     }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        system_for_app(context, input, |app| SystemCapability::InputEvents { app })
+    }
 }
 
 struct UiHotkey {
@@ -1010,6 +1093,10 @@ impl Tool for UiHotkey {
             created_file: None,
             image: None,
         })
+    }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        system_for_app(context, input, |app| SystemCapability::InputEvents { app })
     }
 }
 
@@ -1087,6 +1174,10 @@ impl Tool for UiScroll {
             created_file: None,
             image: None,
         })
+    }
+
+    fn capability_request(&self, context: &ToolContext, input: &Value) -> CapabilityRequest {
+        system_for_app(context, input, |app| SystemCapability::InputEvents { app })
     }
 }
 

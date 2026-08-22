@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use crate::capability::{
+    BrowserCapability, CapabilityDomain, CapabilityRequest, network_origin_from_url,
+};
 use crate::registry::ToolRegistry;
 use crate::tool::{Tool, ToolContext, ToolDefinition, ToolError, ToolResult, truncate_output};
 
@@ -375,6 +378,40 @@ fn ok_text(text: String) -> ToolResult {
     }
 }
 
+fn current_host(backend: &dyn BrowserBackend) -> Option<String> {
+    backend
+        .current_host()
+        .map(|host| host.trim().to_string())
+        .filter(|host| !host.is_empty())
+}
+
+fn read_site(backend: &dyn BrowserBackend) -> CapabilityRequest {
+    match current_host(backend) {
+        Some(host) => CapabilityRequest::browser(BrowserCapability::ReadSite { host }),
+        None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
+    }
+}
+
+fn operate_site(backend: &dyn BrowserBackend) -> CapabilityRequest {
+    match current_host(backend) {
+        Some(host) => CapabilityRequest::browser(BrowserCapability::OperateSite { host }),
+        None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
+    }
+}
+
+fn navigate_capability(backend: &dyn BrowserBackend, input: &Value) -> CapabilityRequest {
+    if let Some(url) = optional_string(input, "url") {
+        return match network_origin_from_url(&url) {
+            Some(origin) => CapabilityRequest::browser(BrowserCapability::NavigateTo(origin)),
+            None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
+        };
+    }
+    match current_host(backend) {
+        Some(host) => CapabilityRequest::browser(BrowserCapability::OperateSite { host }),
+        None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
+    }
+}
+
 struct BrowserTabs {
     backend: Arc<dyn BrowserBackend>,
 }
@@ -390,6 +427,10 @@ impl Tool for BrowserTabs {
 
     fn execute(&self, _context: &ToolContext, _input: Value) -> Result<ToolResult, ToolError> {
         Ok(ok_text(self.backend.tabs()?))
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        CapabilityRequest::browser(BrowserCapability::ListTabs)
     }
 }
 
@@ -413,6 +454,10 @@ impl Tool for BrowserSnapshot {
     fn execute(&self, _context: &ToolContext, _input: Value) -> Result<ToolResult, ToolError> {
         Ok(ok_text(self.backend.snapshot()?))
     }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        read_site(self.backend.as_ref())
+    }
 }
 
 struct BrowserText {
@@ -434,6 +479,10 @@ impl Tool for BrowserText {
 
     fn execute(&self, _context: &ToolContext, _input: Value) -> Result<ToolResult, ToolError> {
         Ok(ok_text(self.backend.text()?))
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        read_site(self.backend.as_ref())
     }
 }
 
@@ -499,6 +548,10 @@ impl Tool for BrowserNavigate {
         }
         Ok(ok_text(self.backend.navigate(&action, url.as_deref())?))
     }
+
+    fn capability_request(&self, _context: &ToolContext, input: &Value) -> CapabilityRequest {
+        navigate_capability(self.backend.as_ref(), input)
+    }
 }
 
 struct BrowserClick {
@@ -546,6 +599,10 @@ impl Tool for BrowserClick {
         let element_ref = parse_element_ref(&input)?;
         Ok(ok_text(self.backend.click(&element_ref)?))
     }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        operate_site(self.backend.as_ref())
+    }
 }
 
 struct BrowserType {
@@ -586,6 +643,10 @@ impl Tool for BrowserType {
         let element_ref = parse_element_ref(&input)?;
         let text = required_string(&input, "text")?;
         Ok(ok_text(self.backend.type_text(&element_ref, &text)?))
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        operate_site(self.backend.as_ref())
     }
 }
 
@@ -628,6 +689,10 @@ impl Tool for BrowserFill {
         let text = required_string(&input, "text")?;
         Ok(ok_text(self.backend.fill(&element_ref, &text)?))
     }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        operate_site(self.backend.as_ref())
+    }
 }
 
 struct BrowserPressKey {
@@ -662,6 +727,10 @@ impl Tool for BrowserPressKey {
     fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
         let key = required_string(&input, "key")?;
         Ok(ok_text(self.backend.press_key(&key)?))
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        operate_site(self.backend.as_ref())
     }
 }
 
@@ -719,6 +788,10 @@ impl Tool for BrowserScroll {
             element_ref.as_deref(),
         )?))
     }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        operate_site(self.backend.as_ref())
+    }
 }
 
 struct BrowserSelect {
@@ -759,6 +832,10 @@ impl Tool for BrowserSelect {
         let element_ref = parse_element_ref(&input)?;
         let value = required_string(&input, "value")?;
         Ok(ok_text(self.backend.select_option(&element_ref, &value)?))
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        operate_site(self.backend.as_ref())
     }
 }
 
@@ -804,6 +881,16 @@ impl Tool for BrowserNewTab {
     fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
         let url = optional_string(&input, "url");
         Ok(ok_text(self.backend.new_tab(url.as_deref())?))
+    }
+
+    fn capability_request(&self, _context: &ToolContext, input: &Value) -> CapabilityRequest {
+        match optional_string(input, "url") {
+            Some(url) => match network_origin_from_url(&url) {
+                Some(origin) => CapabilityRequest::browser(BrowserCapability::NavigateTo(origin)),
+                None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
+            },
+            None => CapabilityRequest::unresolved(CapabilityDomain::Browser),
+        }
     }
 }
 

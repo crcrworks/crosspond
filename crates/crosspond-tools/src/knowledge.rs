@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::browser::http_hosts_from_note;
+use crate::capability::{CapabilityRequest, SystemCapability};
 use crate::registry::ToolRegistry;
 use crate::tool::{Tool, ToolContext, ToolDefinition, ToolError, ToolResult, truncate_output};
 
@@ -28,6 +29,14 @@ pub trait KnowledgeBackend: Send + Sync {
         source_kind: Option<&str>,
     ) -> Result<String, String>;
     fn archive_source(&self, id: &str) -> Result<String, String>;
+}
+
+fn knowledge_read_cap() -> CapabilityRequest {
+    CapabilityRequest::system(SystemCapability::KnowledgeRead)
+}
+
+fn knowledge_write_cap() -> CapabilityRequest {
+    CapabilityRequest::system(SystemCapability::KnowledgeWrite)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -166,6 +175,10 @@ impl Tool for KnowledgeSearch {
             image: None,
         })
     }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        knowledge_read_cap()
+    }
 }
 
 struct KnowledgeRead;
@@ -220,6 +233,10 @@ impl Tool for KnowledgeRead {
             image: None,
         })
     }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        knowledge_read_cap()
+    }
 }
 
 struct KnowledgeNeighbors;
@@ -251,6 +268,10 @@ impl Tool for KnowledgeNeighbors {
             created_file: None,
             image: None,
         })
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        knowledge_read_cap()
     }
 }
 
@@ -297,6 +318,10 @@ impl Tool for KnowledgeBacklinks {
             image: None,
         })
     }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        knowledge_read_cap()
+    }
 }
 
 struct KnowledgeFindProcedure;
@@ -329,6 +354,10 @@ impl Tool for KnowledgeFindProcedure {
             created_file: None,
             image: None,
         })
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        knowledge_read_cap()
     }
 }
 
@@ -378,6 +407,10 @@ impl Tool for KnowledgeIngest {
             image: None,
         })
     }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        knowledge_write_cap()
+    }
 }
 
 struct KnowledgeProposeUpdate;
@@ -407,6 +440,10 @@ impl Tool for KnowledgeProposeUpdate {
             created_file: None,
             image: None,
         })
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        knowledge_write_cap()
     }
 }
 
@@ -453,6 +490,10 @@ impl Tool for KnowledgeReadLater {
             image: None,
         })
     }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        knowledge_write_cap()
+    }
 }
 
 struct KnowledgeArchiveSource;
@@ -482,6 +523,10 @@ impl Tool for KnowledgeArchiveSource {
             created_file: None,
             image: None,
         })
+    }
+
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        knowledge_write_cap()
     }
 }
 

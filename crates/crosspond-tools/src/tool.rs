@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::capability::CapabilityRequest;
 use crate::knowledge::KnowledgeBackend;
 use crate::sandbox::ShellSandbox;
 use crate::scratch::ScratchSpace;
@@ -169,6 +170,14 @@ pub trait Tool: Send + Sync {
     /// Registrable site host for browser tools (no URL path or query).
     fn target_host(&self, _context: &ToolContext, _input: &Value) -> Option<String> {
         None
+    }
+
+    /// Host-owned resource boundary for this call. Pure: no I/O, no secrets.
+    ///
+    /// The default is fail-closed. Empty domains mean "known none"; unknown
+    /// tools must not use [`CapabilityRequest::default`].
+    fn capability_request(&self, _context: &ToolContext, _input: &Value) -> CapabilityRequest {
+        CapabilityRequest::unresolved_all()
     }
 
     /// Drop a paused Chromium HTTP auth challenge without sending credentials.
