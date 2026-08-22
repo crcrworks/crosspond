@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::tool::{Tool, ToolContext, ToolDefinition, ToolError, ToolResult};
+use crate::tool::{ApprovalBody, Tool, ToolContext, ToolDefinition, ToolError, ToolResult};
 
 #[derive(Default)]
 pub struct ToolRegistry {
@@ -54,6 +54,12 @@ impl ToolRegistry {
     pub fn target_host(&self, name: &str, context: &ToolContext, input: &Value) -> Option<String> {
         self.get(name)
             .and_then(|tool| tool.target_host(context, input))
+    }
+
+    pub fn approval_body(&self, name: &str) -> ApprovalBody {
+        self.get(name)
+            .map(|tool| tool.approval_body())
+            .unwrap_or_default()
     }
 
     pub fn abort_http_auth(&self) {

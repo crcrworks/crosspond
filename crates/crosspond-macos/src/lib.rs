@@ -16,6 +16,7 @@ mod hotkey;
 mod input;
 mod keychain;
 mod permissions;
+mod sandbox;
 mod screenshot;
 #[cfg(target_os = "macos")]
 mod tcc;
@@ -31,6 +32,7 @@ pub use hotkey::{HotkeyError, MacOsGlobalHotkey};
 pub use input::MacOsInput;
 pub use keychain::MacOsKeychainSecretStore;
 pub use permissions::{PermissionKind, PermissionSnapshot};
+pub use sandbox::MacOsShellSandbox;
 pub use screenshot::MacOsScreenshot;
 #[cfg(target_os = "macos")]
 pub use window::make_ns_window_transparent;

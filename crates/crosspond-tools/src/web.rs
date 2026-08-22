@@ -2,6 +2,7 @@
 //!
 //! Search provider is Exa for now; Settings / Keychain can grow a provider choice later.
 
+use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,10 +14,12 @@ use serde_json::{Value, json};
 use crate::browser::{host_from_url, normalize_host};
 use crate::registry::ToolRegistry;
 use crate::ssrf::{
-    max_redirects, validate_fetch_url, validate_fetch_url_for_hosts, validate_url,
+    SsrfResolver, max_redirects, validate_fetch_url, validate_fetch_url_for_hosts, validate_url,
     validate_url_allowing_private,
 };
-use crate::tool::{Tool, ToolContext, ToolDefinition, ToolError, ToolResult, truncate_output};
+use crate::tool::{
+    ApprovalBody, Tool, ToolContext, ToolDefinition, ToolError, ToolResult, truncate_output,
+};
 
 const EXA_SEARCH_URL: &str = "https://api.exa.ai/search";
 const MISSING_EXA_KEY: &str = "Add an Exa API key in Settings (⌘,) before using web_search.";
@@ -25,6 +28,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
 const DEFAULT_COUNT: u64 = 5;
 const MAX_COUNT: u64 = 10;
 const SNIPPET_MAX_CHARS: usize = 500;
+/// Hard cap on decoded `fetch_url` bodies. Model-facing truncation is separate.
+pub const MAX_FETCH_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 pub fn register_web_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(WebSearch));
@@ -38,52 +43,54 @@ pub fn web_tools_registry() -> ToolRegistry {
 }
 
 fn http_client() -> Result<Client, ToolError> {
-    Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .redirect(Policy::custom(|attempt| {
-            if attempt.previous().len() >= max_redirects() {
-                return attempt.stop();
-            }
-            match validate_url(attempt.url()) {
-                Ok(()) => attempt.follow(),
-                Err(_) => attempt.error(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "redirect to blocked URL",
-                )),
-            }
-        }))
-        .build()
-        .map_err(|err| ToolError::Failed(format!("http client: {err}")))
+    http_client_with_resolver(SsrfResolver::public_only(), None)
 }
 
 fn http_client_same_host(origin_host: &str) -> Result<Client, ToolError> {
     let origin = normalize_host(origin_host);
+    http_client_with_resolver(SsrfResolver::allowing_private(), Some(origin))
+}
+
+fn http_client_with_resolver(
+    resolver: Arc<SsrfResolver>,
+    same_host: Option<String>,
+) -> Result<Client, ToolError> {
     Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
+        .dns_resolver(resolver)
         .redirect(Policy::custom(move |attempt| {
             if attempt.previous().len() >= max_redirects() {
                 return attempt.stop();
             }
-            let Some(host) = attempt.url().host_str() else {
-                return attempt.error(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "redirect to blocked URL",
-                ));
-            };
-            if normalize_host(host) != origin {
-                return attempt.error(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "redirect to a different host",
-                ));
-            }
-            match validate_url_allowing_private(attempt.url()) {
-                Ok(()) => attempt.follow(),
-                Err(_) => attempt.error(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "redirect to blocked URL",
-                )),
+            if let Some(origin) = same_host.as_deref() {
+                let Some(host) = attempt.url().host_str() else {
+                    return attempt.error(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "redirect to blocked URL",
+                    ));
+                };
+                if normalize_host(host) != origin {
+                    return attempt.error(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "redirect to a different host",
+                    ));
+                }
+                match validate_url_allowing_private(attempt.url()) {
+                    Ok(()) => attempt.follow(),
+                    Err(_) => attempt.error(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "redirect to blocked URL",
+                    )),
+                }
+            } else {
+                match validate_url(attempt.url()) {
+                    Ok(()) => attempt.follow(),
+                    Err(_) => attempt.error(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "redirect to blocked URL",
+                    )),
+                }
             }
         }))
         .build()
@@ -175,6 +182,15 @@ impl Tool for WebSearch {
             created_file: None,
             image: None,
         })
+    }
+
+    fn approval_prompt(&self, _context: &ToolContext, input: &Value) -> (String, String) {
+        let query = input.get("query").and_then(Value::as_str).unwrap_or("");
+        ("Search the web".into(), query.to_string())
+    }
+
+    fn approval_body(&self) -> ApprovalBody {
+        ApprovalBody::Command
     }
 }
 
@@ -395,22 +411,31 @@ impl Tool for FetchUrl {
     }
 
     fn approval_prompt(&self, context: &ToolContext, input: &Value) -> (String, String) {
-        let credential_ref =
-            optional_string(input, "credential_ref").unwrap_or_else(|| "a saved login".into());
-        let destination = context
-            .credential_destination
-            .clone()
-            .or_else(|| {
-                input
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .and_then(host_from_url)
-            })
-            .unwrap_or_else(|| "this host".into());
-        (
-            format!("Fetch {destination} with saved login {credential_ref}"),
-            String::new(),
-        )
+        if optional_string(input, "credential_ref").is_some() {
+            let credential_ref =
+                optional_string(input, "credential_ref").unwrap_or_else(|| "a saved login".into());
+            let destination = context
+                .credential_destination
+                .clone()
+                .or_else(|| {
+                    input
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .and_then(host_from_url)
+                })
+                .unwrap_or_else(|| "this host".into());
+            (
+                format!("Fetch {destination} with saved login {credential_ref}"),
+                String::new(),
+            )
+        } else {
+            let url = input.get("url").and_then(Value::as_str).unwrap_or("");
+            ("Fetch URL".into(), url.to_string())
+        }
+    }
+
+    fn approval_body(&self) -> ApprovalBody {
+        ApprovalBody::Command
     }
 
     fn target_host(&self, _context: &ToolContext, input: &Value) -> Option<String> {
@@ -505,11 +530,49 @@ fn request_uri(url: &reqwest::Url) -> String {
     }
 }
 
+fn body_too_large() -> ToolError {
+    ToolError::Failed(format!(
+        "response is larger than {MAX_FETCH_BODY_BYTES} bytes"
+    ))
+}
+
+fn read_limited_body(response: reqwest::blocking::Response) -> Result<Vec<u8>, ToolError> {
+    if let Some(length) = response.content_length()
+        && length > MAX_FETCH_BODY_BYTES as u64
+    {
+        return Err(body_too_large());
+    }
+    let mut body = Vec::new();
+    let mut stream = response;
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = stream
+            .read(&mut buf)
+            .map_err(|err| ToolError::Failed(public_io_error(&err)))?;
+        if n == 0 {
+            break;
+        }
+        if body.len().saturating_add(n) > MAX_FETCH_BODY_BYTES {
+            return Err(body_too_large());
+        }
+        body.extend_from_slice(&buf[..n]);
+    }
+    Ok(body)
+}
+
+fn public_io_error(err: &std::io::Error) -> String {
+    match err.kind() {
+        std::io::ErrorKind::TimedOut => "request timed out".into(),
+        std::io::ErrorKind::PermissionDenied => "redirect to a blocked URL".into(),
+        _ => "network request failed".into(),
+    }
+}
+
 fn fetch_unauthenticated(client: &Client, url: reqwest::Url) -> Result<ToolResult, ToolError> {
     let head = send_request(client, reqwest::Method::HEAD, url.clone(), None)?;
     let head_status = head.status();
     let head_challenge = www_authenticate(&head);
-    let _ = head.bytes();
+    let _ = read_limited_body(head);
     if is_auth_status(head_status) {
         return Err(ToolError::Failed(auth_required_message(
             head_status.as_u16(),
@@ -528,9 +591,7 @@ fn complete_get(
     let status = response.status();
     let challenge = www_authenticate(&response);
     let content_type = content_type_of(&response);
-    let bytes = response
-        .bytes()
-        .map_err(|err| ToolError::Failed(public_reqwest_error(&err)))?;
+    let bytes = read_limited_body(response)?;
     if is_auth_status(status) && authorization.is_none() {
         return Err(ToolError::Failed(auth_required_message(
             status.as_u16(),
@@ -557,12 +618,12 @@ fn fetch_authenticated(
     let head = send_request(client, reqwest::Method::HEAD, url.clone(), None)?;
     let mut status = head.status();
     let mut challenge = www_authenticate(&head);
-    let _ = head.bytes();
+    let _ = read_limited_body(head);
     if is_method_not_allowed(status) || (!status.is_success() && !is_auth_status(status)) {
         let get = send_request(client, reqwest::Method::GET, url.clone(), None)?;
         status = get.status();
         challenge = www_authenticate(&get);
-        let _ = get.bytes();
+        let _ = read_limited_body(get);
     }
     if status.is_success() {
         return complete_get(client, url, None);
@@ -606,9 +667,7 @@ fn authenticated_get(
 fn finish_success_or_auth(response: reqwest::blocking::Response) -> Result<ToolResult, ToolError> {
     let status = response.status();
     let content_type = content_type_of(&response);
-    let bytes = response
-        .bytes()
-        .map_err(|err| ToolError::Failed(public_reqwest_error(&err)))?;
+    let bytes = read_limited_body(response)?;
     if status.as_u16() == 401 {
         return Err(ToolError::Failed(authentication_failed_message()));
     }
@@ -903,7 +962,7 @@ mod tests {
     fn fetch_url_digest_head_then_get_with_injected_login() {
         let server = DigestServer::spawn();
         let url = reqwest::Url::parse(&format!("http://{}/share/", server.addr)).unwrap();
-        let client = http_client().unwrap();
+        let client = http_client_same_host("127.0.0.1").unwrap();
 
         let denied = fetch_page(&client, url.clone(), None).unwrap_err();
         let message = denied.to_string();
@@ -931,7 +990,7 @@ mod tests {
     fn fetch_url_basic_auth_with_injected_login() {
         let server = BasicServer::spawn();
         let url = reqwest::Url::parse(&format!("http://{}/share/", server.addr)).unwrap();
-        let client = http_client().unwrap();
+        let client = http_client_same_host("127.0.0.1").unwrap();
         let denied = fetch_page(&client, url.clone(), None).unwrap_err();
         assert!(denied.to_string().contains("Basic authentication"));
         let listing = fetch_page(&client, url, Some((TEST_USER, TEST_PASSWORD))).unwrap();
@@ -974,10 +1033,77 @@ mod tests {
             }
         });
         let url = reqwest::Url::parse(&format!("http://{addr}/share/")).unwrap();
-        let client = http_client().unwrap();
+        let client = http_client_same_host("127.0.0.1").unwrap();
         let err = fetch_page(&client, url, None).unwrap_err().to_string();
         assert!(err.contains("HTTP 403"), "{err}");
         assert!(!err.contains("credential_ref"));
+    }
+
+    #[test]
+    fn fetch_url_rejects_oversized_content_length() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().take(8).flatten() {
+                let Ok((method, _, _)) = read_http_request(&mut stream) else {
+                    continue;
+                };
+                if method == "HEAD" {
+                    let _ = write_raw(
+                        &mut stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    continue;
+                }
+                let too_big = MAX_FETCH_BODY_BYTES + 1;
+                let _ = write_raw(
+                    &mut stream,
+                    &format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {too_big}\r\nConnection: close\r\n\r\n"
+                    ),
+                );
+            }
+        });
+        let url = reqwest::Url::parse(&format!("http://{addr}/big")).unwrap();
+        let client = http_client_same_host("127.0.0.1").unwrap();
+        let err = fetch_page(&client, url, None).unwrap_err().to_string();
+        assert!(err.contains("larger than"), "{err}");
+    }
+
+    #[test]
+    fn fetch_url_caps_chunked_body() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            for mut stream in listener.incoming().take(8).flatten() {
+                let Ok((method, _, _)) = read_http_request(&mut stream) else {
+                    continue;
+                };
+                if method == "HEAD" {
+                    let _ = write_raw(
+                        &mut stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    continue;
+                }
+                let _ = write_raw(
+                    &mut stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                );
+                let chunk = vec![b'x'; 64 * 1024];
+                for _ in 0..40 {
+                    let _ = write!(stream, "{:x}\r\n", chunk.len());
+                    let _ = stream.write_all(&chunk);
+                    let _ = write_raw(&mut stream, "\r\n");
+                }
+                let _ = write_raw(&mut stream, "0\r\n\r\n");
+            }
+        });
+        let url = reqwest::Url::parse(&format!("http://{addr}/chunked")).unwrap();
+        let client = http_client_same_host("127.0.0.1").unwrap();
+        let err = fetch_page(&client, url, None).unwrap_err().to_string();
+        assert!(err.contains("larger than"), "{err}");
     }
 
     const TEST_USER: &str = "alice";

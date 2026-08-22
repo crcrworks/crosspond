@@ -13,6 +13,7 @@ mod fs_tools;
 mod knowledge;
 mod path;
 mod registry;
+mod sandbox;
 mod scratch;
 mod shell;
 mod skill_safety;
@@ -48,20 +49,25 @@ pub use path::{
     PathError, PathScope, ResolvedPath, classify_write_path, resolve_path, resolve_requested,
 };
 pub use registry::ToolRegistry;
+pub use sandbox::{ShellSandbox, UnsandboxedShell, unsandboxed_shell, unsandboxed_shell_command};
 pub use scratch::{ScratchError, ScratchReason, ScratchSpace};
-pub use shell::{command_embeds_credentials, register_shell_tools};
+pub use shell::{MAX_SHELL_OUTPUT_BYTES, command_embeds_credentials, register_shell_tools};
 pub use skill_safety::{SafetyReport, SafetyVerdict, scan_skill_files, scan_text};
 pub use skill_types::{PreparedSkillInstall, SkillEndpoints, SkillFile};
 pub use skills::{
     InspectedSkill, InstalledSkill, SkillManifest, SkillOrigin, SkillPickerItem,
     default_global_skills_root, default_skills_root, inspect_installed_skill, inspect_named_skill,
-    inspect_skill, parse_skill_md, prepare_skill_install, register_skill_tools,
-    render_skill_catalog, scan_skill_roots, scan_skills_root, skill_picker_items, valid_skill_name,
-    write_prepared_skill,
+    inspect_skill, parse_skill_install_source, parse_skill_md, prepare_skill_install,
+    register_skill_tools, render_skill_catalog, scan_skill_roots, scan_skills_root,
+    skill_picker_items, valid_skill_name, write_prepared_skill,
 };
-pub use ssrf::{is_blocked_ip, validate_fetch_url, validate_fetch_url_for_hosts};
+pub use ssrf::{
+    SsrfResolver, filter_resolved_addrs, is_blocked_ip, validate_fetch_url,
+    validate_fetch_url_for_hosts,
+};
 pub use tool::{
-    MAX_TOOL_OUTPUT_BYTES, Tool, ToolContext, ToolDefinition, ToolError, ToolImage, ToolResult,
+    ApprovalBody, MAX_TOOL_OUTPUT_BYTES, Tool, ToolContext, ToolDefinition, ToolError, ToolImage,
+    ToolResult,
 };
 pub use web::{format_exa_results, register_web_tools, strip_html, web_tools_registry};
 

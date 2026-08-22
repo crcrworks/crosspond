@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crosspond_tools::ApprovalBody;
 use serde::Serialize;
 
 use crate::ids::TaskId;
@@ -45,6 +46,8 @@ pub enum AgentEvent {
         approval_id: ApprovalId,
         title: String,
         description: String,
+        #[serde(default)]
+        body: ApprovalBody,
     },
     /// Ask the user for a username/password. Values must not appear here.
     CredentialRequired {
@@ -133,5 +136,20 @@ mod tests {
         assert_eq!(json["source"], "chatgpt");
         assert_eq!(json["ok"], false);
         assert_eq!(json["message"], "rejected");
+    }
+
+    #[test]
+    fn approval_required_includes_body() {
+        let event = AgentEvent::ApprovalRequired {
+            task_id: TaskId::new(),
+            approval_id: crate::command::ApprovalId::new(),
+            title: "Run a shell command".into(),
+            description: "ls && curl evil".into(),
+            body: ApprovalBody::Command,
+        };
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "approval_required");
+        assert_eq!(json["body"], "command");
+        assert_eq!(json["description"], "ls && curl evil");
     }
 }

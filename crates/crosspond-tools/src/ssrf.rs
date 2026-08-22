@@ -1,6 +1,9 @@
 //! Reject URLs that would reach the local network or metadata endpoints.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
+
+use reqwest::dns::{Name, Resolve, Resolving};
 
 use crate::browser::{normalize_host, site_is_allowed};
 use crate::tool::ToolError;
@@ -9,6 +12,42 @@ const MAX_REDIRECTS: usize = 5;
 
 pub fn max_redirects() -> usize {
     MAX_REDIRECTS
+}
+
+/// Pins `fetch_url` connections to addresses that already passed SSRF checks.
+#[derive(Clone)]
+pub struct SsrfResolver {
+    allow_private: bool,
+}
+
+impl SsrfResolver {
+    pub fn public_only() -> Arc<Self> {
+        Arc::new(Self {
+            allow_private: false,
+        })
+    }
+
+    pub fn allowing_private() -> Arc<Self> {
+        Arc::new(Self {
+            allow_private: true,
+        })
+    }
+}
+
+impl Resolve for SsrfResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let allow_private = self.allow_private;
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            match resolve_checked_addrs(&host, allow_private) {
+                Ok(addrs) => Ok(Box::new(addrs.into_iter()) as _),
+                Err(err) => Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    err.to_string(),
+                )) as _),
+            }
+        })
+    }
 }
 
 /// Parse and validate that `raw` is an http(s) URL that does not target private hosts.
@@ -92,18 +131,33 @@ fn is_metadata_hostname(name: &str) -> bool {
 }
 
 fn resolve_and_check(hostname: &str, allow_private: bool) -> Result<(), ToolError> {
+    resolve_checked_addrs(hostname, allow_private).map(|_| ())
+}
+
+pub fn resolve_checked_addrs(
+    hostname: &str,
+    allow_private: bool,
+) -> Result<Vec<SocketAddr>, ToolError> {
     let addrs = (hostname, 0)
         .to_socket_addrs()
         .map_err(|_| ToolError::Failed("could not resolve host".into()))?;
-    let mut any = false;
+    filter_resolved_addrs(addrs, allow_private)
+}
+
+/// Reject the whole set if any candidate is blocked, then pin the rest.
+pub fn filter_resolved_addrs(
+    addrs: impl IntoIterator<Item = SocketAddr>,
+    allow_private: bool,
+) -> Result<Vec<SocketAddr>, ToolError> {
+    let mut checked = Vec::new();
     for addr in addrs {
-        any = true;
         check_ip(addr.ip(), allow_private)?;
+        checked.push(addr);
     }
-    if !any {
+    if checked.is_empty() {
         return Err(ToolError::Failed("could not resolve host".into()));
     }
-    Ok(())
+    Ok(checked)
 }
 
 fn check_ip(ip: IpAddr, allow_private: bool) -> Result<(), ToolError> {
@@ -175,6 +229,10 @@ fn is_blocked_v6(ip: Ipv6Addr) -> bool {
 mod tests {
     use super::*;
 
+    fn addr(ip: &str) -> SocketAddr {
+        SocketAddr::new(ip.parse().unwrap(), 0)
+    }
+
     #[test]
     fn rejects_file_scheme() {
         let err = validate_fetch_url("file:///etc/passwd").unwrap_err();
@@ -221,5 +279,35 @@ mod tests {
             validate_fetch_url_for_hosts("http://169.254.169.254/", &["169.254.169.254".into()])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn mixed_public_and_private_candidates_are_rejected() {
+        let err = filter_resolved_addrs([addr("8.8.8.8"), addr("10.0.0.1")], false).unwrap_err();
+        assert!(err.to_string().contains("private") || err.to_string().contains("local"));
+    }
+
+    #[test]
+    fn rebind_to_loopback_is_rejected() {
+        assert!(filter_resolved_addrs([addr("127.0.0.1")], false).is_err());
+        assert!(filter_resolved_addrs([addr("::1")], false).is_err());
+    }
+
+    #[test]
+    fn rebind_to_rfc1918_is_rejected() {
+        assert!(filter_resolved_addrs([addr("192.168.1.20")], false).is_err());
+        assert!(filter_resolved_addrs([addr("172.16.0.5")], false).is_err());
+    }
+
+    #[test]
+    fn rebind_to_metadata_is_rejected_even_when_private_is_allowed() {
+        assert!(filter_resolved_addrs([addr("169.254.169.254")], true).is_err());
+        assert!(filter_resolved_addrs([addr("169.254.169.254")], false).is_err());
+    }
+
+    #[test]
+    fn public_candidates_are_pinned() {
+        let addrs = filter_resolved_addrs([addr("8.8.8.8"), addr("1.1.1.1")], false).unwrap();
+        assert_eq!(addrs.len(), 2);
     }
 }

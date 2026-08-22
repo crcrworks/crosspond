@@ -10,9 +10,12 @@ mod state;
 
 use std::sync::Arc;
 
-use crosspond_core::{ConfigStore, FileConfigStore, GlobalHotkeyService, spawn_runtime_with_tools};
+use crosspond_core::{
+    ConfigStore, FileConfigStore, GlobalHotkeyService, spawn_runtime_with_sandbox,
+};
 use crosspond_macos::{
-    MacOsContextCollector, MacOsGlobalHotkey, MacOsKeychainSecretStore, macos_agent_backends,
+    MacOsContextCollector, MacOsGlobalHotkey, MacOsKeychainSecretStore, MacOsShellSandbox,
+    macos_agent_backends,
 };
 use crosspond_tools::computer_and_screenshot_registry_with_browser;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -27,7 +30,7 @@ pub fn run() {
     let secrets: Arc<dyn crosspond_core::SecretStore> = Arc::new(MacOsKeychainSecretStore);
     let (accessibility, screenshot, apps, input, calendar) = macos_agent_backends();
     let (browser_bridge, browser_backend) = start_browser_backend();
-    let (channels, runtime) = spawn_runtime_with_tools(
+    let (channels, runtime) = spawn_runtime_with_sandbox(
         Arc::clone(&config) as _,
         Arc::clone(&secrets),
         Arc::new(computer_and_screenshot_registry_with_browser(
@@ -38,6 +41,7 @@ pub fn run() {
             Arc::new(calendar),
             browser_backend,
         )),
+        Some(Arc::new(MacOsShellSandbox) as _),
     );
 
     let app_config = config.load().unwrap_or_default();

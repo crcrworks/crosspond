@@ -15,6 +15,7 @@ export type AgentEvent =
 			approval_id: string;
 			title: string;
 			description: string;
+			body?: 'prose' | 'command';
 	  }
 	| {
 			type: 'credential_required';

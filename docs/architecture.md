@@ -52,8 +52,10 @@ Option+Space
         │                        (validated plan; hash conflicts; no secrets)
         │                      skill_read (local then ~/.agents/skills)
         │                      skill_search (skills.sh; host safety; no bodies)
-        │                      skill_install (in-memory fetch+scan; fail writes nothing;
-        │                        warn/unknown Allow even in Auto; reuse the same bytes)
+        │                      skill_install (parse source locally; tainted-egress
+        │                        Allow before GitHub HTTP; then in-memory scan;
+        │                        fail writes nothing; warn/unknown Allow even in Auto;
+        │                        reuse the same bytes)
         │                      fs tools (scratch auto when needed; external after Allow,
         │                        or Auto)
         │                      list_apps / open_app / focus_app
@@ -66,11 +68,14 @@ Option+Space
         │                        browser_select / browser_navigate /
         │                        browser_new_tab
         │                        unknown site host → Allow in Manual/AI (Auto skips
-        │                          and does not persist the host)
+        │                          and does not persist the host); site Allow does
+        │                          not skip tainted-egress for the same call
         │                        then ComputerAction policy for writes
-        │                      web_search / fetch_url (auto; Exa key for search;
-        │                        fetch_url + credential_ref is ComputerAction,
-        │                        host must match the Resource note)
+        │                      web_search / fetch_url (auto when the task is not
+        │                        tainted; any fetch_url is egress; Exa key for
+        │                        search; fetch_url + credential_ref is also
+        │                        ComputerAction, host must match the Resource
+        │                        note; DNS is pinned to checked IPs)
         │                      calendar_events (auto; EventKit / Calendar TCC)
         │                      ui_type / ui_hotkey / ui_scroll
         │                      ui_press / ui_set_value / ui_click
@@ -78,12 +83,16 @@ Option+Space
         │                        with destination host/app;
         │                        SubmitCredential; values never in AgentEvent)
         │                        HTTP fill / fetch_url bind to note hosts
+        │                        Submit is credential consent only; then
+        │                        tainted-egress / risk still run
         │                        Manual → ApprovalRequired (Keychain hit)
         │                        Agent + ask_user → ApprovalRequired
         │                        Auto (and Agent + ask_user false) skip the card
+        │                        unless the task is tainted
         │                      run_command / open_url (non-http)
-        │                        Manual / Agent → Allow card
-        │                        Auto skip the card
+        │                        Always Allow unless Auto + enforcing Seatbelt
+        │                        (scratch read/write, no network, no clipboard /
+        │                         Keychain / Apple Events)
         │                      write ~/.crosspond/tasks/<task-id>/
         │                        (task.json with conversation_id,
         │                         UI-safe events.jsonl, sanitized session.json,
